@@ -197,6 +197,14 @@ const normalizeJoinCode = (value) =>
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
 
+const sanitizeNoteKey = (value = '') =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
 const makeJoinCode = () => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
@@ -841,6 +849,8 @@ function AuthScreen({
 function LobbyScreen({
   user,
   profile,
+  questionNotes,
+  onSaveDisplayName,
   playerAccounts,
   editingModeEnabled,
   onToggleEditingMode,
@@ -918,6 +928,8 @@ function LobbyScreen({
   const [createMode, setCreateMode] = useState('random');
   const [selectedRoundTypes, setSelectedRoundTypes] = useState([]);
   const [selectedCategories, setSelectedCategories] = useState([]);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [profileNameDraft, setProfileNameDraft] = useState(() => normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   const dashboardMenuRef = useRef(null);
   const isMobileDashboardNav = useMediaQuery('(max-width: 900px)');
   const dashboardPills = [
@@ -1094,12 +1106,18 @@ function LobbyScreen({
     }
   }, [activityTab]);
 
+  useEffect(() => {
+    setProfileNameDraft(normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
+  }, [profile?.displayName, user?.displayName, user?.email]);
+
   return (
     <main className="app production-app">
       <header className="top-bar top-bar--shell">
         {!isMobileDashboardNav ? (
           <div className="top-bar-left">
-            <p className="eyebrow sponsor-tag">Signed in as {profile?.displayName || user?.email}</p>
+            <Button className="ghost-button compact" onClick={() => setIsProfileOpen(true)}>
+              My Profile
+            </Button>
           </div>
         ) : null}
         <div className="brand-lockup">
@@ -1140,6 +1158,9 @@ function LobbyScreen({
               ) : null}
               <section className="settings-menu-section">
                 <span className="settings-section-label">Account</span>
+                <Button className="ghost-button compact" onClick={() => { closeDashboardMenu(); setIsProfileOpen(true); }} disabled={isBusy}>
+                  My Profile
+                </Button>
                 <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromMenu} disabled={isBusy}>
                   {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
                 </Button>
@@ -1648,6 +1669,68 @@ function LobbyScreen({
         </section>
       ) : null}
 
+      {isProfileOpen ? (
+        <section className="modal-backdrop" role="presentation" onClick={() => setIsProfileOpen(false)}>
+          <div className="panel modal-panel forfeit-modal" role="dialog" aria-modal="true" aria-label="My Profile" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-heading compact-heading">
+              <div>
+                <p className="eyebrow">Account</p>
+                <h2>My Profile</h2>
+              </div>
+              <span className="status-pill">{profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}</span>
+            </div>
+            <div className="auth-form-grid">
+              <label className="field">
+                <span>Display Name</span>
+                <input value={profileNameDraft} onChange={(event) => setProfileNameDraft(event.target.value)} placeholder="Your display name" />
+              </label>
+            </div>
+            <div className="button-row">
+              <Button
+                className="primary-button compact"
+                onClick={async () => {
+                  await onSaveDisplayName?.(profileNameDraft);
+                  setIsProfileOpen(false);
+                }}
+                disabled={isBusy || !normalizeText(profileNameDraft)}
+              >
+                Save Display Name
+              </Button>
+              <Button className="ghost-button compact" onClick={() => setIsProfileOpen(false)} disabled={isBusy}>
+                Close
+              </Button>
+            </div>
+
+            <section className="forfeit-requests-panel" style={{ marginTop: 14 }}>
+              <div className="panel-heading compact-heading">
+                <div>
+                  <h3>Flagged Question Notes</h3>
+                </div>
+                <span className="status-pill">{questionNotes?.length || 0}</span>
+              </div>
+              <div className="mini-list">
+                {questionNotes?.length ? (
+                  questionNotes.map((note) => (
+                    <article className="mini-list-row forfeit-request-row" key={note.id}>
+                      <strong>{note.questionText || note.questionId || 'Question note'}</strong>
+                      <span>{note.noteText || '-'}</span>
+                      <small>
+                        {formatShortDateTime(note.createdAt)}
+                        {note.gameId ? ` · Game ${String(note.gameId).slice(-6).toUpperCase()}` : ''}
+                        {note.category ? ` · ${note.category}` : ''}
+                        {note.roundType ? ` · ${ROUND_TYPE_LABEL[note.roundType] || note.roundType}` : ''}
+                      </small>
+                    </article>
+                  ))
+                ) : (
+                  <p className="empty-copy">No private flagged notes yet.</p>
+                )}
+              </div>
+            </section>
+          </div>
+        </section>
+      ) : null}
+
       <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
     </main>
   );
@@ -1963,6 +2046,7 @@ function RoomActiveFrame({
   setPenaltyDraft,
   onNextQuestion,
   onPauseToggle,
+  onOpenQuestionNote,
   isBusy,
 }) {
   const question = currentRound?.question || 'Question loaded';
@@ -2037,6 +2121,10 @@ function RoomActiveFrame({
           <div className="room-active-answer-stack">
             <div className={`room-active-question room-active-question--answering ${questionDensity}`}>
               <p>{question}</p>
+              <div className="question-note-actions">
+                <button type="button" className="ghost-button compact" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
+                <button type="button" className="ghost-button compact" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Open private question notebook">📓</button>
+              </div>
             </div>
 
             <QuestionAnswerEntry
@@ -2056,6 +2144,10 @@ function RoomActiveFrame({
           <div className="room-active-reveal-stack">
             <div className={`room-active-question room-active-question--reveal ${questionDensity}`}>
               <p>{question}</p>
+              <div className="question-note-actions">
+                <button type="button" className="ghost-button compact" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
+                <button type="button" className="ghost-button compact" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Open private question notebook">📓</button>
+              </div>
             </div>
 
             <div className="room-reveal-layout">
@@ -4477,6 +4569,7 @@ function GameRoomView({
   chatDraft,
   setChatDraft,
   onSendChat,
+  onSaveQuestionNote,
 }) {
   const activePalette = PALETTES[loadThemeIndex() % PALETTES.length];
   const analytics = calculateAnalytics(rounds);
@@ -4533,6 +4626,8 @@ function GameRoomView({
   const roomMenuRef = useRef(null);
   const scoreboardColumnRef = useRef(null);
   const [chatColumnHeight, setChatColumnHeight] = useState(0);
+  const [noteModalRound, setNoteModalRound] = useState(null);
+  const [questionNoteDraft, setQuestionNoteDraft] = useState('');
 
   useEffect(() => {
     if (isMobile) {
@@ -4597,6 +4692,17 @@ function GameRoomView({
       </div>
     </details>
   );
+
+  const openQuestionNoteModal = (round) => {
+    if (!round) return;
+    setNoteModalRound(round);
+    setQuestionNoteDraft('');
+  };
+
+  const closeQuestionNoteModal = () => {
+    setNoteModalRound(null);
+    setQuestionNoteDraft('');
+  };
 
   const goToDashboardTab = (tab = 'gameLobby') => {
     try {
@@ -4745,6 +4851,7 @@ function GameRoomView({
                   setPenaltyDraft={setPenaltyDraft}
                   onNextQuestion={onNextQuestion}
                   onPauseToggle={onPauseToggle}
+                  onOpenQuestionNote={openQuestionNoteModal}
                   isBusy={isBusy}
                 />
               ) : (
@@ -4934,6 +5041,7 @@ function GameRoomView({
               setPenaltyDraft={setPenaltyDraft}
               onNextQuestion={onNextQuestion}
               onPauseToggle={onPauseToggle}
+              onOpenQuestionNote={openQuestionNoteModal}
               isBusy={isBusy}
             />
           ) : (
@@ -4965,6 +5073,38 @@ function GameRoomView({
         </section>
       </section>
       )}
+      {noteModalRound ? (
+        <section className="modal-backdrop" role="presentation" onClick={closeQuestionNoteModal}>
+          <div className="panel modal-panel forfeit-modal" role="dialog" aria-modal="true" aria-label="Private question note" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-heading compact-heading">
+              <div>
+                <p className="eyebrow">Private Note</p>
+                <h3>Flagged Question Notebook</h3>
+              </div>
+            </div>
+            <p className="panel-copy">{noteModalRound?.question || 'Question'}</p>
+            <label className="field">
+              <span>My private note</span>
+              <textarea rows="4" value={questionNoteDraft} onChange={(event) => setQuestionNoteDraft(event.target.value)} placeholder="Write a private note for this question" />
+            </label>
+            <div className="button-row">
+              <Button
+                className="primary-button compact"
+                onClick={async () => {
+                  const saved = await onSaveQuestionNote?.({ round: noteModalRound, noteText: questionNoteDraft });
+                  if (saved) closeQuestionNoteModal();
+                }}
+                disabled={isBusy || !normalizeText(questionNoteDraft)}
+              >
+                Save Note
+              </Button>
+              <Button className="ghost-button compact" onClick={closeQuestionNoteModal} disabled={isBusy}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </section>
+      ) : null}
       {notice ? <div className="toast">{notice}</div> : null}
       <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
     </main>
@@ -5022,6 +5162,7 @@ function ProductionApp() {
   const [gameInvites, setGameInvites] = useState([]);
   const [amaRequests, setAmaRequests] = useState([]);
   const [diaryEntries, setDiaryEntries] = useState([]);
+  const [questionNotes, setQuestionNotes] = useState([]);
   const [penaltyDraft, setPenaltyDraft] = useState(defaultPenaltyDraft);
   const [answerDraft, setAnswerDraft] = useState(defaultDraft);
   const [chatMessages, setChatMessages] = useState([]);
@@ -5368,6 +5509,20 @@ function ProductionApp() {
     }, (error) => debugRoom('diaryEntriesSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
   }, [user, firestore]);
+
+  useEffect(() => {
+    if (!firestore || !user?.uid) {
+      setQuestionNotes([]);
+      return undefined;
+    }
+    const notesRef = query(collection(firestore, 'users', user.uid, 'questionNotes'), orderBy('updatedAt', 'desc'), limit(200));
+    const unsubscribe = onSnapshot(
+      notesRef,
+      (snapshot) => setQuestionNotes(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
+      (error) => debugRoom('questionNotesSnapshotError', { message: error?.message || String(error) }),
+    );
+    return unsubscribe;
+  }, [user?.uid, firestore]);
 
   useEffect(() => {
     if (!user || !firestore) return undefined;
@@ -7468,6 +7623,90 @@ function ProductionApp() {
       });
   }, [user, firestore, bankQuestions, sheetInput]);
 
+  const saveDisplayNameProfile = async (nextDisplayName) =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid) throw new Error('You must be signed in.');
+      const cleanDisplayName = normalizeText(nextDisplayName);
+      if (!cleanDisplayName) throw new Error('Enter a display name.');
+      await setDoc(
+        doc(firestore, 'users', user.uid),
+        {
+          uid: user.uid,
+          displayName: cleanDisplayName,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      if (firebaseAuth?.currentUser) {
+        await updateProfile(firebaseAuth.currentUser, { displayName: cleanDisplayName }).catch(() => null);
+      }
+
+      const gamesSnap = await getDocs(query(collection(firestore, 'games'), where('playerUids', 'array-contains', user.uid))).catch(() => null);
+      if (gamesSnap && !gamesSnap.empty) {
+        for (const gameEntry of gamesSnap.docs) {
+          const data = gameEntry.data() || {};
+          await setDoc(
+            gameEntry.ref,
+            {
+              playerProfiles: {
+                ...(data.playerProfiles || {}),
+                [user.uid]: {
+                  ...(data.playerProfiles?.[user.uid] || {}),
+                  displayName: cleanDisplayName,
+                },
+              },
+              hostDisplayName: data.hostUid === user.uid ? cleanDisplayName : data.hostDisplayName || '',
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true },
+          );
+        }
+      }
+
+      const pendingInviteSnap = await getDocs(query(collection(firestore, 'gameInvites'), where('invitedByUserId', '==', user.uid))).catch(() => null);
+      if (pendingInviteSnap && !pendingInviteSnap.empty) {
+        for (const inviteEntry of pendingInviteSnap.docs) {
+          await setDoc(inviteEntry.ref, { invitedByDisplayName: cleanDisplayName, updatedAt: serverTimestamp() }, { merge: true });
+        }
+      }
+
+      setProfile((current) => (current ? { ...current, displayName: cleanDisplayName } : current));
+      setNotice(`Profile updated to ${cleanDisplayName}.`);
+    }, 'Could not update profile.');
+
+  const savePrivateQuestionNote = async ({ round = null, noteText = '' } = {}) =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid) throw new Error('You must be signed in.');
+      const trimmedNote = normalizeText(noteText);
+      if (!trimmedNote) throw new Error('Write a note before saving.');
+      const questionId = normalizeText(round?.questionId || '') || sanitizeNoteKey(round?.question || '');
+      if (!questionId) throw new Error('No active question found.');
+      const noteId = `${questionId}`;
+      const noteRef = doc(firestore, 'users', user.uid, 'questionNotes', noteId);
+      const existingSnap = await getDoc(noteRef).catch(() => null);
+      const existingData = existingSnap?.exists() ? existingSnap.data() : {};
+      const createdAt = existingData?.createdAt || serverTimestamp();
+      await setDoc(
+        noteRef,
+        {
+          userId: user.uid,
+          questionId: normalizeText(round?.questionId || ''),
+          questionText: normalizeText(round?.question || ''),
+          noteText: trimmedNote,
+          gameId: game?.id || '',
+          gameName: game?.gameName || game?.name || '',
+          joinCode: game?.joinCode || game?.roomCode || game?.code || '',
+          category: normalizeText(round?.category || ''),
+          roundType: normalizeText(round?.roundType || ''),
+          createdAt,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      setNotice('Private note saved to My Profile.');
+      return true;
+    }, 'Could not save private note.');
+
   const createGame = async (options = {}) =>
     withBusy(async () => {
       setLocalEndedGameSummary(null);
@@ -8642,6 +8881,8 @@ function ProductionApp() {
       <LobbyScreen
         user={user}
         profile={profile}
+        questionNotes={questionNotes}
+        onSaveDisplayName={saveDisplayNameProfile}
         playerAccounts={playerAccounts}
         editingModeEnabled={editingModeEnabled}
         onToggleEditingMode={toggleEditingMode}
@@ -8758,6 +8999,7 @@ function ProductionApp() {
       chatDraft={chatDraft}
       setChatDraft={setChatDraft}
       onSendChat={sendChat}
+      onSaveQuestionNote={savePrivateQuestionNote}
     />
   );
 }
