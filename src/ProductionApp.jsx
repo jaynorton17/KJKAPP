@@ -11557,6 +11557,7 @@ function ProductionApp() {
   const quizAdvanceRef = useRef('');
   const quizTimeoutRevealRef = useRef('');
   const quizWheelFinalizeRef = useRef('');
+  const standardRevealSettleRef = useRef('');
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
     const agreement = normalizeQuizWagerAgreement(game || {});
@@ -11854,11 +11855,23 @@ function ProductionApp() {
       }
       const gameRef = makeGameRef();
       if (!gameRef || !firestore) throw new Error('Room is missing.');
+      const existingLocalAnswer = currentAnswers?.[currentSeat] || {};
+      const payload = {
+        ...baseAnswerPayload,
+        submittedBy: existingLocalAnswer.submittedBy || baseAnswerPayload.submittedBy,
+        submittedAt: existingLocalAnswer.submittedAt || baseAnswerPayload.submittedAt,
+        updatedAt: submittedAtIso,
+      };
+      const nextLocalAnswers = {
+        ...currentAnswers,
+        [currentSeat]: payload,
+      };
+      const bothAnsweredLocally = Boolean(normalizeText(nextLocalAnswers.jay?.ownAnswer) && normalizeText(nextLocalAnswers.kim?.ownAnswer));
       setGame((current) => {
         if (!current?.currentRound || current.currentRound.id !== game.currentRound.id) return current;
         const nextAnswers = {
           ...(current.currentRound.answers || {}),
-          [currentSeat]: baseAnswerPayload,
+          [currentSeat]: payload,
         };
         return {
           ...current,
@@ -11869,6 +11882,15 @@ function ProductionApp() {
           },
         };
       });
+      if (!isQuizGame) {
+        await updateDoc(gameRef, {
+          [`currentRound.answers.${currentSeat}`]: payload,
+          ...(bothAnsweredLocally ? { 'currentRound.status': 'reveal' } : {}),
+          'currentRound.updatedAt': serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        return true;
+      }
       await runTransaction(firestore, async (transaction) => {
         const snap = await transaction.get(gameRef);
         if (!snap.exists()) throw new Error('Room not found.');
@@ -11949,6 +11971,44 @@ function ProductionApp() {
       return null;
     }
   };
+
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const settleKey = `${game?.id || ''}:${roundKey}:standard-reveal`;
+    if (
+      isQuizGame
+      || !round
+      || round.status !== 'open'
+      || !hasSubmittedRoundAnswer(round, 'jay')
+      || !hasSubmittedRoundAnswer(round, 'kim')
+    ) {
+      if (standardRevealSettleRef.current === settleKey) standardRevealSettleRef.current = '';
+      return undefined;
+    }
+    if (standardRevealSettleRef.current === settleKey) return undefined;
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return undefined;
+    standardRevealSettleRef.current = settleKey;
+    updateDoc(gameRef, {
+      'currentRound.status': 'reveal',
+      'currentRound.updatedAt': serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {
+      standardRevealSettleRef.current = '';
+    });
+    return undefined;
+  }, [
+    firestore,
+    game?.id,
+    game?.gameMode,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.answers?.jay?.ownAnswer,
+    game?.currentRound?.answers?.kim?.ownAnswer,
+  ]);
 
   const drawQuestion = (sourceGame = game, sourceRounds = rounds) => {
     const sourceBankType = sourceGame?.questionBankType === 'quiz' ? 'quiz' : 'game';
