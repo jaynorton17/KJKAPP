@@ -7729,6 +7729,7 @@ function ProductionApp() {
       setGameLibrary([]);
       return undefined;
     }
+    if (hasOpenRoomSession) return undefined;
     const gamesRef = query(collection(firestore, 'games'), where('playerUids', 'array-contains', user.uid));
     let isListenerActive = true;
     const unsubscribe = onSnapshot(gamesRef, async (snapshot) => {
@@ -7773,7 +7774,7 @@ function ProductionApp() {
       isListenerActive = false;
       unsubscribe();
     };
-  }, [user, firestore]);
+  }, [user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
     if (!firestore || !user) {
@@ -8371,6 +8372,7 @@ function ProductionApp() {
     [persistedPreviousGames],
   );
   useEffect(() => {
+    if (hasOpenRoomSession) return;
     previousGames.forEach((entry) => {
       if (!entry?.id || completedGameAuditRef.current.has(entry.id)) return;
       console.log('completed game question audit', {
@@ -8384,7 +8386,7 @@ function ProductionApp() {
       });
       completedGameAuditRef.current.add(entry.id);
     });
-  }, [previousGames]);
+  }, [hasOpenRoomSession, previousGames]);
   const pendingActivityCount = useMemo(() => {
     const pendingGameTasks = activeGames.filter((game) => {
       const seat = game?.seats?.jay === user?.uid ? 'jay' : game?.seats?.kim === user?.uid ? 'kim' : null;
