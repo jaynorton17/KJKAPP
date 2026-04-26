@@ -8034,6 +8034,11 @@ function ProductionApp() {
       resetRoomLoadState();
       return;
     }
+    if (game?.id === gameId) {
+      clearRoomLoadTimer();
+      if (roomLoadState.status !== 'idle' || roomLoadState.gameId) resetRoomLoadState();
+      return;
+    }
     if (roomLoadState.status !== 'loading' || roomLoadState.gameId !== gameId) {
       armRoomLoadTimeout(gameId, game ? 'syncing room' : 'loading room');
     }
