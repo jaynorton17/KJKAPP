@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
@@ -65,7 +65,7 @@ import {
 } from './utils/game.js';
 import { loadThemeIndex, saveThemeIndex } from './utils/storage.js';
 import { firebaseAuth, firebaseIsConfigured, firestore, storage } from './lib/firebase.js';
-import { parseGoogleSheetImport, parseGoogleSheetReference } from './utils/importers.js';
+import { parseGoogleSheetImport, parseGoogleSheetQuizImport, parseGoogleSheetReference } from './utils/importers.js';
 
 const seats = ['jay', 'kim'];
 const categoryColorMap = CATEGORY_COLOR_MAP;
@@ -111,6 +111,157 @@ const oppositeSeatOf = (seat = 'jay') => (seat === 'kim' ? 'jay' : 'kim');
 const preferredSeatForUser = (user, profile) => inferSeatFromUser(user, profile) || seatFromPlayerRef(user?.uid) || 'jay';
 const buildGameInviteId = (targetGameId = '', invitedForUserId = '') =>
   targetGameId && invitedForUserId ? `game-invite-${targetGameId}-${invitedForUserId}` : '';
+const QUIZ_TIMER_SECONDS = 10;
+const QUIZ_WHEEL_SLOT_COUNT = 20;
+const QUIZ_WHEEL_MIN_PERCENT = 0.05;
+const QUIZ_WHEEL_PERCENT_STEP = 0.05;
+const QUIZ_WHEEL_MAX_PERCENT = 1;
+const QUIZ_WHEEL_SLOT_ORDER = [8, 17, 2, 14, 19, 5, 11, 0, 16, 7, 13, 3, 18, 9, 15, 1, 12, 6, 10, 4];
+const QUIZ_WHEEL_COUNTDOWN_MS = 3000;
+const QUIZ_WHEEL_SPIN_MS = 5000;
+const QUIZ_REVEAL_FLASH_MS = 3000;
+const normalizeQuizAnswerText = (value = '') =>
+  normalizeText(value)
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+const evaluateQuizAnswer = (round = {}, answerValue = '') => {
+  const roundType = normalizeText(round?.roundType || '').toLowerCase();
+  const answer = normalizeQuizAnswerText(answerValue);
+  const correct = normalizeQuizAnswerText(round?.correctAnswer || round?.normalizedCorrectAnswer || '');
+  if (!answer || !correct) return false;
+  if (roundType === 'truefalse') {
+    const normalizedAnswer = answer === 'true' ? 'true' : answer === 'false' ? 'false' : answer;
+    const normalizedCorrect = correct === 'true' ? 'true' : correct === 'false' ? 'false' : correct;
+    return normalizedAnswer === normalizedCorrect;
+  }
+  return answer === correct;
+};
+const pointsFromTimerSeconds = (secondsLeft = 0) => {
+  const safeSeconds = Math.max(0, Math.min(QUIZ_TIMER_SECONDS, Number(secondsLeft || 0)));
+  return Math.round(safeSeconds * 100);
+};
+
+const pointsFromTimerMilliseconds = (millisecondsLeft = 0) => {
+  const safeMs = Math.max(0, Math.min(QUIZ_TIMER_SECONDS * 1000, Number(millisecondsLeft || 0)));
+  return Math.floor(safeMs / 10);
+};
+const defaultQuizReadyState = (stage = 'opening') => ({
+  stage,
+  ready: { jay: false, kim: false },
+});
+const defaultQuizWagerAgreement = () => ({
+  status: 'negotiating',
+  amount: null,
+  proposedAmount: null,
+  proposedBySeat: '',
+  proposalStatus: '',
+  rejectedBySeat: '',
+  acceptedBySeat: '',
+  wheelOptIn: { jay: false, kim: false },
+  wheelBaseAmount: 0,
+  wheelSlots: [],
+  wheelResultIndex: null,
+  wheelCountdownStartedAt: '',
+  wheelSpinStartedAt: '',
+  wheelSpinEndsAt: '',
+  lockedByWheel: false,
+});
+const sanitizeQuizWagerAmount = (value) => Math.max(0, Number.parseInt(String(value ?? ''), 10) || 0);
+const capQuizWheelStake = (baseAmount = 0, stakeAmount = 0) => {
+  const safeBase = Math.max(0, Math.floor(Number(baseAmount || 0)));
+  const safeStake = Math.max(0, Math.floor(Number(stakeAmount || 0)));
+  return Math.min(safeStake, Math.floor(safeBase * QUIZ_WHEEL_MAX_PERCENT));
+};
+const capQuizWagerAmount = (value = 0, capAmount = 0) => {
+  const safeCap = Math.max(0, Math.floor(Number(capAmount || 0)));
+  const safeValue = sanitizeQuizWagerAmount(value);
+  return Math.min(safeValue, safeCap);
+};
+const buildQuizWheelSlots = (baseAmount = 0) => {
+  const safeBase = Math.max(0, Math.floor(Number(baseAmount || 0)));
+  const orderedSlots = Array.from({ length: QUIZ_WHEEL_SLOT_COUNT }, (_, index) => {
+    const percent = QUIZ_WHEEL_MIN_PERCENT + (index * QUIZ_WHEEL_PERCENT_STEP);
+    return capQuizWheelStake(safeBase, Math.floor(safeBase * percent));
+  });
+  return QUIZ_WHEEL_SLOT_ORDER.map((slotIndex) => orderedSlots[slotIndex] ?? 0);
+};
+const shuffleQuizWheelSlots = (slots = []) => {
+  const shuffled = [...slots];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const targetIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[targetIndex]] = [shuffled[targetIndex], shuffled[index]];
+  }
+  return shuffled;
+};
+const getQuizWheelBaseAmount = (playerAccounts = {}) => {
+  const jayAmount = Math.max(0, Math.floor(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0)));
+  const kimAmount = Math.max(0, Math.floor(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0)));
+  return Math.min(jayAmount, kimAmount);
+};
+const normalizeQuizWagerAgreement = (game = {}) => {
+  const agreement = game?.quizWagerAgreement || null;
+  const fallbackWagers = game?.quizWagers || {};
+  const fallbackJay = Number(fallbackWagers.jay);
+  const fallbackKim = Number(fallbackWagers.kim);
+  if (!agreement) {
+    const hasSharedFallback = Number.isFinite(fallbackJay)
+      && Number.isFinite(fallbackKim)
+      && fallbackJay === fallbackKim
+      && (fallbackJay > 0 || Boolean(game?.currentRound) || Number(game?.roundsPlayed || 0) > 0);
+    return {
+      ...defaultQuizWagerAgreement(),
+      status: hasSharedFallback ? 'agreed' : 'negotiating',
+      amount: hasSharedFallback ? Math.max(0, fallbackJay) : null,
+    };
+  }
+  const status = normalizeText(agreement.status || 'negotiating') || 'negotiating';
+  const amount = Number(agreement.amount);
+  const proposedAmount = Number(agreement.proposedAmount);
+  const wheelBaseAmount = Math.max(0, Math.floor(Number(agreement.wheelBaseAmount || 0)));
+  return {
+    ...defaultQuizWagerAgreement(),
+    ...agreement,
+    status,
+    amount: Number.isFinite(amount) ? Math.max(0, amount) : null,
+    proposedAmount: Number.isFinite(proposedAmount) ? Math.max(0, proposedAmount) : null,
+    proposedBySeat: agreement.proposedBySeat === 'kim' ? 'kim' : agreement.proposedBySeat === 'jay' ? 'jay' : '',
+    rejectedBySeat: agreement.rejectedBySeat === 'kim' ? 'kim' : agreement.rejectedBySeat === 'jay' ? 'jay' : '',
+    acceptedBySeat: agreement.acceptedBySeat === 'kim' ? 'kim' : agreement.acceptedBySeat === 'jay' ? 'jay' : '',
+    wheelOptIn: {
+      jay: Boolean(agreement.wheelOptIn?.jay),
+      kim: Boolean(agreement.wheelOptIn?.kim),
+    },
+    wheelBaseAmount,
+    wheelSlots: Array.isArray(agreement.wheelSlots)
+      ? agreement.wheelSlots.map((slot) => capQuizWheelStake(wheelBaseAmount, slot))
+      : [],
+    wheelResultIndex: Number.isFinite(Number(agreement.wheelResultIndex)) ? Number(agreement.wheelResultIndex) : null,
+    lockedByWheel: Boolean(agreement.lockedByWheel),
+  };
+};
+const getQuizSharedWagerAmount = (game = {}) => {
+  const agreement = normalizeQuizWagerAgreement(game);
+  return Number.isFinite(Number(agreement.amount)) ? Math.max(0, Number(agreement.amount)) : null;
+};
+const isQuizWagerAgreementLocked = (game = {}) => {
+  const agreement = normalizeQuizWagerAgreement(game);
+  return (agreement.status === 'agreed' || agreement.status === 'wheel_locked') && Number.isFinite(Number(agreement.amount));
+};
+const getQuizWheelPhase = (agreement = {}, nowMs = Date.now()) => {
+  const normalized = normalizeQuizWagerAgreement({ quizWagerAgreement: agreement });
+  if (normalized.status === 'wheel_locked') return 'locked';
+  const spinStartMs = Date.parse(normalized.wheelSpinStartedAt || '');
+  const spinEndMs = Date.parse(normalized.wheelSpinEndsAt || '');
+  if (!Number.isFinite(spinStartMs) || !Number.isFinite(spinEndMs)) return '';
+  if (nowMs < spinStartMs) return 'countdown';
+  if (nowMs < spinEndMs) return 'spinning';
+  return 'landing';
+};
+const hasNextReadySeat = (round = null, seat = 'jay') => Boolean(round?.nextReady?.[seat === 'kim' ? 'kim' : 'jay']);
+const hasQuizSetupReadySeat = (game = null, seat = 'jay') => Boolean(game?.quizReadyState?.ready?.[seat === 'kim' ? 'kim' : 'jay']);
 const getRecordTime = (value) => {
   if (!value) return 0;
   if (typeof value?.seconds === 'number') {
@@ -185,6 +336,7 @@ const authBackgroundImages = [
   '/jandk/473899501_10170369596675655_4152826598740079670_n.jpg',
   '/jandk/473972609_10170369665910655_8487588676657875313_n.jpg',
 ];
+const authCharactersOverhangImage = '/auth-characters-overhang.png';
 const fixedSeatForUid = (uid) => seatFromPlayerRef(uid);
 const roomColors = {
   jay: 'var(--accent-3)',
@@ -274,7 +426,15 @@ const pairIdForPlayers = (a, b) => [a, b].filter(Boolean).sort().join('::');
 const buildPairKey = () => pairIdForPlayers(fixedPlayerUids.jay, fixedPlayerUids.kim);
 
 const mergeUniqueIds = (...lists) => [...new Set(lists.flat().filter(Boolean))];
-const debugRoom = (...args) => console.debug('[KJK ROOM]', ...args);
+const debugRoom = (...args) => {
+  if (!import.meta.env.DEV) return;
+  try {
+    if (window.localStorage.getItem('kjk-debug-room') !== 'true') return;
+  } catch {
+    return;
+  }
+  console.debug('[KJK ROOM]', ...args);
+};
 const isLocalTestGameId = (value = '') => String(value || '').startsWith(TEST_GAME_PREFIX);
 const isLocalTestGame = (value = null) => Boolean(value?.isLocalOnly) || isLocalTestGameId(value?.id);
 const starterQuestionIds = new Set(STARTER_QUESTIONS.map((question) => createQuestionTemplate(question).id));
@@ -557,6 +717,223 @@ const isGameSessionJoinable = (entry = {}) =>
   ACTIVE_GAME_STATUSES.includes(entry?.status || 'active')
   && !COMPLETED_GAME_STATUSES.includes(entry?.status || '')
   && !entry?.endedAt;
+const hasSubmittedRoundAnswer = (round = {}, seat = '') => Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''));
+const hasReadySeat = (round = {}, seat = '') => Boolean(round?.ready?.[seat]);
+const answerDraftStorageKey = (gameId = '', roundId = '', seat = '') =>
+  gameId && roundId && seat ? `kjk-answer-draft:${gameId}:${roundId}:${seat}` : '';
+const answerDraftMemoryStore = new Map();
+const answerDraftTouchedStore = new Set();
+const activeAnswerInputMemory = { key: '', field: '', selectionStart: 0, selectionEnd: 0 };
+const markAnswerDraftTouched = (key = '') => {
+  if (key) answerDraftTouchedStore.add(key);
+};
+const clearAnswerDraftTouched = (key = '') => {
+  if (key) answerDraftTouchedStore.delete(key);
+};
+const wasAnswerDraftTouched = (key = '') => Boolean(key && answerDraftTouchedStore.has(key));
+const safeLocalStorageSet = (key = '', value = '') => {
+  if (!key || typeof window === 'undefined') return false;
+  try {
+    window.localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const isMobileDashboardViewport = () => {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  try {
+    return window.matchMedia('(max-width: 900px)').matches;
+  } catch {
+    return false;
+  }
+};
+const setMobilePostAuthDashboardDefault = () => {
+  if (!isMobileDashboardViewport()) return false;
+  return safeLocalStorageSet('kjk-dashboard-tab', 'gameLobby');
+};
+const readStoredAnswerDraft = (key = '') => {
+  if (!key || typeof window === 'undefined') return null;
+  const memoryDraft = answerDraftMemoryStore.get(key);
+  if (memoryDraft) return memoryDraft;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return {
+      ownAnswer: String(parsed?.ownAnswer ?? ''),
+      guessedOther: String(parsed?.guessedOther ?? ''),
+    };
+  } catch {
+    return null;
+  }
+};
+const writeStoredAnswerDraft = (key = '', draft = {}) => {
+  if (!key || typeof window === 'undefined') return;
+  const normalizedDraft = {
+    ownAnswer: String(draft?.ownAnswer ?? ''),
+    guessedOther: String(draft?.guessedOther ?? ''),
+  };
+  answerDraftMemoryStore.set(key, normalizedDraft);
+  safeLocalStorageSet(key, JSON.stringify(normalizedDraft));
+};
+
+const stableRoundIdentityKey = (round = {}) =>
+  normalizeText(round?.questionId)
+  || String(round?.number || '')
+  || sanitizeNoteKey(round?.question || '')
+  || '';
+
+const stableRoomSnapshotValue = (game = {}) => {
+  if (!game) return null;
+  const round = game.currentRound || null;
+  return {
+    id: game.id || '',
+    status: game.status || '',
+    endedAt: game.endedAt || null,
+    joinCode: game.joinCode || game.roomCode || game.code || '',
+    hostUid: game.hostUid || '',
+    gameMode: game.gameMode || 'standard',
+    questionBankType: game.questionBankType || 'game',
+    seats: game.seats || {},
+    playerProfiles: game.playerProfiles || {},
+    totals: game.totals || {},
+    quizTotals: game.quizTotals || {},
+    quizWagers: game.quizWagers || {},
+    quizWagerAgreement: game.quizWagerAgreement || null,
+    quizReadyState: game.quizReadyState || null,
+    roundsPlayed: Number(game.roundsPlayed || 0),
+    requestedQuestionCount: Number(game.requestedQuestionCount || 0),
+    actualQuestionCount: Number(game.actualQuestionCount || 0),
+    questionQueueIds: game.questionQueueIds || [],
+    usedQuestionIds: game.usedQuestionIds || [],
+    currentRound: round
+      ? {
+          ...round,
+          updatedAt: undefined,
+        }
+      : null,
+  };
+};
+
+const areStableRoomSnapshotsEqual = (left, right) =>
+  JSON.stringify(stableRoomSnapshotValue(left)) === JSON.stringify(stableRoomSnapshotValue(right));
+const areRoundAnswerSnapshotsEqual = (left = {}, right = {}) =>
+  String(left?.ownAnswer ?? '') === String(right?.ownAnswer ?? '')
+  && String(left?.guessedOther ?? '') === String(right?.guessedOther ?? '')
+  && String(left?.submittedBy ?? '') === String(right?.submittedBy ?? '')
+  && String(left?.submittedAt ?? '') === String(right?.submittedAt ?? '')
+  && String(left?.finalResult ?? '') === String(right?.finalResult ?? '')
+  && String(left?.originalSystemResult ?? '') === String(right?.originalSystemResult ?? '')
+  && Boolean(left?.wasCorrect) === Boolean(right?.wasCorrect)
+  && Number(left?.pointsAwarded || 0) === Number(right?.pointsAwarded || 0)
+  && Number(left?.timerValue || 0) === Number(right?.timerValue || 0);
+
+const isJoinableGameSnapshot = (data = {}) => {
+  if (!data) return false;
+  const status = data.status || 'active';
+  return ACTIVE_GAME_STATUSES.includes(status)
+    && !COMPLETED_GAME_STATUSES.includes(status)
+    && !data.endedAt;
+};
+
+const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
+  if (currentGame?.id === incomingGame?.id && currentGame?.currentRound && !incomingGame?.currentRound) {
+    const incomingStatus = incomingGame?.status || 'active';
+    if (!COMPLETED_GAME_STATUSES.includes(incomingStatus) && !incomingGame?.endedAt) {
+      return {
+        ...incomingGame,
+        currentRound: currentGame.currentRound,
+      };
+    }
+  }
+  if (!currentGame?.currentRound || !incomingGame?.currentRound) {
+    return currentGame?.id === incomingGame?.id && areStableRoomSnapshotsEqual(currentGame, incomingGame)
+      ? currentGame
+      : incomingGame;
+  }
+  if (currentGame.id !== incomingGame.id) return incomingGame;
+  const currentRound = currentGame.currentRound || {};
+  const incomingRound = incomingGame.currentRound || {};
+  const currentIdentity = stableRoundIdentityKey(currentRound);
+  const incomingIdentity = stableRoundIdentityKey(incomingRound);
+  if (!incomingIdentity) {
+    return {
+      ...incomingGame,
+      currentRound: currentRound,
+    };
+  }
+  const sameByIdentity = Boolean(currentIdentity && incomingIdentity && currentIdentity === incomingIdentity);
+  const sameByNumber = Boolean(currentRound.number && incomingRound.number && Number(currentRound.number) === Number(incomingRound.number));
+  const sameByPrompt =
+    normalizeText(currentRound.question || '')
+    && normalizeText(currentRound.question || '') === normalizeText(incomingRound.question || '')
+    && normalizeText(currentRound.roundType || '') === normalizeText(incomingRound.roundType || '');
+  const isSameLiveRound = sameByIdentity || sameByNumber || sameByPrompt;
+  if (!isSameLiveRound) return incomingGame;
+  const currentAnswers = currentGame.currentRound.answers || {};
+  const incomingAnswers = incomingGame.currentRound.answers || {};
+  const nextAnswers = {
+    jay: hasSubmittedRoundAnswer(incomingGame.currentRound, 'jay') ? incomingAnswers.jay : currentAnswers.jay,
+    kim: hasSubmittedRoundAnswer(incomingGame.currentRound, 'kim') ? incomingAnswers.kim : currentAnswers.kim,
+  };
+  const stableRoundFields =
+    currentGame.currentRound.status === incomingGame.currentRound.status
+    && currentGame.currentRound.questionId === incomingGame.currentRound.questionId
+    && currentGame.currentRound.question === incomingGame.currentRound.question
+    && currentGame.currentRound.category === incomingGame.currentRound.category
+    && currentGame.currentRound.roundType === incomingGame.currentRound.roundType
+    && currentGame.currentRound.defaultAnswerType === incomingGame.currentRound.defaultAnswerType
+    && currentGame.currentRound.correctAnswer === incomingGame.currentRound.correctAnswer
+    && currentGame.currentRound.normalizedCorrectAnswer === incomingGame.currentRound.normalizedCorrectAnswer
+    && currentGame.currentRound.quizTimerSeconds === incomingGame.currentRound.quizTimerSeconds
+    && currentGame.currentRound.quizTimerStartedAt === incomingGame.currentRound.quizTimerStartedAt
+    && currentGame.currentRound.quizTimerEndsAt === incomingGame.currentRound.quizTimerEndsAt
+    && JSON.stringify(currentGame.currentRound.multipleChoiceOptions || []) === JSON.stringify(incomingGame.currentRound.multipleChoiceOptions || [])
+    && currentGame.currentRound.penalties?.jay === incomingGame.currentRound.penalties?.jay
+    && currentGame.currentRound.penalties?.kim === incomingGame.currentRound.penalties?.kim
+    && JSON.stringify(currentGame.currentRound.ready || {}) === JSON.stringify(incomingGame.currentRound.ready || {})
+    && JSON.stringify(currentGame.currentRound.nextReady || {}) === JSON.stringify(incomingGame.currentRound.nextReady || {})
+    && JSON.stringify(currentGame.currentRound.overrideRequests || {}) === JSON.stringify(incomingGame.currentRound.overrideRequests || {})
+    && areRoundAnswerSnapshotsEqual(currentAnswers.jay, nextAnswers.jay)
+    && areRoundAnswerSnapshotsEqual(currentAnswers.kim, nextAnswers.kim);
+  const mergedRound = {
+    ...currentRound,
+    ...incomingRound,
+    questionId: incomingRound.questionId || currentRound.questionId || '',
+    question: incomingRound.question || currentRound.question || '',
+    category: incomingRound.category || currentRound.category || '',
+    roundType: incomingRound.roundType || currentRound.roundType || '',
+    defaultAnswerType: incomingRound.defaultAnswerType || currentRound.defaultAnswerType || '',
+    multipleChoiceOptions: Array.isArray(incomingRound.multipleChoiceOptions) && incomingRound.multipleChoiceOptions.length
+      ? incomingRound.multipleChoiceOptions
+      : currentRound.multipleChoiceOptions || [],
+    penalties: {
+      ...(currentRound.penalties || {}),
+      ...(incomingRound.penalties || {}),
+    },
+    ready: {
+      ...(currentRound.ready || {}),
+      ...(incomingRound.ready || {}),
+    },
+    nextReady: {
+      ...(currentRound.nextReady || {}),
+      ...(incomingRound.nextReady || {}),
+    },
+    overrideRequests: {
+      ...(currentRound.overrideRequests || {}),
+      ...(incomingRound.overrideRequests || {}),
+    },
+    answers: nextAnswers,
+  };
+  const mergedGame = {
+    ...incomingGame,
+    currentRound: stableRoundFields
+      ? currentGame.currentRound
+      : mergedRound,
+  };
+  return areStableRoomSnapshotsEqual(currentGame, mergedGame) ? currentGame : mergedGame;
+};
 
 const getPlayedQuestionIdsForGame = (game = {}) => {
   const archivedRoundIds = mergeUniqueIds((game?.rounds || []).map((round) => round?.questionId));
@@ -624,12 +1001,17 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     endedBy: data.endedBy || '',
     finalScores,
     winner: data.winner || (finalScores ? (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim') : 'tie'),
+    quizTotals: data.quizTotals || { jay: 0, kim: 0 },
+    quizWinner: data.quizWinner || '',
+    wagerSettlement: data.wagerSettlement || null,
     roundsPlayed: data.roundsPlayed || roundsData.length,
     rounds: roundsData,
     questionQueueIds: data.questionQueueIds || [],
     usedQuestionIds,
     seats: data.seats || {},
     playerProfiles: data.playerProfiles || {},
+    gameMode: data.gameMode || 'standard',
+    questionBankType: data.questionBankType || 'game',
     requestedQuestionCount: Number(data.requestedQuestionCount || 0),
     actualQuestionCount: displayedQuestionCount,
     displayedQuestionCount,
@@ -782,65 +1164,68 @@ function AuthScreen({
       </div>
       <div className="auth-screen-overlay" aria-hidden="true" />
       <section className="auth-shell auth-shell--cover">
-        <section className="panel auth-panel auth-panel--glass">
-          <div className="auth-topline">
-            <span className="status-pill auth-pill">Penalty Points</span>
-          </div>
-
-          <div className="auth-brand-lockup">
-            <h1>KJK</h1>
-            <h2>KIMJAYKINKS</h2>
-          </div>
-
-          {notice ? <p className="panel-copy auth-notice">{notice}</p> : null}
-
-          {!isReset ? (
-            <div className="auth-form-grid auth-form-grid--sexy">
-              {isSignup ? (
-                <label className="field">
-                  <span>Display name</span>
-                  <input value={form.displayName} onChange={(event) => onFormChange({ displayName: event.target.value })} placeholder="Jay or Kim" />
-                </label>
-              ) : null}
-              <label className="field">
-                <span>Email / Username</span>
-                <input type="email" value={form.email} onChange={(event) => onFormChange({ email: event.target.value })} placeholder="name@example.com" />
-              </label>
-              <label className="field password-field">
-                <span>Password</span>
-                <div className="password-row">
-                  <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={(event) => onFormChange({ password: event.target.value })} placeholder="••••••••" />
-                  <Button className="ghost-button compact password-toggle" onClick={() => setShowPassword((current) => !current)}>
-                    {showPassword ? 'Hide' : 'Show'}
-                  </Button>
-                </div>
-              </label>
+        <div className="auth-login-stack">
+          <img className="auth-characters-overhang" src={authCharactersOverhangImage} alt="" aria-hidden="true" />
+          <section className="panel auth-panel auth-panel--glass">
+            <div className="auth-topline">
+              <span className="status-pill auth-pill">Penalty Points</span>
             </div>
-          ) : (
-            <label className="field">
-              <span>Email for reset</span>
-              <input type="email" value={form.resetEmail} onChange={(event) => onFormChange({ resetEmail: event.target.value })} placeholder="name@example.com" />
-            </label>
-          )}
 
-          <div className="button-row auth-actions">
-            <Button className="primary-button compact auth-primary-button" onClick={onSubmit} disabled={isBusy}>
-              {isReset ? 'Send Reset Link' : isSignup ? 'Create Account' : 'Sign In'}
-            </Button>
-            {isReset ? (
-              <Button className="ghost-button compact" onClick={onReset} disabled={isBusy}>
-                Back
-              </Button>
+            <div className="auth-brand-lockup">
+              <h1>KJK</h1>
+              <h2>KIMJAYKINKS</h2>
+            </div>
+
+            {notice ? <p className="panel-copy auth-notice">{notice}</p> : null}
+
+            {!isReset ? (
+              <div className="auth-form-grid auth-form-grid--sexy">
+                {isSignup ? (
+                  <label className="field">
+                    <span>Display name</span>
+                    <input value={form.displayName} onChange={(event) => onFormChange({ displayName: event.target.value })} placeholder="Jay or Kim" />
+                  </label>
+                ) : null}
+                <label className="field">
+                  <span>Email / Username</span>
+                  <input type="email" value={form.email} onChange={(event) => onFormChange({ email: event.target.value })} placeholder="name@example.com" />
+                </label>
+                <label className="field password-field">
+                  <span>Password</span>
+                  <div className="password-row">
+                    <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={(event) => onFormChange({ password: event.target.value })} placeholder="••••••••" />
+                    <Button className="ghost-button compact password-toggle" onClick={() => setShowPassword((current) => !current)}>
+                      {showPassword ? 'Hide' : 'Show'}
+                    </Button>
+                  </div>
+                </label>
+              </div>
             ) : (
-              <Button className="ghost-button compact" onClick={() => onModeChange(mode === 'login' ? 'signup' : 'login')} disabled={isBusy}>
-                {mode === 'login' ? 'Create account' : 'Sign in'}
-              </Button>
+              <label className="field">
+                <span>Email for reset</span>
+                <input type="email" value={form.resetEmail} onChange={(event) => onFormChange({ resetEmail: event.target.value })} placeholder="name@example.com" />
+              </label>
             )}
-            <Button className="ghost-button compact" onClick={() => onModeChange('reset')} disabled={isBusy}>
-              Reset password
-            </Button>
-          </div>
-        </section>
+
+            <div className="button-row auth-actions">
+              <Button className="primary-button compact auth-primary-button" onClick={onSubmit} disabled={isBusy}>
+                {isReset ? 'Send Reset Link' : isSignup ? 'Create Account' : 'Sign In'}
+              </Button>
+              {isReset ? (
+                <Button className="ghost-button compact" onClick={onReset} disabled={isBusy}>
+                  Back
+                </Button>
+              ) : (
+                <Button className="ghost-button compact" onClick={() => onModeChange(mode === 'login' ? 'signup' : 'login')} disabled={isBusy}>
+                  {mode === 'login' ? 'Create account' : 'Sign in'}
+                </Button>
+              )}
+              <Button className="ghost-button compact" onClick={() => onModeChange('reset')} disabled={isBusy}>
+                Reset password
+              </Button>
+            </div>
+          </section>
+        </div>
       </section>
     </main>
   );
@@ -849,8 +1234,13 @@ function AuthScreen({
 function LobbyScreen({
   user,
   profile,
+  connectionState,
   questionNotes,
+  questionFeedback,
+  quizAnswers,
   onSaveDisplayName,
+  onUpdateQuestionNote,
+  onDeleteQuestionNote,
   playerAccounts,
   editingModeEnabled,
   onToggleEditingMode,
@@ -871,12 +1261,15 @@ function LobbyScreen({
   onJoinGameInvite,
   onDismissGameInvite,
   onSyncQuestionBank,
+  onSyncQuizBank,
   onImportQuestions,
+  onImportQuizQuestions,
   onResumeGame,
   onViewSummary,
   onEndGame,
   onDeleteGame,
   onResetBalances,
+  onSaveBalances,
   onSignOut,
   activeGames,
   previousGames,
@@ -887,6 +1280,9 @@ function LobbyScreen({
   questionCount,
   usedQuestionCount,
   remainingQuestionCount,
+  quizQuestionCount,
+  usedQuizQuestionCount,
+  remainingQuizQuestionCount,
   unusedQuestionCount,
   syncNotice,
   gameInvites,
@@ -927,15 +1323,26 @@ function LobbyScreen({
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('kjk-dashboard-tab') || 'gameLobby');
   const [activityTab, setActivityTab] = useState(() => localStorage.getItem('kjk-activity-tab') || 'activeGames');
   const [createMode, setCreateMode] = useState('random');
+  const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
+  const [analyticsSegment, setAnalyticsSegment] = useState('facts');
+  const [questionBankSegment, setQuestionBankSegment] = useState('game');
+  const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
   const [selectedRoundTypes, setSelectedRoundTypes] = useState([]);
   const [selectedCategories, setSelectedCategories] = useState([]);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isBalanceEditorOpen, setIsBalanceEditorOpen] = useState(false);
+  const [balanceDrafts, setBalanceDrafts] = useState({ jay: '0', kim: '0' });
   const [profileNameDraft, setProfileNameDraft] = useState(() => normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
+  const [editingNoteId, setEditingNoteId] = useState('');
+  const [editingNoteDraft, setEditingNoteDraft] = useState('');
   const dashboardMenuRef = useRef(null);
   const isMobileDashboardNav = useMediaQuery('(max-width: 900px)');
+  const pendingInviteCount = useMemo(() => {
+    if (!Array.isArray(gameInvites)) return 0;
+    return gameInvites.filter((invite) => (invite?.displayStatus || invite?.status) === 'pending').length;
+  }, [gameInvites]);
   const dashboardPills = [
     { id: 'gameLobby', label: 'Game Lobby', tone: 'lobby', icon: 'home' },
-    { id: 'questionBank', label: 'Question Bank', tone: 'questionbank', icon: 'book' },
     { id: 'activity', label: 'Activity', tone: 'activity', icon: 'activity' },
     { id: 'analytics', label: 'Analytics', tone: 'analytics', icon: 'graph' },
     { id: 'diary', label: 'Diary', tone: 'diary', icon: 'book' },
@@ -943,6 +1350,10 @@ function LobbyScreen({
   ];
   const typeOptions = ROUND_TYPES.map((type) => ({ value: type.id, label: type.shortLabel }));
   const categoryOptions = questionCategories?.length ? questionCategories : DEFAULT_CATEGORIES.map((category) => category.name);
+  const currentBalanceDrafts = useMemo(() => ({
+    jay: String(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0)),
+    kim: String(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0)),
+  }), [playerAccounts?.jay?.lifetimePenaltyPoints, playerAccounts?.kim?.lifetimePenaltyPoints]);
 
   const toggleFilterValue = (value, values, setter) => {
     setter(values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value]);
@@ -951,6 +1362,7 @@ function LobbyScreen({
   const handleCreateGame = () =>
     onCreateGame({
       mode: createMode,
+      gameMode: 'standard',
       roundTypes: createMode === 'custom' ? selectedRoundTypes : [],
       categories: createMode === 'custom' ? selectedCategories : [],
     });
@@ -958,6 +1370,7 @@ function LobbyScreen({
   const handleCreateAndInviteGame = () =>
     onCreateGame({
       mode: createMode,
+      gameMode: 'standard',
       roundTypes: createMode === 'custom' ? selectedRoundTypes : [],
       categories: createMode === 'custom' ? selectedCategories : [],
       sendInvite: true,
@@ -972,15 +1385,35 @@ function LobbyScreen({
     onToggleEditingMode();
   };
 
-  const handleResetBalancesFromMenu = () => {
+  const handleEditBalancesFromMenu = () => {
     closeDashboardMenu();
-    const pin = window.prompt('Enter PIN to clear both balances.');
+    const pin = window.prompt('Enter PIN to edit balances.');
     if (pin === null) return;
     if (String(pin).trim() !== '0000') {
       window.alert('Incorrect PIN.');
       return;
     }
-    onResetBalances?.();
+    setBalanceDrafts(currentBalanceDrafts);
+    setIsBalanceEditorOpen(true);
+  };
+
+  const handleClearBalancesFromEditor = async () => {
+    const result = await onResetBalances?.();
+    if (result === null) return;
+    setBalanceDrafts({ jay: '0', kim: '0' });
+    setIsBalanceEditorOpen(false);
+  };
+
+  const handleSubmitBalancesFromEditor = async () => {
+    const jayBalance = Number(balanceDrafts.jay);
+    const kimBalance = Number(balanceDrafts.kim);
+    if (!Number.isFinite(jayBalance) || !Number.isFinite(kimBalance)) {
+      window.alert('Enter numeric balances for Jay and Kim.');
+      return;
+    }
+    const result = await onSaveBalances?.({ jay: jayBalance, kim: kimBalance });
+    if (result === null) return;
+    setIsBalanceEditorOpen(false);
   };
 
   const handleSignOutFromMenu = () => {
@@ -1093,7 +1526,7 @@ function LobbyScreen({
 
   useEffect(() => {
     try {
-      window.localStorage.setItem('kjk-dashboard-tab', activeTab);
+      safeLocalStorageSet('kjk-dashboard-tab', activeTab);
     } catch {
       // Ignore storage failures.
     }
@@ -1101,19 +1534,244 @@ function LobbyScreen({
 
   useEffect(() => {
     try {
-      window.localStorage.setItem('kjk-activity-tab', activityTab);
+      safeLocalStorageSet('kjk-activity-tab', activityTab);
     } catch {
       // Ignore storage failures.
     }
   }, [activityTab]);
 
+  const questionFeedbackAnalytics = useMemo(() => {
+    const byQuestion = new Map();
+    const byUser = { jay: { liked: 0, disliked: 0 }, kim: { liked: 0, disliked: 0 } };
+    const categoryStats = new Map();
+    const typeStats = new Map();
+
+    (questionFeedback || []).forEach((entry) => {
+      const seat = seatFromPlayerRef(entry.userId || entry.userSeat) || '';
+      const value = entry.feedbackValue === 'liked' ? 'liked' : entry.feedbackValue === 'disliked' ? 'disliked' : '';
+      if (!seat || !value) return;
+      byUser[seat][value] += 1;
+      const qKey = normalizeText(entry.questionId || entry.questionText || entry.id);
+      if (!qKey) return;
+      if (!byQuestion.has(qKey)) {
+        byQuestion.set(qKey, {
+          questionId: entry.questionId || '',
+          questionText: entry.questionText || entry.questionId || 'Question',
+          category: entry.category || '',
+          roundType: entry.roundType || '',
+          feedbackBySeat: {},
+        });
+      }
+      byQuestion.get(qKey).feedbackBySeat[seat] = value;
+    });
+
+    const bothLiked = [];
+    const bothDisliked = [];
+    const splitOpinions = [];
+
+    [...byQuestion.values()].forEach((row) => {
+      const jayFeedback = row.feedbackBySeat.jay || '';
+      const kimFeedback = row.feedbackBySeat.kim || '';
+      const categoryKey = normalizeText(row.category) || 'Uncategorised';
+      const typeKey = normalizeText(row.roundType) || 'unknown';
+      if (!categoryStats.has(categoryKey)) categoryStats.set(categoryKey, { category: categoryKey, liked: 0, disliked: 0, bothLiked: 0, split: 0 });
+      if (!typeStats.has(typeKey)) typeStats.set(typeKey, { roundType: typeKey, liked: 0, disliked: 0, bothLiked: 0, split: 0 });
+      const categoryRow = categoryStats.get(categoryKey);
+      const typeRow = typeStats.get(typeKey);
+      if (jayFeedback === 'liked') { categoryRow.liked += 1; typeRow.liked += 1; }
+      if (kimFeedback === 'liked') { categoryRow.liked += 1; typeRow.liked += 1; }
+      if (jayFeedback === 'disliked') { categoryRow.disliked += 1; typeRow.disliked += 1; }
+      if (kimFeedback === 'disliked') { categoryRow.disliked += 1; typeRow.disliked += 1; }
+
+      if (jayFeedback && kimFeedback) {
+        if (jayFeedback === 'liked' && kimFeedback === 'liked') {
+          bothLiked.push(row);
+          categoryRow.bothLiked += 1;
+          typeRow.bothLiked += 1;
+        } else if (jayFeedback === 'disliked' && kimFeedback === 'disliked') {
+          bothDisliked.push(row);
+        } else {
+          splitOpinions.push(row);
+          categoryRow.split += 1;
+          typeRow.split += 1;
+        }
+      }
+    });
+
+    const sortRows = (rows) => rows.sort((a, b) => (b.liked + b.disliked + b.bothLiked + b.split) - (a.liked + a.disliked + a.bothLiked + a.split));
+    return {
+      byUser,
+      bothLiked,
+      bothDisliked,
+      splitOpinions,
+      categoryRows: sortRows([...categoryStats.values()]),
+      typeRows: sortRows([...typeStats.values()]),
+    };
+  }, [questionFeedback]);
+
+  const quizAnalytics = useMemo(() => {
+    const rows = (quizAnswers || []);
+    const bySeat = {
+      jay: { answered: 0, correct: 0, incorrect: 0, points: 0, totalTimeMs: 0, fastestMs: null, slowestMs: null },
+      kim: { answered: 0, correct: 0, incorrect: 0, points: 0, totalTimeMs: 0, fastestMs: null, slowestMs: null },
+    };
+    const overrides = { requested: 0, approved: 0, rejected: 0 };
+    const overridesBySeat = {
+      jay: { requested: 0, approved: 0, rejected: 0 },
+      kim: { requested: 0, approved: 0, rejected: 0 },
+    };
+    const perQuestion = new Map();
+    const categoryStats = new Map();
+    const typeStats = new Map();
+    const pointsStats = {
+      highestSingle: { jay: 0, kim: 0 },
+      lowestSingle: { jay: null, kim: null },
+    };
+    rows.forEach((row) => {
+      const seat = seatFromPlayerRef(row.playerSeat || row.playerId) || '';
+      if (!seat) return;
+      const answerTimeMs = Math.max(0, Number(row.answerTimeMs ?? row.answerTime ?? 0) || 0);
+      const points = Math.max(0, Number(row.pointsAwarded || 0));
+      const categoryKey = normalizeText(row.category || '') || 'Uncategorised';
+      const typeKey = normalizeText(row.questionType || row.roundType || '') || 'unknown';
+      const wasCorrect = Boolean(row.finalResult === 'correct' || row.wasCorrect);
+      bySeat[seat].answered += 1;
+      if (wasCorrect) bySeat[seat].correct += 1;
+      else bySeat[seat].incorrect += 1;
+      bySeat[seat].points += points;
+      bySeat[seat].totalTimeMs += answerTimeMs;
+      bySeat[seat].fastestMs = bySeat[seat].fastestMs === null ? answerTimeMs : Math.min(bySeat[seat].fastestMs, answerTimeMs);
+      bySeat[seat].slowestMs = bySeat[seat].slowestMs === null ? answerTimeMs : Math.max(bySeat[seat].slowestMs, answerTimeMs);
+      pointsStats.highestSingle[seat] = Math.max(pointsStats.highestSingle[seat] || 0, points);
+      pointsStats.lowestSingle[seat] = pointsStats.lowestSingle[seat] === null ? points : Math.min(pointsStats.lowestSingle[seat], points);
+      if (normalizeText(row.overrideStatus || '') && row.overrideStatus !== 'none') {
+        overrides.requested += 1;
+        if (row.overrideStatus === 'approved') overrides.approved += 1;
+        if (row.overrideStatus === 'rejected') overrides.rejected += 1;
+        overridesBySeat[seat].requested += 1;
+        if (row.overrideStatus === 'approved') overridesBySeat[seat].approved += 1;
+        if (row.overrideStatus === 'rejected') overridesBySeat[seat].rejected += 1;
+      }
+      const key = normalizeText(row.questionId || row.questionText || '');
+      if (key) {
+        if (!perQuestion.has(key)) perQuestion.set(key, { question: row.questionText || row.questionId || 'Question', category: categoryKey, roundType: typeKey, bySeat: {}, wrongCount: 0, correctCount: 0, fastestCorrectMs: null, slowestCorrectMs: null });
+        const entry = perQuestion.get(key);
+        entry.bySeat[seat] = wasCorrect;
+        if (wasCorrect) {
+          entry.correctCount += 1;
+          entry.fastestCorrectMs = entry.fastestCorrectMs === null ? answerTimeMs : Math.min(entry.fastestCorrectMs, answerTimeMs);
+          entry.slowestCorrectMs = entry.slowestCorrectMs === null ? answerTimeMs : Math.max(entry.slowestCorrectMs, answerTimeMs);
+        } else {
+          entry.wrongCount += 1;
+        }
+      }
+      if (!categoryStats.has(categoryKey)) categoryStats.set(categoryKey, { category: categoryKey, correct: 0, wrong: 0, points: 0, totalTimeMs: 0 });
+      if (!typeStats.has(typeKey)) typeStats.set(typeKey, { roundType: typeKey, correct: 0, wrong: 0, points: 0, totalTimeMs: 0 });
+      const catRow = categoryStats.get(categoryKey);
+      const typeRow = typeStats.get(typeKey);
+      if (wasCorrect) { catRow.correct += 1; typeRow.correct += 1; } else { catRow.wrong += 1; typeRow.wrong += 1; }
+      catRow.points += points;
+      typeRow.points += points;
+      catRow.totalTimeMs += answerTimeMs;
+      typeRow.totalTimeMs += answerTimeMs;
+    });
+    const bothCorrect = [];
+    const bothWrong = [];
+    const splitCorrect = [];
+    [...perQuestion.values()].forEach((row) => {
+      const jay = row.bySeat.jay;
+      const kim = row.bySeat.kim;
+      if (typeof jay !== 'boolean' || typeof kim !== 'boolean') return;
+      if (jay && kim) bothCorrect.push(row.question);
+      else if (!jay && !kim) bothWrong.push(row.question);
+      else splitCorrect.push(row.question);
+    });
+    const mostMissed = [...perQuestion.values()]
+      .filter((row) => row.wrongCount > 0)
+      .sort((a, b) => b.wrongCount - a.wrongCount)
+      .slice(0, 10);
+    const fastestCorrect = [...perQuestion.values()]
+      .filter((row) => typeof row.fastestCorrectMs === 'number')
+      .sort((a, b) => a.fastestCorrectMs - b.fastestCorrectMs)
+      .slice(0, 10);
+    const slowestCorrect = [...perQuestion.values()]
+      .filter((row) => typeof row.slowestCorrectMs === 'number')
+      .sort((a, b) => b.slowestCorrectMs - a.slowestCorrectMs)
+      .slice(0, 10);
+    const sortCategoryRows = (items) =>
+      items.sort((a, b) => (b.correct + b.wrong) - (a.correct + a.wrong) || b.points - a.points);
+    const withGroupDerived = (row) => {
+      const total = Math.max(0, Number(row.correct || 0) + Number(row.wrong || 0));
+      const accuracy = total ? Math.round((Number(row.correct || 0) / total) * 100) : 0;
+      const avgTimeMs = total ? Math.round(Number(row.totalTimeMs || 0) / total) : 0;
+      return { ...row, total, accuracy, avgTimeMs };
+    };
+    const withDerived = (seatRow) => {
+      const answered = Math.max(0, Number(seatRow.answered || 0));
+      const correct = Math.max(0, Number(seatRow.correct || 0));
+      const accuracy = answered ? Math.round((correct / answered) * 100) : 0;
+      const avgTimeMs = answered ? Math.round(Number(seatRow.totalTimeMs || 0) / answered) : 0;
+      const avgPoints = answered ? Math.round(Number(seatRow.points || 0) / answered) : 0;
+      return { ...seatRow, accuracy, avgTimeMs, avgPoints };
+    };
+    return {
+      totalAnswers: rows.length,
+      bySeat: {
+        jay: withDerived(bySeat.jay),
+        kim: withDerived(bySeat.kim),
+      },
+      pointsStats,
+      overrides,
+      overridesBySeat,
+      bothCorrect,
+      bothWrong,
+      splitCorrect,
+      mostMissed,
+      fastestCorrect,
+      slowestCorrect,
+      categoryRows: sortCategoryRows([...categoryStats.values()].map(withGroupDerived)),
+      typeRows: sortCategoryRows([...typeStats.values()].map(withGroupDerived)),
+    };
+  }, [quizAnswers]);
+
+  const quizSessionAnalytics = useMemo(() => {
+    const sessions = (previousGames || []).filter((entry) => (entry?.gameMode || 'standard') === 'quiz');
+    const completedSessions = sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || ''));
+    const wins = { jay: 0, kim: 0, tie: 0 };
+    const wagers = { games: 0, jayNetShift: 0, kimNetShift: 0, movedTotal: 0, jayWon: 0, kimWon: 0, tie: 0 };
+    completedSessions.forEach((entry) => {
+      const winner = entry?.quizWinner || entry?.winner || 'tie';
+      if (winner === 'jay') wins.jay += 1;
+      else if (winner === 'kim') wins.kim += 1;
+      else wins.tie += 1;
+      const settlement = entry?.wagerSettlement || null;
+      if (settlement && typeof settlement === 'object') {
+        wagers.games += 1;
+        const jayShift = Number(settlement.jayShift || 0);
+        const kimShift = Number(settlement.kimShift || 0);
+        wagers.jayNetShift += jayShift;
+        wagers.kimNetShift += kimShift;
+        wagers.movedTotal += Math.abs(jayShift) + Math.abs(kimShift);
+        if (winner === 'jay') wagers.jayWon += 1;
+        if (winner === 'kim') wagers.kimWon += 1;
+        if (winner !== 'jay' && winner !== 'kim') wagers.tie += 1;
+      }
+    });
+    return {
+      totalQuizSessions: sessions.length,
+      completedQuizSessions: completedSessions.length,
+      wins,
+      wagers,
+    };
+  }, [previousGames]);
+
   useEffect(() => {
     setProfileNameDraft(normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   }, [profile?.displayName, user?.displayName, user?.email]);
 
-  return (
-    <main className="app production-app">
-      <header className="top-bar top-bar--shell">
+	  return (
+	    <main className="app production-app">
+	      <header className="top-bar top-bar--shell">
         {!isMobileDashboardNav ? (
           <div className="top-bar-left">
             <Button className="ghost-button compact" onClick={() => setIsProfileOpen(true)}>
@@ -1122,25 +1780,34 @@ function LobbyScreen({
           </div>
         ) : null}
         <div className="brand-lockup">
-          <h1>KJK KIMJAYKINKS</h1>
+          <h1><span className="brand-mobile-mark">92.1 JKC Radio</span><span className="brand-full-text">KJK KIMJAYKINKS</span></h1>
         </div>
-        <div className="top-actions">
-          {editingModeEnabled ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
-          <span className="status-pill dashboard-balance-pill">Jay {formatScore(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0))}</span>
-          <span className="status-pill dashboard-balance-pill">Kim {formatScore(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0))}</span>
-          <details className="top-menu settings-menu dashboard-settings-menu" ref={dashboardMenuRef}>
-            <summary aria-label="Open account menu">
-              <span className="settings-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
-                  <path d="M5 7.5h14M5 12h14M5 16.5h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-              </span>
-              <span className="sr-only">Account menu</span>
-            </summary>
-            <div className="top-menu-panel settings-menu-panel dashboard-settings-menu-panel">
-              {isMobileDashboardNav ? (
-                <section className="settings-menu-section dashboard-menu-section">
-                  <span className="settings-section-label">Navigate</span>
+	        <div className="top-actions">
+	          {editingModeEnabled ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
+	          <div className="dashboard-score-pills" aria-label="Player penalty point balances">
+	            <span className="status-pill dashboard-balance-pill">
+	              <SeatFlag seat="jay" className="dashboard-balance-flag" />
+	              Jay {formatScore(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0))}
+	            </span>
+	            <span className="status-pill dashboard-balance-pill">
+	              <SeatFlag seat="kim" className="dashboard-balance-flag" />
+	              Kim {formatScore(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0))}
+	            </span>
+	          </div>
+	          <details className="top-menu settings-menu dashboard-settings-menu" ref={dashboardMenuRef}>
+	            <summary aria-label="Open account menu">
+	              <span className="settings-icon" aria-hidden="true">
+	                <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+	                  <path d="M5 7.5h14M5 12h14M5 16.5h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+	                </svg>
+	              </span>
+	              {pendingInviteCount > 0 ? <span className="menu-notice-badge" aria-label={`${pendingInviteCount} pending game requests`}>{pendingInviteCount}</span> : null}
+	              <span className="sr-only">Account menu</span>
+	            </summary>
+	            <div className="top-menu-panel settings-menu-panel dashboard-settings-menu-panel">
+	              {isMobileDashboardNav ? (
+	                <section className="settings-menu-section dashboard-menu-section">
+	                  <span className="settings-section-label">Navigate</span>
                   <div className="dashboard-menu-pill-list">
                     {dashboardPills.map((pill) => (
                       <button
@@ -1149,24 +1816,28 @@ function LobbyScreen({
                         className={`dashboard-pill tab-button dashboard-menu-pill dashboard-pill--${pill.tone} ${activeTab === pill.id ? 'is-active' : ''}`}
                         onClick={() => handleDashboardTabSelect(pill.id)}
                       >
-                        {renderDashboardIcon(pill.icon)}
-                        {pill.label}
-                        {pill.id === 'activity' && pendingActivityCount > 0 ? <span className="dashboard-pill-dot" aria-hidden="true" /> : null}
-                      </button>
-                    ))}
-                  </div>
-                </section>
+	                        {renderDashboardIcon(pill.icon)}
+	                        {pill.label}
+	                        {pill.id === 'gameLobby' && pendingInviteCount > 0 ? <span className="dashboard-pill-count" aria-hidden="true">{pendingInviteCount}</span> : null}
+	                        {pill.id === 'activity' && pendingActivityCount > 0 ? <span className="dashboard-pill-dot" aria-hidden="true" /> : null}
+	                      </button>
+	                    ))}
+	                  </div>
+	                </section>
               ) : null}
               <section className="settings-menu-section">
                 <span className="settings-section-label">Account</span>
+                <Button className="ghost-button compact" onClick={() => { closeDashboardMenu(); setActiveTab('questionBank'); }} disabled={isBusy}>
+                  Question Bank
+                </Button>
                 <Button className="ghost-button compact" onClick={() => { closeDashboardMenu(); setIsProfileOpen(true); }} disabled={isBusy}>
                   My Profile
                 </Button>
                 <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromMenu} disabled={isBusy}>
                   {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
                 </Button>
-                <Button className="ghost-button compact" onClick={handleResetBalancesFromMenu} disabled={isBusy}>
-                  Clear Balances
+                <Button className="ghost-button compact" onClick={handleEditBalancesFromMenu} disabled={isBusy}>
+                  Edit balances
                 </Button>
                 <Button className="ghost-button compact" onClick={handleSignOutFromMenu}>
                   Sign out
@@ -1182,18 +1853,19 @@ function LobbyScreen({
         */}
         {!isMobileDashboardNav ? (
           <nav className="dashboard-pill-nav dashboard-pill-nav--embedded" aria-label="Dashboard sections">
-          {dashboardPills.map((pill) => (
-            <button
-              key={pill.id}
-              type="button"
-              className={`dashboard-pill tab-button dashboard-pill--${pill.tone} ${activeTab === pill.id ? 'is-active' : ''}`}
-              onClick={() => handleDashboardTabSelect(pill.id)}
-            >
-              {renderDashboardIcon(pill.icon)}
-              {pill.label}
-              {pill.id === 'activity' && pendingActivityCount > 0 ? <span className="dashboard-pill-dot" aria-hidden="true" /> : null}
-            </button>
-          ))}
+	              {dashboardPills.map((pill) => (
+	                <button
+	                  key={pill.id}
+	                  type="button"
+	                  className={`dashboard-pill tab-button dashboard-pill--${pill.tone} ${activeTab === pill.id ? 'is-active' : ''}`}
+	                  onClick={() => handleDashboardTabSelect(pill.id)}
+	                >
+	                  {renderDashboardIcon(pill.icon)}
+	                  {pill.label}
+	                  {pill.id === 'gameLobby' && pendingInviteCount > 0 ? <span className="dashboard-pill-count" aria-hidden="true">{pendingInviteCount}</span> : null}
+	                  {pill.id === 'activity' && pendingActivityCount > 0 ? <span className="dashboard-pill-dot" aria-hidden="true" /> : null}
+	                </button>
+	              ))}
           </nav>
         ) : null}
       </header>
@@ -1208,6 +1880,17 @@ function LobbyScreen({
       <section className="lobby-dashboard">
         {activeTab === 'gameLobby' ? (
           <section className="lobby-tab-panel lobby-tab-panel--game-lobby">
+            {gameInvites.length ? (
+              <section className="lobby-invite-top">
+                <GameInvitesPanel
+                  invites={gameInvites}
+                  onJoinInvite={onJoinGameInvite}
+                  onDismissInvite={onDismissGameInvite}
+                  isBusy={isBusy}
+                  compact
+                />
+              </section>
+            ) : null}
             <div className="game-lobby-grid">
               <section className="panel lobby-panel lobby-panel--lobby create-game-card">
                 <div className="panel-heading">
@@ -1298,36 +1981,96 @@ function LobbyScreen({
                     Create + Send Game Request
                   </Button>
                 </div>
-              </section>
 
-              <section className="panel lobby-panel lobby-panel--lobby join-game-card">
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">Join</p>
-                    <h2>Join Game</h2>
+                <div className="lobby-join-inline">
+                  <p className="eyebrow">OR Join a game with code</p>
+                  <div className="lobby-actions lobby-actions--stack">
+                    <label className="field">
+                      <span>Join Code</span>
+                      <input value={joinCode} onChange={(event) => onJoinCodeChange(normalizeJoinCode(event.target.value))} placeholder="ABCD12" />
+                    </label>
+                    <Button className="ghost-button lobby-secondary-button" onClick={onJoinGame} disabled={isBusy || !joinCode.length}>
+                      Join Game
+                    </Button>
                   </div>
                 </div>
-
-                <div className="lobby-actions lobby-actions--stack">
-                  <label className="field">
-                    <span>Join Code</span>
-                    <input value={joinCode} onChange={(event) => onJoinCodeChange(normalizeJoinCode(event.target.value))} placeholder="ABCD12" />
-                  </label>
-                  <Button className="ghost-button lobby-secondary-button" onClick={onJoinGame} disabled={isBusy || !joinCode.length}>
-                    Join Game
-                  </Button>
-                </div>
-
-                {gameInvites.length ? (
-                  <GameInvitesPanel
-                    invites={gameInvites}
-                    onJoinInvite={onJoinGameInvite}
-                    onDismissInvite={onDismissGameInvite}
-                    isBusy={isBusy}
-                    compact
-                  />
-                ) : null}
               </section>
+
+	              <section className="panel lobby-panel lobby-panel--lobby join-game-card">
+	                <div className="panel-heading">
+	                  <div>
+	                    <p className="eyebrow">Quick Fire</p>
+	                    <h2>Quiz Mode</h2>
+	                  </div>
+	                </div>
+	                <p className="panel-copy">Start a speed quiz game from the Quiz sheet question set.</p>
+                <div className="quiz-card-hero" aria-hidden="true">
+                  <div className="quiz-card-hero-main">
+                    <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
+                      <defs>
+                        <linearGradient id="quiz-card-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor="#7ad8ff" />
+                          <stop offset="100%" stopColor="#4f7bff" />
+                        </linearGradient>
+                      </defs>
+                      <circle cx="60" cy="60" r="52" fill="rgba(6,16,34,0.72)" stroke="url(#quiz-card-gradient)" strokeWidth="4" />
+                      <path d="M34 56h52M34 70h36" stroke="#bfe1ff" strokeWidth="4" strokeLinecap="round" />
+                      <circle cx="86" cy="70" r="7" fill="#9be5a6" />
+                      <path d="M83.5 70.2 85.5 72.4 89 67.8" stroke="#0f3117" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                  <div className="quiz-card-hero-meta">
+                    <strong>10s Timer</strong>
+                    <small>Fast answers score higher</small>
+                  </div>
+                  <div className="quiz-card-hero-meta">
+                    <strong>Live Quiz</strong>
+                    <small>Separate from normal game points</small>
+	                  </div>
+	                </div>
+	                <label className="field">
+	                  <span>Number of Quiz Questions</span>
+	                  <input
+	                    type="number"
+	                    inputMode="numeric"
+	                    min="1"
+	                    value={quizQuestionCountDraft}
+	                    onChange={(event) => setQuizQuestionCountDraft(event.target.value)}
+	                    placeholder="10"
+	                  />
+	                </label>
+	                <div className="button-row">
+	                  <Button
+	                    className="primary-button compact"
+	                    onClick={() =>
+	                      onCreateGame({
+	                        mode: 'random',
+	                        gameMode: 'quiz',
+	                        roundTypes: [],
+	                        categories: [],
+	                        requestedQuestionCount: quizQuestionCountDraft,
+	                      })}
+	                    disabled={isBusy}
+	                  >
+	                    Create Quiz Game
+	                  </Button>
+	                  <Button
+	                    className="ghost-button compact"
+	                    onClick={() =>
+	                      onCreateGame({
+	                        mode: 'random',
+	                        gameMode: 'quiz',
+	                        roundTypes: [],
+	                        categories: [],
+	                        sendInvite: true,
+	                        requestedQuestionCount: quizQuestionCountDraft,
+	                      })}
+	                    disabled={isBusy}
+	                  >
+	                    Create + Invite
+	                  </Button>
+	                </div>
+	              </section>
             </div>
 
           </section>
@@ -1341,23 +2084,31 @@ function LobbyScreen({
                   <p className="eyebrow">Question Bank</p>
                   <h2>Manage Questions</h2>
                 </div>
-                <span className="status-pill">{questionCount} loaded</span>
+                <span className="status-pill">{questionBankSegment === 'quiz' ? quizQuestionCount : questionCount} loaded</span>
+              </div>
+              <div className="dashboard-subnav" role="tablist" aria-label="Question bank tabs">
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'game' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('game')}>
+                  Game Questions
+                </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('quiz')}>
+                  Quiz Questions
+                </button>
               </div>
 
               <div className="question-bank-status-grid">
                 <article className="stat-tile">
                   <small>Total Loaded</small>
-                  <strong>{questionCount}</strong>
+                  <strong>{questionBankSegment === 'quiz' ? quizQuestionCount : questionCount}</strong>
                   <span>questions currently available</span>
                 </article>
                 <article className="stat-tile">
                   <small>Tracked Used</small>
-                  <strong>{usedQuestionCount}</strong>
+                  <strong>{questionBankSegment === 'quiz' ? usedQuizQuestionCount : usedQuestionCount}</strong>
                   <span>already used in games</span>
                 </article>
                 <article className="stat-tile">
                   <small>Remaining</small>
-                  <strong>{remainingQuestionCount}</strong>
+                  <strong>{questionBankSegment === 'quiz' ? remainingQuizQuestionCount : remainingQuestionCount}</strong>
                   <span>unused questions left</span>
                 </article>
                 <article className="stat-tile">
@@ -1368,10 +2119,10 @@ function LobbyScreen({
               </div>
 
               <div className="button-row question-bank-actions">
-                <Button className="ghost-button compact" onClick={onSyncQuestionBank} disabled={isBusy}>
+                <Button className="ghost-button compact" onClick={questionBankSegment === 'quiz' ? onSyncQuizBank : onSyncQuestionBank} disabled={isBusy}>
                   Sync Question Bank
                 </Button>
-                <Button className="primary-button compact" onClick={onImportQuestions} disabled={isBusy}>
+                <Button className="primary-button compact" onClick={questionBankSegment === 'quiz' ? onImportQuizQuestions : onImportQuestions} disabled={isBusy}>
                   Import New Questions
                 </Button>
                 <Button className="ghost-button compact" onClick={onResetQuestionBank} disabled={isBusy}>
@@ -1610,13 +2361,423 @@ function LobbyScreen({
                   {lobbyAnalytics.totalGamesPlayed} {lobbyAnalytics.totalGamesPlayed === 1 ? 'game' : 'games'}
                 </span>
               </div>
+              <div className="dashboard-subnav analytics-subnav" role="tablist" aria-label="Analytics segments">
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'facts' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('facts')}>
+                  Game Facts
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'questions' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('questions')}>
+                  Questions
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('quiz')}>
+                  Quiz
+                </button>
+              </div>
 
-              <AnalyticsPanel
-                analytics={lobbyRoundAnalytics}
-                categoryColorMap={categoryColorMap}
-                variant="dashboard"
-                summary={lobbyAnalytics}
-              />
+              {analyticsSegment === 'facts' ? (
+                <AnalyticsPanel
+                  analytics={lobbyRoundAnalytics}
+                  categoryColorMap={categoryColorMap}
+                  variant="dashboard"
+                  summary={lobbyAnalytics}
+                />
+              ) : analyticsSegment === 'quiz' ? (
+                <section className="analytics-questions-panel">
+                  <div className="dashboard-subnav analytics-subnav analytics-subnav--quiz" role="tablist" aria-label="Quiz analytics tabs">
+                    <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${quizAnalyticsTab === 'overview' ? 'is-active' : ''}`} onClick={() => setQuizAnalyticsTab('overview')}>
+                      Overview
+                    </button>
+                    <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${quizAnalyticsTab === 'timing' ? 'is-active' : ''}`} onClick={() => setQuizAnalyticsTab('timing')}>
+                      Timing
+                    </button>
+                    <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${quizAnalyticsTab === 'points' ? 'is-active' : ''}`} onClick={() => setQuizAnalyticsTab('points')}>
+                      Points
+                    </button>
+                    <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${quizAnalyticsTab === 'wagers' ? 'is-active' : ''}`} onClick={() => setQuizAnalyticsTab('wagers')}>
+                      Wagers
+                    </button>
+                    <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${quizAnalyticsTab === 'questions' ? 'is-active' : ''}`} onClick={() => setQuizAnalyticsTab('questions')}>
+                      Questions
+                    </button>
+                    <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${quizAnalyticsTab === 'categories' ? 'is-active' : ''}`} onClick={() => setQuizAnalyticsTab('categories')}>
+                      Categories
+                    </button>
+                    <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${quizAnalyticsTab === 'types' ? 'is-active' : ''}`} onClick={() => setQuizAnalyticsTab('types')}>
+                      Types
+                    </button>
+                    <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${quizAnalyticsTab === 'overrides' ? 'is-active' : ''}`} onClick={() => setQuizAnalyticsTab('overrides')}>
+                      Overrides
+                    </button>
+                  </div>
+                  <div className="question-bank-status-grid">
+                    <article className="stat-tile">
+                      <small>Quiz Questions</small>
+                      <strong>{quizQuestionCount}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Quiz Sessions</small>
+                      <strong>{quizSessionAnalytics.completedQuizSessions}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Total Answers</small>
+                      <strong>{quizAnalytics.totalAnswers}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Correct</small>
+                      <strong>{quizAnalytics.bySeat.jay.correct}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Correct</small>
+                      <strong>{quizAnalytics.bySeat.kim.correct}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Accuracy</small>
+                      <strong>{quizAnalytics.bySeat.jay.accuracy}%</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Accuracy</small>
+                      <strong>{quizAnalytics.bySeat.kim.accuracy}%</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Points</small>
+                      <strong>{formatScore(quizAnalytics.bySeat.jay.points)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Points</small>
+                      <strong>{formatScore(quizAnalytics.bySeat.kim.points)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Avg Points</small>
+                      <strong>{formatScore(quizAnalytics.bySeat.jay.avgPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Avg Points</small>
+                      <strong>{formatScore(quizAnalytics.bySeat.kim.avgPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Both Correct</small>
+                      <strong>{quizAnalytics.bothCorrect.length}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Split Result</small>
+                      <strong>{quizAnalytics.splitCorrect.length}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Overrides</small>
+                      <strong>{quizAnalytics.overrides.requested}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Approved</small>
+                      <strong>{quizAnalytics.overrides.approved}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Rejected</small>
+                      <strong>{quizAnalytics.overrides.rejected}</strong>
+                    </article>
+                  </div>
+                  {quizAnalyticsTab === 'overview' ? (
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading"><div><span>Both Correct</span><h3>Shared wins</h3></div></div>
+                      <div className="summary-list">
+                        {quizAnalytics.bothCorrect.length
+                          ? quizAnalytics.bothCorrect.slice(0, 12).map((item) => <article className="mini-list-row" key={`quiz-both-${item}`}><strong>{item}</strong></article>)
+                          : <p className="empty-copy">No shared correct answers yet.</p>}
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading"><div><span>Split Correct</span><h3>One right, one wrong</h3></div></div>
+                      <div className="summary-list">
+                        {quizAnalytics.splitCorrect.length
+                          ? quizAnalytics.splitCorrect.slice(0, 12).map((item) => <article className="mini-list-row" key={`quiz-split-${item}`}><strong>{item}</strong></article>)
+                          : <p className="empty-copy">No split results yet.</p>}
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading"><div><span>Most Missed</span><h3>Hardest questions</h3></div></div>
+                      <div className="summary-list">
+                        {quizAnalytics.mostMissed.length
+                          ? quizAnalytics.mostMissed.slice(0, 10).map((row) => (
+                              <article className="mini-list-row" key={`quiz-miss-${row.question}`}>
+                                <strong>{row.question}</strong>
+                                <span>{`Missed ${row.wrongCount}`}</span>
+                              </article>
+                            ))
+                          : <p className="empty-copy">No misses yet.</p>}
+                      </div>
+                    </section>
+                  </div>
+                  ) : null}
+                  {quizAnalyticsTab === 'timing' ? (
+                    <div className="summary-columns">
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Timing</span><h3>Average time</h3></div></div>
+                        <div className="summary-list">
+                          <article className="mini-list-row"><strong>Jay avg</strong><span>{`${quizAnalytics.bySeat.jay.avgTimeMs} ms`}</span></article>
+                          <article className="mini-list-row"><strong>Kim avg</strong><span>{`${quizAnalytics.bySeat.kim.avgTimeMs} ms`}</span></article>
+                          <article className="mini-list-row"><strong>Jay fastest</strong><span>{`${quizAnalytics.bySeat.jay.fastestMs ?? 0} ms`}</span></article>
+                          <article className="mini-list-row"><strong>Kim fastest</strong><span>{`${quizAnalytics.bySeat.kim.fastestMs ?? 0} ms`}</span></article>
+                          <article className="mini-list-row"><strong>Jay slowest</strong><span>{`${quizAnalytics.bySeat.jay.slowestMs ?? 0} ms`}</span></article>
+                          <article className="mini-list-row"><strong>Kim slowest</strong><span>{`${quizAnalytics.bySeat.kim.slowestMs ?? 0} ms`}</span></article>
+                        </div>
+                      </section>
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Fastest Correct</span><h3>Quick wins</h3></div></div>
+                        <div className="summary-list">
+                          {quizAnalytics.fastestCorrect.length
+                            ? quizAnalytics.fastestCorrect.map((row) => (
+                                <article className="mini-list-row" key={`quiz-fast-${row.question}`}>
+                                  <strong>{row.question}</strong>
+                                  <span>{`${row.fastestCorrectMs} ms`}</span>
+                                </article>
+                              ))
+                            : <p className="empty-copy">No correct answers yet.</p>}
+                        </div>
+                      </section>
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Slowest Correct</span><h3>Slow wins</h3></div></div>
+                        <div className="summary-list">
+                          {quizAnalytics.slowestCorrect.length
+                            ? quizAnalytics.slowestCorrect.map((row) => (
+                                <article className="mini-list-row" key={`quiz-slow-${row.question}`}>
+                                  <strong>{row.question}</strong>
+                                  <span>{`${row.slowestCorrectMs} ms`}</span>
+                                </article>
+                              ))
+                            : <p className="empty-copy">No correct answers yet.</p>}
+                        </div>
+                      </section>
+                    </div>
+                  ) : null}
+                  {quizAnalyticsTab === 'points' ? (
+                    <div className="summary-columns">
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Points</span><h3>Singles</h3></div></div>
+                        <div className="summary-list">
+                          <article className="mini-list-row"><strong>Jay highest</strong><span>{formatScore(quizAnalytics.pointsStats.highestSingle.jay)}</span></article>
+                          <article className="mini-list-row"><strong>Kim highest</strong><span>{formatScore(quizAnalytics.pointsStats.highestSingle.kim)}</span></article>
+                          <article className="mini-list-row"><strong>Jay lowest</strong><span>{formatScore(quizAnalytics.pointsStats.lowestSingle.jay ?? 0)}</span></article>
+                          <article className="mini-list-row"><strong>Kim lowest</strong><span>{formatScore(quizAnalytics.pointsStats.lowestSingle.kim ?? 0)}</span></article>
+                        </div>
+                      </section>
+                    </div>
+                  ) : null}
+                  {quizAnalyticsTab === 'wagers' ? (
+                    <div className="summary-columns">
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Wagers</span><h3>Penalty moved</h3></div></div>
+                        <div className="summary-list">
+                          <article className="mini-list-row"><strong>Wager games</strong><span>{quizSessionAnalytics.wagers.games}</span></article>
+                          <article className="mini-list-row"><strong>Jay net shift</strong><span>{formatScore(quizSessionAnalytics.wagers.jayNetShift)}</span></article>
+                          <article className="mini-list-row"><strong>Kim net shift</strong><span>{formatScore(quizSessionAnalytics.wagers.kimNetShift)}</span></article>
+                          <article className="mini-list-row"><strong>Total moved</strong><span>{formatScore(quizSessionAnalytics.wagers.movedTotal)}</span></article>
+                        </div>
+                      </section>
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Wins</span><h3>Quiz outcomes</h3></div></div>
+                        <div className="summary-list">
+                          <article className="mini-list-row"><strong>Jay wins</strong><span>{quizSessionAnalytics.wins.jay}</span></article>
+                          <article className="mini-list-row"><strong>Kim wins</strong><span>{quizSessionAnalytics.wins.kim}</span></article>
+                          <article className="mini-list-row"><strong>Ties</strong><span>{quizSessionAnalytics.wins.tie}</span></article>
+                        </div>
+                      </section>
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Wager Outcomes</span><h3>Won and lost</h3></div></div>
+                        <div className="summary-list">
+                          <article className="mini-list-row"><strong>Jay won</strong><span>{quizSessionAnalytics.wagers.jayWon}</span></article>
+                          <article className="mini-list-row"><strong>Kim won</strong><span>{quizSessionAnalytics.wagers.kimWon}</span></article>
+                          <article className="mini-list-row"><strong>Tie</strong><span>{quizSessionAnalytics.wagers.tie}</span></article>
+                        </div>
+                      </section>
+                    </div>
+                  ) : null}
+                  {quizAnalyticsTab === 'questions' ? (
+                    <div className="summary-columns">
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Both Wrong</span><h3>Shared misses</h3></div></div>
+                        <div className="summary-list">
+                          {quizAnalytics.bothWrong.length
+                            ? quizAnalytics.bothWrong.slice(0, 12).map((item) => <article className="mini-list-row" key={`quiz-wrong-${item}`}><strong>{item}</strong></article>)
+                            : <p className="empty-copy">No shared wrong answers yet.</p>}
+                        </div>
+                      </section>
+                    </div>
+                  ) : null}
+                  {quizAnalyticsTab === 'categories' ? (
+                    <div className="summary-columns">
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Categories</span><h3>Ranked</h3></div></div>
+                        <div className="summary-list">
+                          {(quizAnalytics.categoryRows || []).slice(0, 14).map((row) => (
+                            <article className="mini-list-row" key={`quiz-cat-${row.category}`}>
+                              <strong>{row.category}</strong>
+                              <span>{`${row.accuracy}% · avg ${row.avgTimeMs} ms · ${formatScore(row.points)}`}</span>
+                            </article>
+                          ))}
+                        </div>
+                      </section>
+                    </div>
+                  ) : null}
+                  {quizAnalyticsTab === 'types' ? (
+                    <div className="summary-columns">
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Types</span><h3>Ranked</h3></div></div>
+                        <div className="summary-list">
+                          {(quizAnalytics.typeRows || []).slice(0, 14).map((row) => (
+                            <article className="mini-list-row" key={`quiz-type-${row.roundType}`}>
+                              <strong>{row.roundType}</strong>
+                              <span>{`${row.accuracy}% · avg ${row.avgTimeMs} ms · ${formatScore(row.points)}`}</span>
+                            </article>
+                          ))}
+                        </div>
+                      </section>
+                    </div>
+                  ) : null}
+                  {quizAnalyticsTab === 'overrides' ? (
+                    <div className="summary-columns">
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>Overrides</span><h3>Summary</h3></div></div>
+                        <div className="summary-list">
+                          <article className="mini-list-row"><strong>Requested</strong><span>{quizAnalytics.overrides.requested}</span></article>
+                          <article className="mini-list-row"><strong>Approved</strong><span>{quizAnalytics.overrides.approved}</span></article>
+                          <article className="mini-list-row"><strong>Rejected</strong><span>{quizAnalytics.overrides.rejected}</span></article>
+                        </div>
+                      </section>
+                      <section className="summary-column">
+                        <div className="mini-heading"><div><span>By Player</span><h3>Breakdown</h3></div></div>
+                        <div className="summary-list">
+                          <article className="mini-list-row"><strong>Jay requested</strong><span>{quizAnalytics.overridesBySeat.jay.requested}</span></article>
+                          <article className="mini-list-row"><strong>Jay approved</strong><span>{quizAnalytics.overridesBySeat.jay.approved}</span></article>
+                          <article className="mini-list-row"><strong>Jay rejected</strong><span>{quizAnalytics.overridesBySeat.jay.rejected}</span></article>
+                          <article className="mini-list-row"><strong>Kim requested</strong><span>{quizAnalytics.overridesBySeat.kim.requested}</span></article>
+                          <article className="mini-list-row"><strong>Kim approved</strong><span>{quizAnalytics.overridesBySeat.kim.approved}</span></article>
+                          <article className="mini-list-row"><strong>Kim rejected</strong><span>{quizAnalytics.overridesBySeat.kim.rejected}</span></article>
+                        </div>
+                      </section>
+                    </div>
+                  ) : null}
+                </section>
+              ) : (
+                <section className="analytics-questions-panel">
+                  <div className="question-bank-status-grid">
+                    <article className="stat-tile">
+                      <small>Jay liked</small>
+                      <strong>{questionFeedbackAnalytics.byUser.jay.liked}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay disliked</small>
+                      <strong>{questionFeedbackAnalytics.byUser.jay.disliked}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim liked</small>
+                      <strong>{questionFeedbackAnalytics.byUser.kim.liked}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim disliked</small>
+                      <strong>{questionFeedbackAnalytics.byUser.kim.disliked}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Both liked</small>
+                      <strong>{questionFeedbackAnalytics.bothLiked.length}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Both disliked</small>
+                      <strong>{questionFeedbackAnalytics.bothDisliked.length}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Split opinion</small>
+                      <strong>{questionFeedbackAnalytics.splitOpinions.length}</strong>
+                    </article>
+                  </div>
+
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Categories</span>
+                          <h3>Like / dislike by category</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        {questionFeedbackAnalytics.categoryRows.length ? (
+                          questionFeedbackAnalytics.categoryRows.map((row) => (
+                            <article className="mini-list-row" key={`cat-${row.category}`}>
+                              <strong>{row.category}</strong>
+                              <small>Likes {row.liked} · Dislikes {row.disliked} · Both liked {row.bothLiked} · Split {row.split}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="empty-copy">No category feedback yet.</p>
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Question Types</span>
+                          <h3>Like / dislike by type</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        {questionFeedbackAnalytics.typeRows.length ? (
+                          questionFeedbackAnalytics.typeRows.map((row) => (
+                            <article className="mini-list-row" key={`type-${row.roundType}`}>
+                              <strong>{ROUND_TYPE_LABEL[row.roundType] || row.roundType}</strong>
+                              <small>Likes {row.liked} · Dislikes {row.disliked} · Both liked {row.bothLiked} · Split {row.split}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="empty-copy">No question-type feedback yet.</p>
+                        )}
+                      </div>
+                    </section>
+                  </div>
+
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Both Liked</span>
+                          <h3>Shared favorites</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        {questionFeedbackAnalytics.bothLiked.length ? (
+                          questionFeedbackAnalytics.bothLiked.map((row) => (
+                            <article className="mini-list-row" key={`liked-${row.questionId || row.questionText}`}>
+                              <strong>{row.questionText}</strong>
+                              <small>{row.category || 'Uncategorised'} · {ROUND_TYPE_LABEL[row.roundType] || row.roundType || 'Question'}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="empty-copy">No shared likes yet.</p>
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Split Opinion</span>
+                          <h3>One liked, one disliked</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        {questionFeedbackAnalytics.splitOpinions.length ? (
+                          questionFeedbackAnalytics.splitOpinions.map((row) => (
+                            <article className="mini-list-row" key={`split-${row.questionId || row.questionText}`}>
+                              <strong>{row.questionText}</strong>
+                              <small>{row.category || 'Uncategorised'} · {ROUND_TYPE_LABEL[row.roundType] || row.roundType || 'Question'}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="empty-copy">No split opinions yet.</p>
+                        )}
+                      </div>
+                    </section>
+                  </div>
+                </section>
+              )}
             </section>
           </section>
         ) : null}
@@ -1689,7 +2850,12 @@ function LobbyScreen({
                 <p className="eyebrow">Account</p>
                 <h2>My Profile</h2>
               </div>
-              <span className="status-pill">{profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}</span>
+              <div className="modal-heading-actions">
+                <span className="status-pill">{profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}</span>
+                <Button className="ghost-button compact modal-close-button" onClick={() => setIsProfileOpen(false)} disabled={isBusy} aria-label="Close My Profile">
+                  Close
+                </Button>
+              </div>
             </div>
             <div className="auth-form-grid">
               <label className="field">
@@ -1725,13 +2891,49 @@ function LobbyScreen({
                   questionNotes.map((note) => (
                     <article className="mini-list-row forfeit-request-row" key={note.id}>
                       <strong>{note.questionText || note.questionId || 'Question note'}</strong>
-                      <span>{note.noteText || '-'}</span>
+                      {editingNoteId === note.id ? (
+                        <label className="field">
+                          <span>Edit note</span>
+                          <textarea rows="3" value={editingNoteDraft} onChange={(event) => setEditingNoteDraft(event.target.value)} />
+                        </label>
+                      ) : (
+                        <span>{note.noteText || '-'}</span>
+                      )}
                       <small>
                         {formatShortDateTime(note.createdAt)}
                         {note.gameId ? ` · Game ${String(note.gameId).slice(-6).toUpperCase()}` : ''}
                         {note.category ? ` · ${note.category}` : ''}
                         {note.roundType ? ` · ${ROUND_TYPE_LABEL[note.roundType] || note.roundType}` : ''}
                       </small>
+                      <div className="button-row">
+                        {editingNoteId === note.id ? (
+                          <>
+                            <Button
+                              className="primary-button compact"
+                              onClick={async () => {
+                                await onUpdateQuestionNote?.(note.id, editingNoteDraft);
+                                setEditingNoteId('');
+                                setEditingNoteDraft('');
+                              }}
+                              disabled={isBusy || !normalizeText(editingNoteDraft)}
+                            >
+                              Save
+                            </Button>
+                            <Button className="ghost-button compact" onClick={() => { setEditingNoteId(''); setEditingNoteDraft(''); }} disabled={isBusy}>
+                              Cancel
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button className="ghost-button compact" onClick={() => { setEditingNoteId(note.id); setEditingNoteDraft(note.noteText || ''); }} disabled={isBusy}>
+                              Edit
+                            </Button>
+                            <Button className="ghost-button compact" onClick={() => onDeleteQuestionNote?.(note.id)} disabled={isBusy}>
+                              Delete
+                            </Button>
+                          </>
+                        )}
+                      </div>
                     </article>
                   ))
                 ) : (
@@ -1739,6 +2941,52 @@ function LobbyScreen({
                 )}
               </div>
             </section>
+          </div>
+        </section>
+      ) : null}
+
+      {isBalanceEditorOpen ? (
+        <section className="modal-backdrop" role="presentation" onClick={() => setIsBalanceEditorOpen(false)}>
+          <div className="panel modal-panel balance-editor-modal" role="dialog" aria-modal="true" aria-label="Edit balances" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-heading compact-heading">
+              <div>
+                <p className="eyebrow">Penalty Points</p>
+                <h2>Edit balances</h2>
+              </div>
+              <Button className="ghost-button compact modal-close-button" onClick={() => setIsBalanceEditorOpen(false)} disabled={isBusy} aria-label="Close Edit balances">
+                Close
+              </Button>
+            </div>
+            <div className="balance-editor-grid">
+              <label className="field">
+                <span>Jay balance</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step="1"
+                  value={balanceDrafts.jay}
+                  onChange={(event) => setBalanceDrafts((current) => ({ ...current, jay: event.target.value }))}
+                />
+              </label>
+              <label className="field">
+                <span>Kim balance</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step="1"
+                  value={balanceDrafts.kim}
+                  onChange={(event) => setBalanceDrafts((current) => ({ ...current, kim: event.target.value }))}
+                />
+              </label>
+            </div>
+            <div className="button-row balance-editor-actions">
+              <Button className="ghost-button compact" onClick={handleClearBalancesFromEditor} disabled={isBusy}>
+                Clear balances
+              </Button>
+              <Button className="primary-button compact" onClick={handleSubmitBalancesFromEditor} disabled={isBusy}>
+                Submit
+              </Button>
+            </div>
           </div>
         </section>
       ) : null}
@@ -1783,16 +3031,16 @@ function QuickDesk({ currentRound, penaltyDraft, setPenaltyDraft, onNextQuestion
   );
 }
 
-function QuestionAnswerEntry({
-  game,
+function QuestionAnswerEntryBase({
+  gameId,
   seat,
   viewerSeat,
   currentRound,
-  answerDraft,
-  setAnswerDraft,
+  answerLabel,
+  oppositeLabel,
   onSubmitAnswer,
   submissionState,
-  isBusy,
+  isQuizRound = false,
   embedded = false,
 }) {
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
@@ -1803,37 +3051,190 @@ function QuestionAnswerEntry({
   const currentPlayerGuessForOther = currentPlayerAnswer?.guessedOther || '';
   const otherPlayerAnswer = currentRound?.answers?.[otherPlayer]?.ownAnswer || '';
   const otherPlayerGuessForCurrent = currentRound?.answers?.[otherPlayer]?.guessedOther || '';
-  const answerLabel = gameSeatDisplayName(game, currentPlayer, currentRound);
-  const oppositeLabel = gameSeatDisplayName(game, otherPlayer, currentRound);
   const promptLabel = roundType === 'numeric' ? 'Number' : roundType === 'multipleChoice' || roundType === 'trueFalse' || roundType === 'preference' ? 'Choice' : 'Answer';
   const options = choiceOptions.length ? choiceOptions : ['Option A', 'Option B'];
   const isChoiceRound = roundType === 'multipleChoice' || roundType === 'trueFalse' || roundType === 'preference';
   const isListRound = roundType === 'ranked' || roundType === 'sortIntoOrder';
   const listCount = roundType === 'ranked' ? 3 : Math.max(3, Math.min(5, options.length || 4));
-  const hasSubmittedAnswer = submissionState === 'submitted' || Boolean(normalizeText(currentPlayerAnswer?.ownAnswer || ''));
+  const isRoundOpen = (currentRound?.status || 'open') === 'open';
+  const hasServerSubmittedAnswer = submissionState === 'submitted' || Boolean(normalizeText(currentPlayerAnswer?.ownAnswer || ''));
+  // IMPORTANT: This must not flip during Firestore snapshots (e.g. when a field
+  // like `currentRound.id` is missing on some snapshots). If it changes, the
+  // answer form resets and the user loses focus/typed drafts.
+  const stableRoundKey = stableRoundIdentityKey(currentRound);
+  const nextDraftStorageKey = answerDraftStorageKey(gameId || '', stableRoundKey, currentPlayer);
+  const draftStorageKeyRef = useRef('');
+  if (nextDraftStorageKey) {
+    draftStorageKeyRef.current = nextDraftStorageKey;
+  }
+  const draftStorageKey = draftStorageKeyRef.current;
+  const buildSavedDraft = () => ({
+    ownAnswer: String(currentPlayerAnswer?.ownAnswer ?? ''),
+    guessedOther: isQuizRound ? '' : String(currentPlayerAnswer?.guessedOther ?? ''),
+  });
+  const buildInitialDraft = () => {
+    const savedDraft = buildSavedDraft();
+    if (hasServerSubmittedAnswer) return savedDraft;
+    return (draftStorageKey ? readStoredAnswerDraft(draftStorageKey) : null) || savedDraft;
+  };
   const [isEditingSubmittedAnswer, setIsEditingSubmittedAnswer] = useState(false);
-  const isLocked = isBusy || (hasSubmittedAnswer && !isEditingSubmittedAnswer);
+  const [localSubmittedAnswer, setLocalSubmittedAnswer] = useState(hasServerSubmittedAnswer);
+  const [localDraft, setLocalDraft] = useState(() => buildInitialDraft());
+  const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
+  const answerEntryRef = useRef(null);
+  const ownAnswerRef = useRef(null);
+  const guessedOtherRef = useRef(null);
+  const rankedInputRefs = useRef({});
+  const draftTouchedRef = useRef(wasAnswerDraftTouched(draftStorageKey));
+  const lastServerDraftRef = useRef({ key: draftStorageKey, ownAnswer: '', guessedOther: '', submitted: false });
+  const hasSubmittedAnswer = localSubmittedAnswer || hasServerSubmittedAnswer;
+  const canEditSubmittedAnswer = !isQuizRound;
+  const isLocked = hasSubmittedAnswer && (!canEditSubmittedAnswer || !isEditingSubmittedAnswer);
+  const lockedQuizPoints = Number(currentPlayerAnswer?.pointsAwarded || 0);
 
   useEffect(() => {
+    if (!draftStorageKey) return;
+    draftTouchedRef.current = wasAnswerDraftTouched(draftStorageKey);
+    rankedInputRefs.current = {};
     setIsEditingSubmittedAnswer(false);
-  }, [currentRound?.id, submissionState]);
+    setLocalSubmittedAnswer(hasServerSubmittedAnswer);
+    const nextDraft = buildInitialDraft();
+    lastServerDraftRef.current = {
+      key: draftStorageKey,
+      ...buildSavedDraft(),
+      submitted: hasServerSubmittedAnswer,
+    };
+    setLocalDraft(nextDraft);
+  }, [draftStorageKey]);
 
-  const handleAnswerAction = async () => {
-    if (hasSubmittedAnswer && !isEditingSubmittedAnswer) {
-      setIsEditingSubmittedAnswer(true);
+  useEffect(() => {
+    if (!draftStorageKey) return;
+    const savedDraft = buildSavedDraft();
+    const lastServerDraft = lastServerDraftRef.current;
+    const serverDraftChanged =
+      lastServerDraft.key !== draftStorageKey
+      || lastServerDraft.ownAnswer !== savedDraft.ownAnswer
+      || lastServerDraft.guessedOther !== savedDraft.guessedOther
+      || lastServerDraft.submitted !== hasServerSubmittedAnswer;
+    if (!serverDraftChanged) return;
+
+    lastServerDraftRef.current = {
+      key: draftStorageKey,
+      ...savedDraft,
+      submitted: hasServerSubmittedAnswer,
+    };
+
+    if (hasServerSubmittedAnswer) {
+      setLocalSubmittedAnswer(true);
+      if (!isEditingSubmittedAnswer) {
+        draftTouchedRef.current = false;
+        clearAnswerDraftTouched(draftStorageKey);
+        setLocalDraft(savedDraft);
+      }
       return;
     }
-    const result = await onSubmitAnswer();
-    if (result !== null) setIsEditingSubmittedAnswer(false);
+
+    if (!draftTouchedRef.current) {
+      setLocalDraft(savedDraft);
+    }
+  }, [draftStorageKey, hasServerSubmittedAnswer, currentPlayerAnswer?.ownAnswer, currentPlayerAnswer?.guessedOther, isEditingSubmittedAnswer]);
+
+  useLayoutEffect(() => {
+    if (!draftStorageKey || activeAnswerInputMemory.key !== draftStorageKey || !activeAnswerInputMemory.field || isLocked) return;
+    const target =
+      rankedInputRefs.current[activeAnswerInputMemory.field]
+      || (activeAnswerInputMemory.field === 'guessedOther' ? guessedOtherRef.current : ownAnswerRef.current);
+    if (!target || document.activeElement === target) return;
+    target.focus({ preventScroll: true });
+    try {
+      const start = Math.min(activeAnswerInputMemory.selectionStart || 0, target.value.length);
+      const end = Math.min(activeAnswerInputMemory.selectionEnd || start, target.value.length);
+      target.setSelectionRange(start, end);
+    } catch {
+      // Some input types do not support selection ranges.
+    }
+  });
+
+  const rememberFocusedField = (field, event) => {
+    const target = event?.target;
+    if (!draftStorageKey) return;
+    activeAnswerInputMemory.key = draftStorageKey;
+    activeAnswerInputMemory.field = field;
+    activeAnswerInputMemory.selectionStart = Number(target?.selectionStart ?? target?.value?.length ?? 0);
+    activeAnswerInputMemory.selectionEnd = Number(target?.selectionEnd ?? activeAnswerInputMemory.selectionStart);
+  };
+
+  const forgetFocusedField = (field) => {
+    if (!draftStorageKey || activeAnswerInputMemory.key !== draftStorageKey || activeAnswerInputMemory.field !== field) return;
+    window.setTimeout(() => {
+      const activeElement = document.activeElement;
+      if (!activeElement || activeElement === document.body || answerEntryRef.current?.contains(activeElement)) return;
+      if (activeAnswerInputMemory.key === draftStorageKey && activeAnswerInputMemory.field === field) {
+        activeAnswerInputMemory.key = '';
+        activeAnswerInputMemory.field = '';
+        activeAnswerInputMemory.selectionStart = 0;
+        activeAnswerInputMemory.selectionEnd = 0;
+      }
+    }, 0);
+  };
+
+  const updateLocalDraft = (patch) => {
+    draftTouchedRef.current = true;
+    markAnswerDraftTouched(draftStorageKey);
+    setLocalDraft((current) => {
+      const next = typeof patch === 'function' ? patch(current) : { ...current, ...patch };
+      if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, next);
+      return next;
+    });
+  };
+
+  const handleAnswerAction = async () => {
+    if (!isRoundOpen) return;
+    if (canEditSubmittedAnswer && hasSubmittedAnswer && !isEditingSubmittedAnswer) {
+      setIsEditingSubmittedAnswer(true);
+      const restoredDraft = (draftStorageKey ? readStoredAnswerDraft(draftStorageKey) : null) || buildSavedDraft();
+      setLocalDraft(restoredDraft);
+      return;
+    }
+    if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, localDraft);
+    setIsSubmittingAnswer(true);
+    try {
+      const result = await onSubmitAnswer(localDraft);
+      if (result !== null) {
+        draftTouchedRef.current = false;
+        clearAnswerDraftTouched(draftStorageKey);
+        setLocalSubmittedAnswer(true);
+        setIsEditingSubmittedAnswer(false);
+      }
+    } finally {
+      setIsSubmittingAnswer(false);
+    }
   };
 
   const primaryButtonLabel = hasSubmittedAnswer
-    ? (isEditingSubmittedAnswer ? 'Save Changes' : 'Edit Answer')
-    : 'Submit Round';
+    ? (isQuizRound ? `Locked · +${formatScore(lockedQuizPoints)}` : isEditingSubmittedAnswer ? 'Save Changes' : 'Edit Answer')
+    : isQuizRound ? 'Submit Answer' : 'Submit Round';
 
-  const renderField = (value, setter, placeholder) => {
+  const renderField = (fieldName, value, setter, placeholder) => {
     if (roundType === 'numeric') {
-      return <input type="number" inputMode="decimal" step="any" value={value} onChange={(event) => setter(event.target.value)} placeholder={placeholder} disabled={isLocked} />;
+      return (
+        <input
+          ref={fieldName === 'guessedOther' ? guessedOtherRef : ownAnswerRef}
+          type="number"
+          inputMode="decimal"
+          step="any"
+          value={value}
+          onFocus={(event) => rememberFocusedField(fieldName, event)}
+          onSelect={(event) => rememberFocusedField(fieldName, event)}
+          onChange={(event) => {
+            rememberFocusedField(fieldName, event);
+            setter(event.target.value);
+          }}
+          onBlur={() => forgetFocusedField(fieldName)}
+          placeholder={placeholder}
+          disabled={isLocked || !isRoundOpen}
+        />
+      );
     }
 
     if (isChoiceRound) {
@@ -1845,7 +3246,7 @@ function QuestionAnswerEntry({
               type="button"
               className={`choice-button ${value === option ? 'is-on' : ''}`}
               onClick={() => setter(option)}
-              disabled={isLocked}
+              disabled={isLocked || !isRoundOpen}
             >
               {option}
             </button>
@@ -1866,14 +3267,23 @@ function QuestionAnswerEntry({
             <label className="field ranked-field" key={`${placeholder}-${labels[index]}`}>
               <span>{labels[index]}</span>
               <input
+                ref={(node) => {
+                  const key = `${fieldName}:${index}`;
+                  if (node) rankedInputRefs.current[key] = node;
+                  else delete rankedInputRefs.current[key];
+                }}
                 value={entry}
+                onFocus={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
+                onSelect={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
                 onChange={(event) => {
+                  rememberFocusedField(`${fieldName}:${index}`, event);
                   const next = [...values];
                   next[index] = event.target.value;
                   setter(encodeRankedAnswer(next));
                 }}
+                onBlur={() => forgetFocusedField(`${fieldName}:${index}`)}
                 placeholder={roundType === 'ranked' ? `Rank ${index + 1}` : `Position ${index + 1}`}
-                disabled={isLocked}
+                disabled={isLocked || !isRoundOpen}
               />
             </label>
           ))}
@@ -1881,49 +3291,32 @@ function QuestionAnswerEntry({
       );
     }
 
-    return <input value={value} onChange={(event) => setter(event.target.value)} placeholder={placeholder} disabled={isLocked} />;
+    return (
+      <input
+        ref={fieldName === 'guessedOther' ? guessedOtherRef : ownAnswerRef}
+        value={value}
+        onFocus={(event) => rememberFocusedField(fieldName, event)}
+        onSelect={(event) => rememberFocusedField(fieldName, event)}
+        onChange={(event) => {
+          rememberFocusedField(fieldName, event);
+          setter(event.target.value);
+        }}
+        onBlur={() => forgetFocusedField(fieldName)}
+        placeholder={placeholder}
+        disabled={isLocked || !isRoundOpen}
+      />
+    );
   };
 
   const content = (
     <>
-      <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''}`}>
-        <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
-          <div className="mini-heading">
-            <div>
-              <span>Your Answer</span>
-              <h3>{answerLabel}</h3>
-            </div>
-          </div>
-          <label className="field">
-            <span>My Answer</span>
-            {renderField(answerDraft.ownAnswer, (value) => setAnswerDraft({ ...answerDraft, ownAnswer: value }), `Your ${promptLabel.toLowerCase()}`)}
-          </label>
-          {normalizeText(otherPlayerGuessForCurrent) ? (
-            <small className="field-note">Latest guess from {oppositeLabel}: {formatRoundAnswerValue(otherPlayerGuessForCurrent, roundType)}</small>
-          ) : null}
-        </section>
-        <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
-          <div className="mini-heading">
-            <div>
-              <span>Their Answer</span>
-              <h3>What I think {oppositeLabel} will say</h3>
-            </div>
-          </div>
-          <label className="field">
-            <span>Their Answer</span>
-            {renderField(answerDraft.guessedOther, (value) => setAnswerDraft({ ...answerDraft, guessedOther: value }), `Guess ${oppositeLabel}'s ${promptLabel.toLowerCase()}`)}
-          </label>
-          {normalizeText(otherPlayerAnswer) || normalizeText(currentPlayerGuessForOther) ? (
-            <small className="field-note">
-              Saved: Your guess {formatRoundAnswerValue(currentPlayerGuessForOther, roundType)} · Their answer {formatRoundAnswerValue(otherPlayerAnswer, roundType)}
-            </small>
-          ) : null}
-        </section>
-      </div>
-
       <div className={`button-row live-round-actions ${embedded ? 'live-round-actions--embedded' : ''}`}>
-        <Button className={`primary-button compact next-question-button ${hasSubmittedAnswer && !isEditingSubmittedAnswer ? 'next-question-button--edit' : ''}`} onClick={handleAnswerAction} disabled={isBusy}>
-          {hasSubmittedAnswer && !isEditingSubmittedAnswer ? (
+        <Button
+          className={`primary-button compact next-question-button ${hasSubmittedAnswer && !isEditingSubmittedAnswer ? 'next-question-button--edit' : ''}`}
+          onClick={handleAnswerAction}
+          disabled={isSubmittingAnswer || (!isRoundOpen && !hasSubmittedAnswer) || (isQuizRound && hasSubmittedAnswer)}
+        >
+          {hasSubmittedAnswer && !isEditingSubmittedAnswer && !isQuizRound ? (
             <span className="button-label-with-icon">
               <span className="button-label-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
@@ -1934,30 +3327,77 @@ function QuestionAnswerEntry({
             </span>
           ) : primaryButtonLabel}
         </Button>
-        <span className="quick-desk-status">
-          {hasSubmittedAnswer
-            ? (isEditingSubmittedAnswer ? 'Editing your saved answer' : 'Waiting for reveal')
-            : `Play as ${answerLabel}`}
-        </span>
+      </div>
+      <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''} ${isQuizRound ? 'live-round-grid--quiz-answer' : ''}`}>
+        <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
+          <div className="mini-heading">
+            <div>
+              <span>Your Answer</span>
+              <h3>{answerLabel}</h3>
+            </div>
+          </div>
+          <label className="field">
+            <span>My Answer</span>
+            {renderField('ownAnswer', localDraft.ownAnswer, (value) => updateLocalDraft({ ownAnswer: value }), `Your ${promptLabel.toLowerCase()}`)}
+          </label>
+        </section>
+        {!isQuizRound ? (
+          <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
+            <div className="mini-heading">
+              <div>
+                <span>Their Answer</span>
+                <h3>What I think {oppositeLabel} will say</h3>
+              </div>
+            </div>
+            <label className="field">
+              <span>Their Answer</span>
+              {renderField('guessedOther', localDraft.guessedOther, (value) => updateLocalDraft({ guessedOther: value }), `Guess ${oppositeLabel}'s ${promptLabel.toLowerCase()}`)}
+            </label>
+          </section>
+        ) : null}
       </div>
     </>
   );
 
   if (embedded) {
-    return <div className="room-answer-entry">{content}</div>;
+    return <div className={`room-answer-entry ${isQuizRound ? 'room-answer-entry--quiz' : ''}`} ref={answerEntryRef}>{content}</div>;
   }
 
-  return <section className="panel live-round-panel">{content}</section>;
+  return <section className="panel live-round-panel" ref={answerEntryRef}>{content}</section>;
 }
+
+const QuestionAnswerEntry = memo(QuestionAnswerEntryBase, (previous, next) => {
+  const previousPlayer = previous.viewerSeat === 'kim' ? 'kim' : previous.viewerSeat === 'jay' ? 'jay' : previous.seat === 'kim' ? 'kim' : 'jay';
+  const nextPlayer = next.viewerSeat === 'kim' ? 'kim' : next.viewerSeat === 'jay' ? 'jay' : next.seat === 'kim' ? 'kim' : 'jay';
+  const previousAnswer = previous.currentRound?.answers?.[previousPlayer] || {};
+  const nextAnswer = next.currentRound?.answers?.[nextPlayer] || {};
+  const previousRoundKey = stableRoundIdentityKey(previous.currentRound || {});
+  const nextRoundKey = stableRoundIdentityKey(next.currentRound || {});
+  return previous.gameId === next.gameId
+    && previousPlayer === nextPlayer
+    && previousRoundKey === nextRoundKey
+    && previous.currentRound?.roundType === next.currentRound?.roundType
+    && previous.currentRound?.questionId === next.currentRound?.questionId
+    && previous.currentRound?.question === next.currentRound?.question
+    && previous.currentRound?.category === next.currentRound?.category
+    && JSON.stringify(inferChoiceOptions(previous.currentRound)) === JSON.stringify(inferChoiceOptions(next.currentRound))
+    && previous.answerLabel === next.answerLabel
+    && previous.oppositeLabel === next.oppositeLabel
+    && previous.submissionState === next.submissionState
+    && previous.isQuizRound === next.isQuizRound
+    && previousAnswer.ownAnswer === nextAnswer.ownAnswer
+    && previousAnswer.guessedOther === nextAnswer.guessedOther
+    && previous.embedded === next.embedded;
+});
 
 function AnswerDesk(props) {
   return <QuestionAnswerEntry {...props} />;
 }
 
-function SeatFlag({ seat }) {
+function SeatFlag({ seat, className = '' }) {
   if (seat === 'jay') {
     return (
-      <span className="room-seat-flag room-seat-flag--jay" role="img" aria-label="England flag">
+      <span className={`room-seat-flag room-seat-flag--jay ${className}`.trim()} role="img" aria-label="England flag">
         <svg viewBox="0 0 36 24" aria-hidden="true">
           <rect width="36" height="24" rx="4" fill="#ffffff" />
           <rect x="15" width="6" height="24" fill="#d61f26" />
@@ -1968,7 +3408,7 @@ function SeatFlag({ seat }) {
   }
 
   return (
-    <span className="room-seat-flag room-seat-flag--kim" role="img" aria-label="USA flag">
+    <span className={`room-seat-flag room-seat-flag--kim ${className}`.trim()} role="img" aria-label="USA flag">
       <svg viewBox="0 0 36 24" aria-hidden="true">
         <rect width="36" height="24" rx="4" fill="#ffffff" />
         <rect y="0" width="36" height="3" fill="#b22234" />
@@ -1984,11 +3424,394 @@ function SeatFlag({ seat }) {
   );
 }
 
-function RoomRevealPlayerCard({ game, viewerSeat, seat, currentRound, totalPenalty, roundPenalty }) {
+function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false, disabled = false }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  const normalized = normalizeQuizWagerAgreement({ quizWagerAgreement: agreement });
+  const effectiveBaseAmount = normalized.wheelBaseAmount || Math.max(0, Math.floor(Number(baseAmount || 0)));
+  const slots = normalized.wheelSlots.length ? normalized.wheelSlots : buildQuizWheelSlots(effectiveBaseAmount);
+  const resultIndex = Math.max(0, Math.min(Math.max(0, slots.length - 1), Number(normalized.wheelResultIndex || 0)));
+  const rawResultAmount = Number.isFinite(Number(normalized.amount)) ? Number(normalized.amount) : slots[resultIndex] || 0;
+  const resultAmount = effectiveBaseAmount > 0 ? capQuizWheelStake(effectiveBaseAmount, rawResultAmount) : rawResultAmount;
+  const phase = getQuizWheelPhase(normalized, nowMs);
+  const displayPhase = normalized.status === 'wheel_locked' ? 'locked' : phase;
+  const spinStartMs = Date.parse(normalized.wheelSpinStartedAt || '');
+  const spinEndMs = Date.parse(normalized.wheelSpinEndsAt || '');
+  const segmentDegrees = slots.length ? 360 / slots.length : 360;
+  const finalRotation = (360 * 7) + (360 - ((resultIndex * segmentDegrees) + (segmentDegrees / 2)));
+  const spinProgress = phase === 'spinning' && Number.isFinite(spinStartMs) && Number.isFinite(spinEndMs)
+    ? Math.max(0, Math.min(1, (nowMs - spinStartMs) / Math.max(1, spinEndMs - spinStartMs)))
+    : phase === 'landing' || displayPhase === 'locked'
+      ? 1
+      : 0;
+  const rotation = phase === 'spinning' || phase === 'landing' || displayPhase === 'locked' ? finalRotation * spinProgress : 0;
+  const countdownSeconds = Number.isFinite(spinStartMs) ? Math.max(1, Math.ceil((spinStartMs - nowMs) / 1000)) : 3;
+  const shouldShowWheel = displayPhase === 'countdown'
+    || displayPhase === 'spinning'
+    || displayPhase === 'landing'
+    || displayPhase === 'locked'
+    || forceVisible
+    || normalized.wheelOptIn?.jay
+    || normalized.wheelOptIn?.kim;
+
+  useEffect(() => {
+    if (phase !== 'countdown' && phase !== 'spinning') return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [phase]);
+
+  if (!shouldShowWheel || !slots.length) return null;
+
+  return (
+    <div className={`quiz-wheel-inline quiz-wheel-inline--${displayPhase || 'ready'} ${disabled ? 'quiz-wheel-inline--disabled' : ''}`} role="status" aria-live="polite">
+      <div className="quiz-wheel-stage">
+        {disabled ? (
+          <div className="quiz-control-lock" aria-label="Locked" role="img">
+            <span className="quiz-control-lock__shackle" aria-hidden="true" />
+            <span className="quiz-control-lock__body" aria-hidden="true" />
+          </div>
+        ) : null}
+        <div className="quiz-wheel-pointer" aria-hidden="true" />
+        <div className="quiz-wheel-dial" style={{ transform: `rotate(${rotation}deg)`, '--wheel-counter-rotation': `${-rotation}deg` }} aria-hidden="true">
+          {slots.map((slotAmount, index) => {
+            const slotAngle = (index * segmentDegrees) + (segmentDegrees / 2);
+            return (
+              <span
+                className="quiz-wheel-slot-label"
+                key={`quiz-wheel-slot-${index}`}
+                style={{ '--slot-angle': `${slotAngle}deg`, '--slot-counter-angle': `${-slotAngle}deg` }}
+              >
+                {formatScore(slotAmount)}
+              </span>
+            );
+          })}
+          <div className="quiz-wheel-hub" style={{ '--hub-counter-rotation': `${-rotation}deg` }}>
+            {displayPhase === 'countdown' ? (
+              <strong>{countdownSeconds}</strong>
+            ) : (
+              <strong>{displayPhase === 'landing' || displayPhase === 'locked' ? formatScore(resultAmount) : 'Spin'}</strong>
+            )}
+            <span>{displayPhase === 'countdown' ? 'Get ready' : displayPhase === 'landing' || displayPhase === 'locked' ? 'Wager locked' : 'Wager wheel'}</span>
+          </div>
+        </div>
+        <div className="quiz-wheel-result">
+          <span>{displayPhase === 'countdown' ? 'Wheel starts in' : displayPhase === 'spinning' ? 'Spinning for 5 seconds' : displayPhase === 'locked' || displayPhase === 'landing' ? 'Final shared wager' : 'Wheel slots'}</span>
+          <strong>{displayPhase === 'countdown' ? countdownSeconds : displayPhase === 'spinning' ? '...' : displayPhase === 'locked' || displayPhase === 'landing' ? formatScore(resultAmount) : `${formatScore(slots[0])} to ${formatScore(slots[slots.length - 1])}`}</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QuizSetupStagePanel({
+  game,
+  viewerSeat,
+  playerAccounts,
+  chatMessages,
+  chatDraft,
+  onChatDraftChange,
+  onSendChat,
+  chatDisplayName,
+  quizWagerDraft,
+  setQuizWagerDraft,
+  onSaveQuizWager,
+  onAcceptQuizWager,
+  onRejectQuizWager,
+  onSetQuizWheelOptIn,
+  onMarkReady,
+  isBusy,
+}) {
+  const currentPlayer = viewerSeat === 'kim' ? 'kim' : 'jay';
+  const otherPlayer = oppositeSeatOf(currentPlayer);
+  const viewerLabel = gameSeatDisplayName(game, currentPlayer, null);
+  const oppositeLabel = gameSeatDisplayName(game, otherPlayer, null);
+  const agreement = normalizeQuizWagerAgreement(game);
+  const sharedWagerLocked = isQuizWagerAgreementLocked(game);
+  const sharedWagerAmount = getQuizSharedWagerAmount(game);
+  const pendingProposal = agreement.status === 'proposal_pending' && Number.isFinite(Number(agreement.proposedAmount));
+  const proposalFromViewer = pendingProposal && agreement.proposedBySeat === currentPlayer;
+  const canActAsOtherPlayer = Boolean(game?.isLocalOnly);
+  const proposalLabel = agreement.proposedBySeat ? gameSeatDisplayName(game, agreement.proposedBySeat, null) : 'Player';
+  const bothPlayersJoined = Boolean(game?.seats?.jay && game?.seats?.kim);
+  const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
+  const wheelBaseAmount = game?.isLocalOnly && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
+  const wheelPhase = getQuizWheelPhase(agreement);
+  const wheelActive = wheelPhase === 'countdown' || wheelPhase === 'spinning' || wheelPhase === 'landing';
+  const viewerWheelOptedIn = Boolean(agreement.wheelOptIn?.[currentPlayer]);
+  const otherWheelOptedIn = Boolean(agreement.wheelOptIn?.[otherPlayer]);
+  const viewerReady = hasQuizSetupReadySeat(game, currentPlayer);
+  const otherReady = hasQuizSetupReadySeat(game, otherPlayer);
+  const shouldPreferWheelMode = Boolean(agreement.lockedByWheel || wheelActive || viewerWheelOptedIn || otherWheelOptedIn);
+  const [wagerMode, setWagerMode] = useState(shouldPreferWheelMode ? 'wheel' : 'manual');
+  const isWheelMode = wagerMode === 'wheel';
+  const isManualMode = !isWheelMode;
+  const cappedProposalAmount = capQuizWagerAmount(agreement.proposedAmount, wheelBaseAmount);
+  const activeWagerDisplayAmount = sharedWagerLocked
+    ? sharedWagerAmount || 0
+    : pendingProposal
+      ? cappedProposalAmount
+      : capQuizWagerAmount(quizWagerDraft, wheelBaseAmount);
+  const wheelIsLocked = !isWheelMode;
+  const manualIsLocked = isWheelMode || wheelActive;
+  const proposalButtonText = pendingProposal ? 'Pose a new value' : 'Propose value';
+
+  useEffect(() => {
+    if (shouldPreferWheelMode) {
+      setWagerMode('wheel');
+      return;
+    }
+    if (sharedWagerLocked) setWagerMode('manual');
+  }, [sharedWagerLocked, shouldPreferWheelMode]);
+
+  return (
+    <section className="room-active-frame room-active-frame--setup room-active-frame--quiz room-active-frame--quiz-setup" aria-label="Quick Fire quiz setup">
+      <div className="scoreboard-sheen" aria-hidden="true" />
+      <div className="room-active-stage room-active-stage--answering">
+        <header className="room-active-header room-active-header--quiz-wager">
+          <div>
+            <span className="scoreboard-kicker">Quick Fire Wager</span>
+            <h2>Agree a shared wager</h2>
+            <p className="quiz-wager-intro">Both players must agree the shared wager or lock a wheel result.</p>
+          </div>
+        </header>
+        <div className="quiz-negotiation-grid quiz-negotiation-grid--mode">
+          <section className="quiz-wager-mode-panel">
+            <div className="quiz-wager-mode-tabs" role="tablist" aria-label="Quick Fire wager mode">
+              <button
+                type="button"
+                className={`dashboard-pill tab-button ${wagerMode === 'manual' ? 'is-active' : ''}`}
+                onClick={() => setWagerMode('manual')}
+                disabled={wheelActive || Boolean(agreement.lockedByWheel)}
+                role="tab"
+                aria-selected={wagerMode === 'manual'}
+              >
+                Manual negotiation
+              </button>
+              <button
+                type="button"
+                className={`dashboard-pill tab-button ${wagerMode === 'wheel' ? 'is-active' : ''}`}
+                onClick={() => setWagerMode('wheel')}
+                disabled={wheelActive || (sharedWagerLocked && !agreement.lockedByWheel)}
+                role="tab"
+                aria-selected={wagerMode === 'wheel'}
+              >
+                Wheel spin
+              </button>
+            </div>
+
+            <div className={`quiz-wager-mode-body quiz-wager-mode-body--split ${isWheelMode ? 'quiz-wager-mode-body--wheel-selected' : 'quiz-wager-mode-body--manual-selected'}`}>
+              <div className="quiz-wager-console">
+                <div className="quiz-wager-left">
+                  <div className={`quiz-wager-amount-card ${manualIsLocked ? 'is-locked' : ''}`}>
+                    {manualIsLocked ? (
+                      <div className="quiz-control-lock" aria-label="Locked" role="img">
+                        <span className="quiz-control-lock__shackle" aria-hidden="true" />
+                        <span className="quiz-control-lock__body" aria-hidden="true" />
+                      </div>
+                    ) : null}
+                    <label className="field quiz-wager-amount-field">
+                      <span>Wager amount</span>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min="0"
+                        max={wheelBaseAmount}
+                        value={sharedWagerLocked ? sharedWagerAmount || 0 : quizWagerDraft}
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setQuizWagerDraft(nextValue === '' ? '' : String(capQuizWagerAmount(nextValue, wheelBaseAmount)));
+                        }}
+                        placeholder="0"
+                        disabled={sharedWagerLocked || manualIsLocked}
+                      />
+                    </label>
+                    <span className="quiz-wager-cap-copy">{`Enter a value between 0 and ${formatScore(wheelBaseAmount)}.`}</span>
+                    <div className="quiz-negotiation-status">
+                      {sharedWagerLocked ? (
+                        <span>{`Agreed shared wager: ${formatScore(sharedWagerAmount || 0)}.`}</span>
+                      ) : pendingProposal ? (
+                        <span>{`${proposalLabel} proposed ${formatScore(cappedProposalAmount)}.`}</span>
+                      ) : bothPlayersJoined ? (
+                        <span>Either player can propose an amount, then the other can accept, reject, or counter.</span>
+                      ) : (
+                        <span>Waiting for both players to join before the wager can be agreed.</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className={`quiz-wager-wheel-card ${wheelIsLocked ? 'is-locked' : ''}`}>
+                    <span className="quiz-wager-wheel-label">Wager wheel</span>
+                    <QuizWagerWheelOverlay agreement={agreement} baseAmount={wheelBaseAmount} forceVisible disabled={wheelIsLocked} />
+                  </div>
+                </div>
+
+                <div className="quiz-wager-right">
+                  <div className="quiz-negotiation-chat">
+                    <ChatPanel
+                      compact
+                      messages={chatMessages}
+                      draft={chatDraft}
+                      onDraftChange={onChatDraftChange}
+                      onSend={onSendChat}
+                      isBusy={isBusy}
+                      seat={currentPlayer}
+                      displayName={chatDisplayName}
+                    />
+                  </div>
+
+                  {isManualMode ? (
+                    <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack">
+                      <Button className="primary-button compact" onClick={onAcceptQuizWager} disabled={isBusy || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || sharedWagerLocked || wheelActive}>
+                        {`Accept ${formatScore(activeWagerDisplayAmount)}`}
+                      </Button>
+                      <Button className="ghost-button compact quiz-wager-reject-button" onClick={onRejectQuizWager} disabled={isBusy || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || wheelActive}>
+                        Reject
+                      </Button>
+                      <Button className="ghost-button compact quiz-wager-propose-button" onClick={onSaveQuizWager} disabled={isBusy || !bothPlayersJoined || sharedWagerLocked || wheelActive}>
+                        {proposalButtonText}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-wheel-action-stack">
+                      <Button className="primary-button compact" onClick={() => onSetQuizWheelOptIn?.(true)} disabled={isBusy || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelBaseAmount <= 0 || viewerWheelOptedIn}>
+                        Spin the wheel
+                      </Button>
+                      <div className="quiz-ready-summary quiz-wheel-opt-in-summary" aria-live="polite">
+                        <span className={`submitted-status-pill ${viewerWheelOptedIn ? 'is-submitted' : ''}`}>{viewerWheelOptedIn ? `${viewerLabel} confirmed` : `${viewerLabel} not confirmed`}</span>
+                        <span className={`submitted-status-pill ${otherWheelOptedIn ? 'is-submitted' : ''}`}>{otherWheelOptedIn ? `${oppositeLabel} confirmed` : `${oppositeLabel} not confirmed`}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="quiz-ready-inline" role="status" aria-live="polite">
+              <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !sharedWagerLocked || viewerReady || wheelActive}>
+                {viewerReady ? 'Ready' : 'Ready to Start'}
+              </Button>
+              {sharedWagerLocked ? (
+                <span>
+                  {viewerReady
+                    ? 'Waiting for the other player. The question appears once both players are ready.'
+                    : 'Tap Ready once the shared wager looks right.'}
+                </span>
+              ) : null}
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function QuizLiveStatus({ currentRound, revealIsReady }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  const isRoundOpen = (currentRound?.status || 'open') === 'open';
+
+  useEffect(() => {
+    if (revealIsReady || !isRoundOpen) return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [revealIsReady, isRoundOpen, stableRoundIdentityKey(currentRound || {})]);
+
+  const quizEndsAtMs = Date.parse(currentRound?.quizTimerEndsAt || '');
+  const quizMsLeft = Number.isFinite(quizEndsAtMs) ? Math.max(0, quizEndsAtMs - nowMs) : QUIZ_TIMER_SECONDS * 1000;
+  const quizSecondsLeft = Math.max(0, quizMsLeft / 1000);
+  const quizDisplaySeconds = Math.ceil(quizSecondsLeft);
+  const quizPossiblePoints = pointsFromTimerMilliseconds(quizMsLeft);
+  const quizTimerProgress = Math.max(0, Math.min(1, quizMsLeft / (QUIZ_TIMER_SECONDS * 1000)));
+
+  if (revealIsReady) return null;
+
+  return (
+    <>
+      <div className="quiz-live-status">
+        <div className="quiz-status-grid">
+          <article className="quiz-status-card">
+            <span>Timer</span>
+            <strong>{quizDisplaySeconds}s</strong>
+          </article>
+          <article className="quiz-status-card">
+            <span>Points</span>
+            <strong>{formatScore(quizPossiblePoints)}</strong>
+          </article>
+        </div>
+        <div className="quiz-timer-bar" aria-hidden="true">
+          <div className="quiz-timer-bar-fill" style={{ transform: `scaleX(${quizTimerProgress})` }} />
+        </div>
+      </div>
+    </>
+  );
+}
+
+function RoomRevealPlayerCard({ game, viewerSeat, seat, currentRound, totalPenalty, roundPenalty, isQuizGame = false, totalQuizPoints = 0 }) {
   const playerSeat = seat === 'kim' ? 'kim' : 'jay';
   const oppositeSeat = playerSeat === 'jay' ? 'kim' : 'jay';
   const playerLabel = gameSeatDisplayName(game, playerSeat, currentRound);
   const oppositeLabel = gameSeatDisplayName(game, oppositeSeat, currentRound);
+  const [quizRevealResolved, setQuizRevealResolved] = useState(false);
+  const quizRevealAnimationKey = `${stableRoundIdentityKey(currentRound || {})}:${playerSeat}`;
+
+  useEffect(() => {
+    if (!isQuizGame) return undefined;
+    setQuizRevealResolved(false);
+    const timer = window.setTimeout(() => setQuizRevealResolved(true), QUIZ_REVEAL_FLASH_MS);
+    return () => window.clearTimeout(timer);
+  }, [isQuizGame, quizRevealAnimationKey]);
+
+  if (isQuizGame) {
+    const answer = currentRound?.answers?.[playerSeat] || {};
+    const playerAnswerRaw = answer?.ownAnswer || '';
+    const playerAnswer = formatRoundAnswerValue(playerAnswerRaw, currentRound?.roundType);
+    const finalResult = normalizeText(answer?.finalResult || answer?.originalSystemResult || (answer?.wasCorrect ? 'correct' : 'incorrect')) || 'incorrect';
+    const wasCorrect = finalResult === 'correct';
+    const lockedPoints = Number(answer?.pointsAwarded || 0);
+    const lockedTimerValue = Number(answer?.timerValue || 0);
+    const resultClass = quizRevealResolved
+      ? wasCorrect
+        ? 'room-reveal-player-card--correct'
+        : 'room-reveal-player-card--incorrect'
+      : wasCorrect
+        ? 'room-reveal-player-card--quiz-flash-correct'
+        : 'room-reveal-player-card--quiz-flash-incorrect';
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--quiz-result room-reveal-player-card--${playerSeat} ${resultClass}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>Submitted answer</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{playerAnswerRaw ? playerAnswer : 'No answer'}</strong>
+            </div>
+          </div>
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>Result</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{quizRevealResolved ? (wasCorrect ? 'Correct' : 'Incorrect') : 'Revealing...'}</strong>
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${wasCorrect ? 'success' : 'warning'}`}>
+              {quizRevealResolved ? (wasCorrect ? `+${formatScore(lockedPoints)} locked` : '0 points') : 'Result pending'}
+            </small>
+          </div>
+        </div>
+        <div className="room-reveal-score-strip">
+          <div>
+            <span>Locked at</span>
+            <strong>{`${Math.max(0, lockedTimerValue)}s`}</strong>
+          </div>
+          <div>
+            <span>Total quiz score</span>
+            <strong>{formatScore(totalQuizPoints || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
   const actualAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
   const guessedAnswerRaw = currentRound?.answers?.[oppositeSeat]?.guessedOther || '';
   const actualAnswer = formatRoundAnswerValue(actualAnswerRaw, currentRound?.roundType);
@@ -2040,7 +3863,7 @@ function RoomRevealPlayerCard({ game, viewerSeat, seat, currentRound, totalPenal
   );
 }
 
-function RoomActiveFrame({
+function RoomActiveFrameBase({
   game,
   seat,
   viewerSeat,
@@ -2049,9 +3872,10 @@ function RoomActiveFrame({
   currentRound,
   baseTotals,
   liveTotals,
-  answerDraft,
-  setAnswerDraft,
   onSubmitAnswer,
+  onMarkReady,
+  onRequestQuizOverride,
+  onRespondQuizOverride,
   submissionState,
   revealIsReady,
   penaltyDraft,
@@ -2059,6 +3883,16 @@ function RoomActiveFrame({
   onNextQuestion,
   onPauseToggle,
   onOpenQuestionNote,
+  currentFeedbackValue = '',
+  onSetQuestionFeedback,
+  currentReplayRequested = false,
+  onSetQuestionReplay,
+  chatMessages = [],
+  chatDraft = '',
+  onChatDraftChange,
+  onSendChat,
+  chatSeat = '',
+  chatDisplayName = '',
   isBusy,
 }) {
   const question = currentRound?.question || 'Question loaded';
@@ -2107,16 +3941,33 @@ function RoomActiveFrame({
   const viewerLabel = gameSeatDisplayName(game, currentPlayer, currentRound);
   const oppositeLabel = gameSeatDisplayName(game, otherPlayer, currentRound);
   const hostLabel = gameSeatDisplayName(game, seatForUid(game, game?.hostUid) || currentPlayer, currentRound);
+  const isQuizGame = (game?.gameMode || 'standard') === 'quiz' && (game?.questionBankType || 'game') === 'quiz';
   const stageStatusLabel = revealIsReady
     ? 'Results'
     : submissionState === 'submitted'
       ? 'Waiting'
       : 'Answering';
+  const showReplayAction = (game?.gameMode || 'standard') === 'standard' && (game?.questionBankType || 'game') === 'game';
+  const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
+  const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
+  const viewerOverrideRequest = currentRound?.overrideRequests?.[currentPlayer] || null;
+  const viewerQuizResult = normalizeText(viewerAnswer?.finalResult || viewerAnswer?.originalSystemResult || (viewerAnswer?.wasCorrect ? 'correct' : 'incorrect'));
+  const quizRevealTotals = useMemo(
+    () => ({
+      jay: Number(game?.quizTotals?.jay || 0) + Number(currentRound?.answers?.jay?.pointsAwarded || 0),
+      kim: Number(game?.quizTotals?.kim || 0) + Number(currentRound?.answers?.kim?.pointsAwarded || 0),
+    }),
+    [game?.quizTotals?.jay, game?.quizTotals?.kim, currentRound?.answers?.jay?.pointsAwarded, currentRound?.answers?.kim?.pointsAwarded],
+  );
+  const nextReadyBySeat = {
+    jay: hasNextReadySeat(currentRound, 'jay'),
+    kim: hasNextReadySeat(currentRound, 'kim'),
+  };
 
   return (
-    <section className={`room-active-frame room-active-frame--${stage}`} aria-label="Active round scoreboard">
+    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''}`} aria-label="Active round scoreboard">
       <div className="scoreboard-sheen" aria-hidden="true" />
-      <div className={`room-active-stage room-active-stage--${stage}`}>
+      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''}`}>
         <header className="room-active-header">
           <div>
             <span className="scoreboard-kicker">{revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
@@ -2128,65 +3979,232 @@ function RoomActiveFrame({
             <span className="scoreboard-mini-badge">{roundTypeLabel}</span>
           </div>
         </header>
+        {isQuizGame ? <QuizLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
+        {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer ? (
+          <div className="quiz-override-strip">
+            <span className={`quiz-override-status ${viewerQuizResult === 'correct' ? 'is-correct' : 'is-incorrect'}`}>
+              {viewerQuizResult === 'correct' ? 'System: Correct' : 'System: Incorrect'}
+            </span>
+            <div className="quiz-override-actions">
+              {viewerOverrideRequest?.status === 'pending' ? (
+                <span className="quiz-override-pending">Override pending</span>
+              ) : (
+                <>
+                  {viewerQuizResult === 'correct' ? (
+                    <Button className="ghost-button compact" onClick={() => onRequestQuizOverride?.('incorrect')} disabled={isBusy}>
+                      Mark as Incorrect
+                    </Button>
+                  ) : (
+                    <Button className="ghost-button compact" onClick={() => onRequestQuizOverride?.('correct')} disabled={isBusy}>
+                      Override / Mark as Correct
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
+        {isQuizGame && !revealIsReady && otherOverrideRequest?.status === 'pending' ? (
+          <div className="quiz-override-strip quiz-override-strip--incoming">
+            <span className="quiz-override-pending">{`Override request: mark ${oppositeLabel} as ${otherOverrideRequest?.requestedFinalResult || 'correct/incorrect'}?`}</span>
+            <div className="quiz-override-actions">
+              <Button className="primary-button compact" onClick={() => onRespondQuizOverride?.(otherPlayer, 'approved')} disabled={isBusy}>
+                Approve
+              </Button>
+              <Button className="ghost-button compact" onClick={() => onRespondQuizOverride?.(otherPlayer, 'rejected')} disabled={isBusy}>
+                Reject
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         {!revealIsReady ? (
-          <div className="room-active-answer-stack">
+          <div className={`room-active-answer-stack ${isQuizGame ? 'room-active-answer-stack--quiz' : ''}`}>
             <div className={`room-active-question room-active-question--answering ${questionDensity}`}>
               <p>{question}</p>
-              <div className="question-note-actions">
-                <button type="button" className="ghost-button compact" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
-                <button type="button" className="ghost-button compact" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Open private question notebook">📓</button>
-              </div>
+              {!isQuizGame ? (
+                <div className="question-note-actions">
+                  <button type="button" className="ghost-button compact question-flag-button" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
+                  <button
+                    type="button"
+                    className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
+                    onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
+                    disabled={isBusy}
+                    aria-label="Thumbs up this question"
+                  >
+                    👍
+                  </button>
+                  <button
+                    type="button"
+                    className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
+                    onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
+                    disabled={isBusy}
+                    aria-label="Thumbs down this question"
+                  >
+                    👎
+                  </button>
+                  {showReplayAction ? (
+                    <button
+                      type="button"
+                      className={`ghost-button compact question-replay-button ${currentReplayRequested ? 'is-on' : ''}`}
+                      onClick={() => onSetQuestionReplay?.(currentRound)}
+                      disabled={isBusy}
+                      aria-label="Allow this question to replay in future games"
+                    >
+                      ↻
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
-
             <QuestionAnswerEntry
-              game={game}
+              gameId={game?.id || ''}
               embedded
               seat={currentPlayer}
               viewerSeat={currentPlayer}
               currentRound={currentRound}
-              answerDraft={answerDraft}
-              setAnswerDraft={setAnswerDraft}
+              answerLabel={viewerLabel}
+              oppositeLabel={oppositeLabel}
               onSubmitAnswer={onSubmitAnswer}
               submissionState={submissionState}
-              isBusy={isBusy}
+              isQuizRound={isQuizGame}
             />
           </div>
         ) : (
-          <div className="room-active-reveal-stack">
+          <div className={`room-active-reveal-stack ${isQuizGame ? 'room-active-reveal-stack--quiz' : ''}`}>
             <div className={`room-active-question room-active-question--reveal ${questionDensity}`}>
               <p>{question}</p>
               <div className="question-note-actions">
-                <button type="button" className="ghost-button compact" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
-                <button type="button" className="ghost-button compact" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Open private question notebook">📓</button>
+                <button type="button" className="ghost-button compact question-flag-button" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
+                <button
+                  type="button"
+                  className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
+                  onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
+                  disabled={isBusy}
+                  aria-label="Thumbs up this question"
+                >
+                  👍
+                </button>
+                <button
+                  type="button"
+                  className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
+                  onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
+                  disabled={isBusy}
+                  aria-label="Thumbs down this question"
+                >
+                  👎
+                </button>
+                {showReplayAction ? (
+                  <button
+                    type="button"
+                    className={`ghost-button compact question-replay-button ${currentReplayRequested ? 'is-on' : ''}`}
+                    onClick={() => onSetQuestionReplay?.(currentRound)}
+                    disabled={isBusy}
+                    aria-label="Allow this question to replay in future games"
+                  >
+                    ↻
+                  </button>
+                ) : null}
               </div>
             </div>
 
-            <div className="room-reveal-layout">
-              <RoomRevealPlayerCard game={game} viewerSeat={currentPlayer} seat={currentPlayer} currentRound={currentRound} totalPenalty={liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0} roundPenalty={penaltyPreview[currentPlayer]} />
+            <div className={`room-reveal-layout ${isQuizGame ? 'room-reveal-layout--quiz' : ''}`}>
+              <RoomRevealPlayerCard
+                game={game}
+                viewerSeat={currentPlayer}
+                seat={currentPlayer}
+                currentRound={currentRound}
+                totalPenalty={liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0}
+                roundPenalty={penaltyPreview[currentPlayer]}
+                isQuizGame={isQuizGame}
+                totalQuizPoints={quizRevealTotals[currentPlayer]}
+              />
 
               <section className="room-reveal-center-card" aria-label="Round result">
-                <span>Round Result</span>
-                <strong>{roundWinner === 'tie' ? 'Tie round' : `${gameSeatDisplayName(game, roundWinner, currentRound)} ahead`}</strong>
-                <p>
-                  {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])} · {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
-                </p>
-                <small>
-                  {overallLeader === 'tie'
-                    ? 'Totals level after this round'
-                    : `Lowest total after this round: ${gameSeatDisplayName(game, overallLeader, currentRound)}`}
-                </small>
-                <small>
-                  Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
-                  {' · '}
-                  {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
-                </small>
+                {isQuizGame ? (
+                  <>
+                    <span>Correct Answer</span>
+                    <strong>{formatRoundAnswerValue(currentRound?.correctAnswer || currentRound?.normalizedCorrectAnswer || 'No answer provided', currentRound?.roundType)}</strong>
+                    <p>
+                      {viewerLabel} {normalizeText(currentRound?.answers?.[currentPlayer]?.finalResult || currentRound?.answers?.[currentPlayer]?.originalSystemResult || (currentRound?.answers?.[currentPlayer]?.wasCorrect ? 'correct' : 'incorrect')) === 'correct'
+                        ? `+${formatScore(Number(currentRound?.answers?.[currentPlayer]?.pointsAwarded || 0))}`
+                        : '+0'}
+                      {' · '}
+                      {oppositeLabel} {normalizeText(currentRound?.answers?.[otherPlayer]?.finalResult || currentRound?.answers?.[otherPlayer]?.originalSystemResult || (currentRound?.answers?.[otherPlayer]?.wasCorrect ? 'correct' : 'incorrect')) === 'correct'
+                        ? `+${formatScore(Number(currentRound?.answers?.[otherPlayer]?.pointsAwarded || 0))}`
+                        : '+0'}
+                    </p>
+                    <small>
+                      Quiz totals {viewerLabel} {formatScore(quizRevealTotals[currentPlayer])}
+                      {' · '}
+                      {oppositeLabel} {formatScore(quizRevealTotals[otherPlayer])}
+                    </small>
+                    <div className="ready-gate-row ready-gate-row--reveal" role="status" aria-live="polite">
+                      <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || nextReadyBySeat[currentPlayer]}>
+                        Ready for Next Question
+                      </Button>
+                      <span className="ready-gate-copy">
+                        {nextReadyBySeat[currentPlayer]
+                          ? 'Waiting for the other player to get ready for the next question…'
+                          : 'Both players must click Ready for Next Question before the next quiz question appears.'}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span>Round Result</span>
+                    <strong>{roundWinner === 'tie' ? 'Tie round' : `${gameSeatDisplayName(game, roundWinner, currentRound)} ahead`}</strong>
+                    <p>
+                      {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])} · {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
+                    </p>
+                    <small>
+                      {overallLeader === 'tie'
+                        ? 'Totals level after this round'
+                        : `Lowest total after this round: ${gameSeatDisplayName(game, overallLeader, currentRound)}`}
+                    </small>
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
+                )}
               </section>
 
-              <RoomRevealPlayerCard game={game} viewerSeat={currentPlayer} seat={otherPlayer} currentRound={currentRound} totalPenalty={liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0} roundPenalty={penaltyPreview[otherPlayer]} />
+              <RoomRevealPlayerCard
+                game={game}
+                viewerSeat={currentPlayer}
+                seat={otherPlayer}
+                currentRound={currentRound}
+                totalPenalty={liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0}
+                roundPenalty={penaltyPreview[otherPlayer]}
+                isQuizGame={isQuizGame}
+                totalQuizPoints={quizRevealTotals[otherPlayer]}
+              />
             </div>
 
-            {role !== 'host' ? (
+            {isQuizGame ? (
+              <section className="quiz-reveal-chat-card" aria-label="Quick Fire reveal chat">
+                <div className="quiz-reveal-chat-heading">
+                  <div>
+                    <span className="scoreboard-kicker">Reveal Chat</span>
+                    <h3>Discuss this answer</h3>
+                  </div>
+                </div>
+                <ChatPanel
+                  compact
+                  messages={chatMessages}
+                  draft={chatDraft}
+                  onDraftChange={onChatDraftChange}
+                  onSend={onSendChat}
+                  isBusy={isBusy}
+                  seat={chatSeat || currentPlayer}
+                  displayName={chatDisplayName || viewerLabel}
+                />
+              </section>
+            ) : null}
+
+            {role !== 'host' && !isQuizGame ? (
               <div className="room-reveal-footer">
                 <div className="room-reveal-waiting">
                   <span className="quick-desk-status">Waiting for {hostLabel} to load the next question</span>
@@ -2199,6 +4217,52 @@ function RoomActiveFrame({
     </section>
   );
 }
+
+const RoomActiveFrame = memo(RoomActiveFrameBase, (previous, next) => {
+  const previousCurrentPlayer = previous.viewerSeat === 'kim' ? 'kim' : previous.viewerSeat === 'jay' ? 'jay' : previous.seat === 'kim' ? 'kim' : 'jay';
+  const nextCurrentPlayer = next.viewerSeat === 'kim' ? 'kim' : next.viewerSeat === 'jay' ? 'jay' : next.seat === 'kim' ? 'kim' : 'jay';
+  const previousOtherPlayer = oppositeSeatOf(previousCurrentPlayer);
+  const nextOtherPlayer = oppositeSeatOf(nextCurrentPlayer);
+  const previousRoundKey = stableRoundIdentityKey(previous.currentRound || {});
+  const nextRoundKey = stableRoundIdentityKey(next.currentRound || {});
+  const previousIsQuizReveal = previous.revealIsReady && (previous.game?.gameMode || 'standard') === 'quiz' && (previous.game?.questionBankType || 'game') === 'quiz';
+  const nextIsQuizReveal = next.revealIsReady && (next.game?.gameMode || 'standard') === 'quiz' && (next.game?.questionBankType || 'game') === 'quiz';
+  const quizRevealChatMatches = !previousIsQuizReveal && !nextIsQuizReveal
+    ? true
+    : previous.chatDraft === next.chatDraft
+      && previous.chatSeat === next.chatSeat
+      && previous.chatDisplayName === next.chatDisplayName
+      && JSON.stringify(previous.chatMessages || []) === JSON.stringify(next.chatMessages || []);
+  return previous.game?.id === next.game?.id
+    && previousRoundKey === nextRoundKey
+    && previous.role === next.role
+    && previous.status === next.status
+    && previous.revealIsReady === next.revealIsReady
+    && previous.submissionState === next.submissionState
+    && previous.currentFeedbackValue === next.currentFeedbackValue
+    && previous.currentReplayRequested === next.currentReplayRequested
+    && previous.isBusy === next.isBusy
+    && previous.currentRound?.status === next.currentRound?.status
+    && previous.currentRound?.question === next.currentRound?.question
+    && previous.currentRound?.category === next.currentRound?.category
+    && previous.currentRound?.roundType === next.currentRound?.roundType
+    && previous.currentRound?.correctAnswer === next.currentRound?.correctAnswer
+    && previous.currentRound?.quizTimerEndsAt === next.currentRound?.quizTimerEndsAt
+    && JSON.stringify(previous.currentRound?.multipleChoiceOptions || []) === JSON.stringify(next.currentRound?.multipleChoiceOptions || [])
+    && JSON.stringify(previous.currentRound?.ready || {}) === JSON.stringify(next.currentRound?.ready || {})
+    && JSON.stringify(previous.currentRound?.nextReady || {}) === JSON.stringify(next.currentRound?.nextReady || {})
+    && JSON.stringify(previous.currentRound?.overrideRequests || {}) === JSON.stringify(next.currentRound?.overrideRequests || {})
+    && JSON.stringify(previous.currentRound?.answers || {}) === JSON.stringify(next.currentRound?.answers || {})
+    && Number(previous.baseTotals?.jay || 0) === Number(next.baseTotals?.jay || 0)
+    && Number(previous.baseTotals?.kim || 0) === Number(next.baseTotals?.kim || 0)
+    && Number(previous.liveTotals?.jay || 0) === Number(next.liveTotals?.jay || 0)
+    && Number(previous.liveTotals?.kim || 0) === Number(next.liveTotals?.kim || 0)
+    && Number(previous.penaltyDraft?.jay || 0) === Number(next.penaltyDraft?.jay || 0)
+    && Number(previous.penaltyDraft?.kim || 0) === Number(next.penaltyDraft?.kim || 0)
+    && previousCurrentPlayer === nextCurrentPlayer
+    && previousOtherPlayer === nextOtherPlayer
+    && quizRevealChatMatches;
+});
 
 function RevealCards({ currentRound }) {
   if (!currentRound?.answers) return null;
@@ -2408,12 +4472,12 @@ function GameSummaryContent({
           </div>
         </div>
         <div className="game-summary-header-actions">
-          <span className="status-pill">{winner === 'tie' ? 'Tied' : `${PLAYER_LABEL[winner] || winner} won`}</span>
           {onClose ? (
-            <Button className="ghost-button compact" onClick={onClose}>
+            <Button className="ghost-button compact modal-close-button game-summary-close-button" onClick={onClose} aria-label="Close game summary">
               Close
             </Button>
           ) : null}
+          <span className="status-pill">{winner === 'tie' ? 'Tied' : `${PLAYER_LABEL[winner] || winner} won`}</span>
         </div>
       </header>
 
@@ -4550,8 +6614,12 @@ function MobileAnalyticsSummary({ analytics, queueRemaining, categoryColorMap = 
 function GameRoomView({
   user,
   profile,
+  connectionState,
   game,
   rounds,
+  questionFeedback,
+  questionReplays,
+  playerAccounts,
   bankQuestions,
   editingModeEnabled,
   onToggleEditingMode,
@@ -4562,6 +6630,7 @@ function GameRoomView({
   onPauseToggle,
   onNextQuestion,
   onSubmitAnswer,
+  onMarkReady,
   onAddQuestion,
   onSyncSheet,
   onImportSheet,
@@ -4573,8 +6642,6 @@ function GameRoomView({
   currentRound,
   penaltyDraft,
   setPenaltyDraft,
-  answerDraft,
-  setAnswerDraft,
   bankDraft,
   setBankDraft,
   sheetInput,
@@ -4586,10 +6653,21 @@ function GameRoomView({
   chatDraft,
   setChatDraft,
   onSendChat,
+  onReconnectLiveRoom,
   onSaveQuestionNote,
+  onSaveQuestionFeedback,
+  onSaveQuestionReplay,
+  onSaveQuizWager,
+  onAcceptQuizWager,
+  onRejectQuizWager,
+  onSetQuizWheelOptIn,
+  onRequestQuizOverride,
+  onRespondQuizOverride,
+  quizWagerDraft,
+  setQuizWagerDraft,
 }) {
   const activePalette = PALETTES[loadThemeIndex() % PALETTES.length];
-  const analytics = calculateAnalytics(rounds);
+  const analytics = useMemo(() => calculateAnalytics(rounds), [rounds]);
   const categoryOptions = useMemo(() => deriveCategories(bankQuestions, rounds, DEFAULT_CATEGORIES), [bankQuestions, rounds]);
   const categoryColorMap = useMemo(
     () => ({
@@ -4619,15 +6697,30 @@ function GameRoomView({
     || (seat === 'kim' ? 'kim' : seat === 'jay' ? 'jay' : null)
     || inferSeatFromUser(user, profile)
     || 'jay';
+  const viewerLabel = gameSeatDisplayName(game, resolvedViewerSeat, currentRound);
   const liveTotals = currentRound
     ? {
         jay: addScores(baseTotals.jay, parseNumber(penaltyDraft.jay || currentRound.penalties?.jay || 0, 0)),
         kim: addScores(baseTotals.kim, parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0)),
       }
     : baseTotals;
-  const revealIsReady = currentRound?.status === 'reveal' && Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
+  const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+  const bothPlayersSubmitted = Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
+  const revealIsReady = bothPlayersSubmitted || currentRound?.status === 'reveal';
   const submissionState = currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft';
-  const showActiveRoundFrame = Boolean(currentRound && (currentRound.status === 'open' || revealIsReady));
+  const submittedBySeat = {
+    jay: hasSubmittedRoundAnswer(currentRound, 'jay'),
+    kim: hasSubmittedRoundAnswer(currentRound, 'kim'),
+  };
+  const quizSetupReadyBySeat = {
+    jay: hasQuizSetupReadySeat(game, 'jay'),
+    kim: hasQuizSetupReadySeat(game, 'kim'),
+  };
+  const nextReadyBySeat = {
+    jay: hasNextReadySeat(currentRound, 'jay'),
+    kim: hasNextReadySeat(currentRound, 'kim'),
+  };
+  const showActiveRoundFrame = Boolean(currentRound && (isQuizGame || currentRound.status === 'open' || revealIsReady));
   const status = game?.status || 'active';
   const isMobile = useMediaQuery('(max-width: 900px)');
   const joinedPlayers = [
@@ -4640,12 +6733,37 @@ function GameRoomView({
   const testModeBannerCopy = isEditingTestRoom
     ? 'This room is local only. The other player auto-submits, and nothing here is saved to live history, analytics, forfeits, or player totals.'
     : 'Editing Mode is enabled. New Create Game sessions stay local, auto-submit the other player, and do not save live history, analytics, or totals.';
+  const quizWagerAgreement = normalizeQuizWagerAgreement(game);
+  const sharedQuizWagerLocked = isQuizWagerAgreementLocked(game);
+  const sharedQuizWagerAmount = getQuizSharedWagerAmount(game);
+  const quizWagerStatusLabel = sharedQuizWagerLocked
+    ? `Shared ${formatScore(sharedQuizWagerAmount || 0)}`
+    : quizWagerAgreement.status === 'proposal_pending'
+      ? `Proposal ${formatScore(quizWagerAgreement.proposedAmount || 0)}`
+      : quizWagerAgreement.wheelOptIn?.jay || quizWagerAgreement.wheelOptIn?.kim
+        ? 'Wheel pending'
+        : 'Negotiating';
+  const showQuizSetupPanel = isQuizGame && !currentRound && !gameEnded;
   const roomMenuRef = useRef(null);
   const scoreboardColumnRef = useRef(null);
   const [chatColumnHeight, setChatColumnHeight] = useState(0);
+  const [quizSidebarOpen, setQuizSidebarOpen] = useState(false);
   const [noteModalRound, setNoteModalRound] = useState(null);
   const [questionNoteDraft, setQuestionNoteDraft] = useState('');
-
+  const currentFeedbackValue = useMemo(() => {
+    const qKey = normalizeText(currentRound?.questionId || '') || sanitizeNoteKey(currentRound?.question || '');
+    if (!qKey || !user?.uid || !game?.id) return '';
+    const feedbackId = `${game.id}-${qKey}-${user.uid}`;
+    const entry = (questionFeedback || []).find((row) => row.id === feedbackId || row.feedbackId === feedbackId);
+    return entry?.feedbackValue === 'liked' ? 'liked' : entry?.feedbackValue === 'disliked' ? 'disliked' : '';
+  }, [currentRound?.questionId, currentRound?.question, user?.uid, game?.id, questionFeedback]);
+  const currentReplayRequested = useMemo(() => {
+    const qKey = normalizeText(currentRound?.questionId || '') || sanitizeNoteKey(currentRound?.question || '');
+    if (!qKey || !user?.uid) return false;
+    const replayId = `${qKey}-${user.uid}`;
+    const entry = (questionReplays || []).find((row) => row.id === replayId || row.replayId === replayId);
+    return Boolean(entry?.replayRequested);
+  }, [currentRound?.questionId, currentRound?.question, user?.uid, questionReplays]);
   useEffect(() => {
     if (isMobile) {
       setChatColumnHeight(0);
@@ -4699,6 +6817,9 @@ function GameRoomView({
       <div className="top-menu-panel settings-menu-panel room-settings-menu-panel">
         <section className="settings-menu-section">
           <span className="settings-section-label">Room Actions</span>
+          <Button className="ghost-button compact" onClick={onReconnectLiveRoom} disabled={isBusy}>
+            Reconnect
+          </Button>
           <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromRoomMenu} disabled={isBusy}>
             {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
           </Button>
@@ -4712,7 +6833,13 @@ function GameRoomView({
 
   const openQuestionNoteModal = (round) => {
     if (!round) return;
-    setNoteModalRound(round);
+    setNoteModalRound({
+      questionId: round.questionId || '',
+      question: round.question || '',
+      category: round.category || '',
+      roundType: round.roundType || '',
+      number: round.number || 0,
+    });
     setQuestionNoteDraft('');
   };
 
@@ -4721,9 +6848,45 @@ function GameRoomView({
     setQuestionNoteDraft('');
   };
 
+  const questionNoteModalNode = noteModalRound ? (
+    <section className="modal-backdrop" role="presentation" onClick={closeQuestionNoteModal}>
+      <div className="panel modal-panel forfeit-modal" role="dialog" aria-modal="true" aria-label="Private question note" onClick={(event) => event.stopPropagation()}>
+        <div className="panel-heading compact-heading">
+          <div>
+            <p className="eyebrow">Private Note</p>
+            <h3>Flagged Question Notebook</h3>
+          </div>
+          <Button className="ghost-button compact modal-close-button" onClick={closeQuestionNoteModal} disabled={isBusy} aria-label="Close private question note">
+            Close
+          </Button>
+        </div>
+        <p className="panel-copy">{noteModalRound?.question || 'Question'}</p>
+        <label className="field">
+          <span>My private note</span>
+          <textarea rows="4" value={questionNoteDraft} onChange={(event) => setQuestionNoteDraft(event.target.value)} placeholder="Write a private note for this question" />
+        </label>
+        <div className="button-row">
+          <Button
+            className="primary-button compact"
+            onClick={async () => {
+              const saved = await onSaveQuestionNote?.({ round: noteModalRound, noteText: questionNoteDraft });
+              if (saved) closeQuestionNoteModal();
+            }}
+            disabled={isBusy || !normalizeText(questionNoteDraft)}
+          >
+            Save Note
+          </Button>
+          <Button className="ghost-button compact" onClick={closeQuestionNoteModal} disabled={isBusy}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </section>
+  ) : null;
+
   const goToDashboardTab = (tab = 'gameLobby') => {
     try {
-      window.localStorage.setItem('kjk-dashboard-tab', tab);
+      safeLocalStorageSet('kjk-dashboard-tab', tab);
     } catch {
       // Ignore storage failures.
     }
@@ -4733,7 +6896,7 @@ function GameRoomView({
   const renderMobileHostControls = () => {
     if (role !== 'host') return null;
 
-    if (currentRound && revealIsReady) {
+    if (currentRound && revealIsReady && !isQuizGame) {
       return (
         <section className="mobile-entry-panel mobile-round-panel">
           <QuickDesk
@@ -4754,18 +6917,19 @@ function GameRoomView({
     if (showActiveRoundFrame) {
       return (
         <section className="mobile-entry-panel mobile-round-panel">
-          <section className="panel room-status-panel room-status-panel--host-mobile">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Host</p>
-                <h2>Controls</h2>
+            <section className="panel room-status-panel room-status-panel--host-mobile">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Host</p>
+                  <h2>Controls</h2>
+                </div>
               </div>
-            </div>
-            <p className="panel-copy">
-              {submissionState === 'submitted'
-                ? 'Your answer is in. Waiting for the reveal.'
-                : 'Players are answering inside the main board.'}
-            </p>
+              <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
+              <p className="panel-copy">
+                {submissionState === 'submitted'
+                  ? 'Your answer is in. Waiting for the reveal.'
+                  : 'Players are answering inside the main board.'}
+              </p>
             <div className="button-row room-host-sidebar-actions">
               <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
                 {status === 'paused' ? 'Resume' : 'Pause'}
@@ -4779,18 +6943,25 @@ function GameRoomView({
 
     return (
       <section className="mobile-entry-panel mobile-round-panel">
-        <section className="panel room-status-panel room-status-panel--host-mobile">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Host</p>
-              <h2>Controls</h2>
-            </div>
-          </div>
-          <p className="panel-copy">Load the next question when you are ready.</p>
-          <div className="button-row room-host-sidebar-actions">
-            <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
-              Next Question
-            </Button>
+            <section className="panel room-status-panel room-status-panel--host-mobile">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Host</p>
+                  <h2>Controls</h2>
+                </div>
+              </div>
+              <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
+              <p className="panel-copy">
+                {isQuizGame
+                  ? 'Quiz questions appear automatically once both players are ready.'
+                  : 'Load the next question when you are ready.'}
+              </p>
+              <div className="button-row room-host-sidebar-actions">
+            {!isQuizGame ? (
+              <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
+                Next Question
+              </Button>
+            ) : null}
             <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
               {status === 'paused' ? 'Resume' : 'Pause'}
             </Button>
@@ -4807,7 +6978,7 @@ function GameRoomView({
         <div className="top-bar-left">
           <div className="brand-lockup brand-lockup--left">
             <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
-            <h1>KJK KIMJAYKINKS</h1>
+            <h1><span className="brand-mobile-mark">92.1 JKC Radio</span><span className="brand-full-text">KJK KIMJAYKINKS</span></h1>
           </div>
           <div className="room-players-pill">
             <span>{joinedPlayers.map((player) => player.displayName || 'Player').join(' + ') || 'Waiting for players'}</span>
@@ -4841,6 +7012,7 @@ function GameRoomView({
                 gameSummary={{ ...game, rounds }}
                 categoryColorMap={categoryColorMap}
                 showActions
+                onClose={() => goToDashboardTab('gameLobby')}
                 onBackToLobby={() => goToDashboardTab('gameLobby')}
                 onViewOverallAnalytics={() => goToDashboardTab('analytics')}
               />
@@ -4849,19 +7021,20 @@ function GameRoomView({
         ) : (
           <section className="mobile-game-shell">
             <section className="mobile-board-panel">
-              {showActiveRoundFrame ? (
-                <RoomActiveFrame
+	              {showActiveRoundFrame ? (
+	                <RoomActiveFrame
                   game={game}
                   seat={resolvedViewerSeat}
                   viewerSeat={resolvedViewerSeat}
                   role={role}
                   status={status}
                   currentRound={currentRound}
-                  baseTotals={baseTotals}
-                  liveTotals={liveTotals}
-                  answerDraft={answerDraft}
-                  setAnswerDraft={setAnswerDraft}
-                  onSubmitAnswer={onSubmitAnswer}
+	                  baseTotals={baseTotals}
+	                  liveTotals={liveTotals}
+	                  onSubmitAnswer={onSubmitAnswer}
+	                  onMarkReady={onMarkReady}
+	                  onRequestQuizOverride={onRequestQuizOverride}
+	                  onRespondQuizOverride={onRespondQuizOverride}
                   submissionState={submissionState}
                   revealIsReady={revealIsReady}
                   penaltyDraft={penaltyDraft}
@@ -4869,15 +7042,66 @@ function GameRoomView({
                   onNextQuestion={onNextQuestion}
                   onPauseToggle={onPauseToggle}
                   onOpenQuestionNote={openQuestionNoteModal}
-                  isBusy={isBusy}
-                />
-              ) : (
+                  currentFeedbackValue={currentFeedbackValue}
+                  onSetQuestionFeedback={(round, value) => onSaveQuestionFeedback?.({ round, feedbackValue: value })}
+                  currentReplayRequested={currentReplayRequested}
+                  onSetQuestionReplay={(round) => onSaveQuestionReplay?.({ round })}
+                  chatMessages={chatMessages}
+                  chatDraft={chatDraft}
+                  onChatDraftChange={setChatDraft}
+                  onSendChat={onSendChat}
+                  chatSeat={seat}
+                  chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+	                  isBusy={isBusy}
+	                />
+	              ) : showQuizSetupPanel ? (
+	                <QuizSetupStagePanel
+                    game={game}
+                    viewerSeat={resolvedViewerSeat}
+                    playerAccounts={playerAccounts}
+                    chatMessages={chatMessages}
+                    chatDraft={chatDraft}
+                    onChatDraftChange={setChatDraft}
+                    onSendChat={onSendChat}
+                    chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+                    quizWagerDraft={quizWagerDraft}
+                    setQuizWagerDraft={setQuizWagerDraft}
+                    onSaveQuizWager={onSaveQuizWager}
+                    onAcceptQuizWager={onAcceptQuizWager}
+                    onRejectQuizWager={onRejectQuizWager}
+                    onSetQuizWheelOptIn={onSetQuizWheelOptIn}
+                    onMarkReady={onMarkReady}
+                    isBusy={isBusy}
+                  />
+	              ) : (
                 <MainScoreboard16x9 rounds={rounds} selectedQuestion={currentQuestion} form={boardForm} editingRound={null} liveTotals={liveTotals} joinedSeats={game?.seats || {}} />
               )}
             </section>
 
+            {isQuizGame && !showQuizSetupPanel && !showActiveRoundFrame ? (
+              <section className="panel room-status-panel room-status-panel--host-mobile">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Quick Fire</p>
+                    <h2>Wager Points</h2>
+                  </div>
+                </div>
+                <label className="field">
+                  <span>Your wager</span>
+                  <input type="number" inputMode="numeric" min="0" value={quizWagerDraft} onChange={(event) => setQuizWagerDraft(event.target.value)} placeholder="0" />
+                </label>
+                <div className="button-row room-host-sidebar-actions">
+                  <Button className="ghost-button compact" onClick={onSaveQuizWager} disabled={isBusy}>
+                    Propose Wager
+                  </Button>
+                  <span className="quick-desk-status">{quizWagerStatusLabel}</span>
+                </div>
+              </section>
+            ) : null}
+
             {renderMobileHostControls()}
 
+            {!isQuizGame ? (
             <details className="panel mobile-collapsible mobile-collapsible--chat">
               <summary>Chat</summary>
               <ChatPanel
@@ -4891,6 +7115,7 @@ function GameRoomView({
                 displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
               />
             </details>
+            ) : null}
 
             <details className="panel mobile-collapsible mobile-collapsible--analytics">
               <summary>Live Stats</summary>
@@ -4918,18 +7143,19 @@ function GameRoomView({
             ) : null}
           </section>
         )}
+        {questionNoteModalNode}
         {notice ? <div className="toast">{notice}</div> : null}
       </main>
     );
   }
 
   return (
-    <main className="app production-app" style={{ '--accent': activePalette.accent, '--accent-2': activePalette.accent2, '--accent-3': activePalette.accent3, '--accent-glow': activePalette.glow, '--accent-wash': activePalette.wash }}>
+      <main className="app production-app" style={{ '--accent': activePalette.accent, '--accent-2': activePalette.accent2, '--accent-3': activePalette.accent3, '--accent-glow': activePalette.glow, '--accent-wash': activePalette.wash }}>
       <header className="top-bar top-bar--room">
         <div className="top-bar-left">
           <div className="brand-lockup brand-lockup--left">
             <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
-            <h1>KJK KIMJAYKINKS</h1>
+            <h1><span className="brand-mobile-mark">92.1 JKC Radio</span><span className="brand-full-text">KJK KIMJAYKINKS</span></h1>
           </div>
         </div>
         <div className="top-actions top-actions--room">
@@ -4962,14 +7188,26 @@ function GameRoomView({
               gameSummary={{ ...game, rounds }}
               categoryColorMap={categoryColorMap}
               showActions
+              onClose={() => goToDashboardTab('gameLobby')}
               onBackToLobby={() => goToDashboardTab('gameLobby')}
               onViewOverallAnalytics={() => goToDashboardTab('analytics')}
             />
           </section>
         </section>
       ) : (
-      <section className="game-grid">
-        <section className="panel room-sidebar">
+      <section className={`game-grid ${isQuizGame ? 'game-grid--quiz-focus' : ''}`}>
+        <section className={`panel room-sidebar ${isQuizGame ? `room-sidebar--quiz-drawer ${quizSidebarOpen ? 'is-open' : 'is-collapsed'}` : ''}`}>
+          {isQuizGame ? (
+            <button
+              type="button"
+              className="quiz-sidebar-toggle"
+              onClick={() => setQuizSidebarOpen((isOpen) => !isOpen)}
+              aria-expanded={quizSidebarOpen}
+              aria-label={quizSidebarOpen ? 'Hide quiz room details' : 'Show quiz room details'}
+            >
+              <span aria-hidden="true">{quizSidebarOpen ? '<' : '>'}</span>
+            </button>
+          ) : null}
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Players</p>
@@ -4977,17 +7215,53 @@ function GameRoomView({
             </div>
           </div>
           <div className="joined-player-list">
-            <article className="mini-list-row">
-              <strong>Jay</strong>
-              <span>{game?.playerProfiles?.[game?.seats?.jay]?.displayName || 'Waiting'}</span>
-            </article>
-            <article className="mini-list-row">
-              <strong>Kim</strong>
-              <span>{game?.playerProfiles?.[game?.seats?.kim]?.displayName || 'Waiting'}</span>
-            </article>
+            <article className={`mini-list-row joined-player-row ${submittedBySeat.jay ? 'is-submitted' : ''}`}>
+              <div className="joined-player-row-main">
+                <strong>Jay</strong>
+	                {currentRound || showQuizSetupPanel ? (
+	                  <span className={`submitted-status-pill ${(currentRound?.status === 'reveal' && isQuizGame ? nextReadyBySeat.jay : showQuizSetupPanel && isQuizGame ? quizSetupReadyBySeat.jay : submittedBySeat.jay) ? 'is-submitted' : ''}`}>
+	                    {showQuizSetupPanel && isQuizGame
+                        ? (quizSetupReadyBySeat.jay ? 'Ready' : 'Wagering')
+                        : currentRound?.status === 'reveal' && isQuizGame
+                          ? (nextReadyBySeat.jay ? 'Next ready' : 'Reviewing')
+                          : (submittedBySeat.jay ? 'Submitted' : 'Answering')}
+	                  </span>
+	                ) : null}
+	              </div>
+	              <span>{game?.playerProfiles?.[game?.seats?.jay]?.displayName || 'Waiting'}</span>
+	            </article>
+            <article className={`mini-list-row joined-player-row ${submittedBySeat.kim ? 'is-submitted' : ''}`}>
+              <div className="joined-player-row-main">
+                <strong>Kim</strong>
+	                {currentRound || showQuizSetupPanel ? (
+	                  <span className={`submitted-status-pill ${(currentRound?.status === 'reveal' && isQuizGame ? nextReadyBySeat.kim : showQuizSetupPanel && isQuizGame ? quizSetupReadyBySeat.kim : submittedBySeat.kim) ? 'is-submitted' : ''}`}>
+	                    {showQuizSetupPanel && isQuizGame
+                        ? (quizSetupReadyBySeat.kim ? 'Ready' : 'Wagering')
+                        : currentRound?.status === 'reveal' && isQuizGame
+                          ? (nextReadyBySeat.kim ? 'Next ready' : 'Reviewing')
+                          : (submittedBySeat.kim ? 'Submitted' : 'Answering')}
+	                  </span>
+	                ) : null}
+	              </div>
+	              <span>{game?.playerProfiles?.[game?.seats?.kim]?.displayName || 'Waiting'}</span>
+	            </article>
           </div>
+          {isQuizGame ? (
+            <section className="panel host-queue-panel room-status-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Quick Fire</p>
+                  <h2>Shared Wager</h2>
+                </div>
+              </div>
+              <span className="quick-desk-status quick-desk-status--inline">{quizWagerStatusLabel}</span>
+              <small className="panel-copy">
+                The first quiz question stays locked until both players accept one shared wager or the wheel result lands.
+              </small>
+            </section>
+          ) : null}
           {role === 'host' ? (
-            currentRound && revealIsReady ? (
+            currentRound && revealIsReady && !isQuizGame ? (
               <QuickDesk
                 currentRound={currentRound}
                 penaltyDraft={penaltyDraft}
@@ -5007,13 +7281,14 @@ function GameRoomView({
                     <h2>Controls</h2>
                   </div>
                 </div>
+                <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
                 <p className="panel-copy">
                   {!currentRound
-                    ? 'Load the next question when you are ready.'
+                    ? (isQuizGame ? 'Quiz questions appear automatically once both players are ready.' : 'Load the next question when you are ready.')
                     : 'Players are answering inside the main board.'}
                 </p>
                 <div className="button-row room-host-sidebar-actions">
-                  {!currentRound ? (
+                  {!currentRound && !isQuizGame ? (
                     <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
                       Next Question
                     </Button>
@@ -5039,19 +7314,20 @@ function GameRoomView({
         </section>
 
         <section className="scoreboard-column" ref={scoreboardColumnRef}>
-          {showActiveRoundFrame ? (
-            <RoomActiveFrame
+	          {showActiveRoundFrame ? (
+	            <RoomActiveFrame
               game={game}
               seat={resolvedViewerSeat}
               viewerSeat={resolvedViewerSeat}
               role={role}
               status={status}
               currentRound={currentRound}
-              baseTotals={baseTotals}
-              liveTotals={liveTotals}
-              answerDraft={answerDraft}
-              setAnswerDraft={setAnswerDraft}
-              onSubmitAnswer={onSubmitAnswer}
+	              baseTotals={baseTotals}
+	              liveTotals={liveTotals}
+	              onSubmitAnswer={onSubmitAnswer}
+	              onMarkReady={onMarkReady}
+	              onRequestQuizOverride={onRequestQuizOverride}
+	              onRespondQuizOverride={onRespondQuizOverride}
               submissionState={submissionState}
               revealIsReady={revealIsReady}
               penaltyDraft={penaltyDraft}
@@ -5059,13 +7335,43 @@ function GameRoomView({
               onNextQuestion={onNextQuestion}
               onPauseToggle={onPauseToggle}
               onOpenQuestionNote={openQuestionNoteModal}
+              currentFeedbackValue={currentFeedbackValue}
+              onSetQuestionFeedback={(round, value) => onSaveQuestionFeedback?.({ round, feedbackValue: value })}
+              currentReplayRequested={currentReplayRequested}
+              onSetQuestionReplay={(round) => onSaveQuestionReplay?.({ round })}
+              chatMessages={chatMessages}
+              chatDraft={chatDraft}
+              onChatDraftChange={setChatDraft}
+              onSendChat={onSendChat}
+              chatSeat={seat}
+              chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+	              isBusy={isBusy}
+	            />
+	          ) : showQuizSetupPanel ? (
+            <QuizSetupStagePanel
+              game={game}
+              viewerSeat={resolvedViewerSeat}
+              playerAccounts={playerAccounts}
+              chatMessages={chatMessages}
+              chatDraft={chatDraft}
+              onChatDraftChange={setChatDraft}
+              onSendChat={onSendChat}
+              chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+              quizWagerDraft={quizWagerDraft}
+              setQuizWagerDraft={setQuizWagerDraft}
+              onSaveQuizWager={onSaveQuizWager}
+              onAcceptQuizWager={onAcceptQuizWager}
+              onRejectQuizWager={onRejectQuizWager}
+              onSetQuizWheelOptIn={onSetQuizWheelOptIn}
+              onMarkReady={onMarkReady}
               isBusy={isBusy}
             />
-          ) : (
+	          ) : (
             <MainScoreboard16x9 rounds={rounds} selectedQuestion={currentQuestion} form={boardForm} editingRound={null} liveTotals={liveTotals} joinedSeats={game?.seats || {}} />
           )}
         </section>
 
+        {!isQuizGame ? (
         <section
           className="panel room-panel chat-column chat-column--locked"
           style={chatColumnHeight ? { '--chat-column-height': `${chatColumnHeight}px` } : undefined}
@@ -5088,40 +7394,10 @@ function GameRoomView({
             displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
           />
         </section>
+        ) : null}
       </section>
       )}
-      {noteModalRound ? (
-        <section className="modal-backdrop" role="presentation" onClick={closeQuestionNoteModal}>
-          <div className="panel modal-panel forfeit-modal" role="dialog" aria-modal="true" aria-label="Private question note" onClick={(event) => event.stopPropagation()}>
-            <div className="panel-heading compact-heading">
-              <div>
-                <p className="eyebrow">Private Note</p>
-                <h3>Flagged Question Notebook</h3>
-              </div>
-            </div>
-            <p className="panel-copy">{noteModalRound?.question || 'Question'}</p>
-            <label className="field">
-              <span>My private note</span>
-              <textarea rows="4" value={questionNoteDraft} onChange={(event) => setQuestionNoteDraft(event.target.value)} placeholder="Write a private note for this question" />
-            </label>
-            <div className="button-row">
-              <Button
-                className="primary-button compact"
-                onClick={async () => {
-                  const saved = await onSaveQuestionNote?.({ round: noteModalRound, noteText: questionNoteDraft });
-                  if (saved) closeQuestionNoteModal();
-                }}
-                disabled={isBusy || !normalizeText(questionNoteDraft)}
-              >
-                Save Note
-              </Button>
-              <Button className="ghost-button compact" onClick={closeQuestionNoteModal} disabled={isBusy}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </section>
-      ) : null}
+      {questionNoteModalNode}
       {notice ? <div className="toast">{notice}</div> : null}
       <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
     </main>
@@ -5135,6 +7411,11 @@ function ProductionApp() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [connectionState, setConnectionState] = useState(() => ({
+    online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    lastGameSnapshotAt: 0,
+    lastError: '',
+  }));
   const [notice, setNotice] = useState('');
   const [lobbyCode, setLobbyCode] = useState('');
   const [joinCode, setJoinCode] = useState('');
@@ -5180,8 +7461,12 @@ function ProductionApp() {
   const [amaRequests, setAmaRequests] = useState([]);
   const [diaryEntries, setDiaryEntries] = useState([]);
   const [questionNotes, setQuestionNotes] = useState([]);
+  const [questionFeedback, setQuestionFeedback] = useState([]);
+  const [questionReplays, setQuestionReplays] = useState([]);
+  const [quizAnswers, setQuizAnswers] = useState([]);
+  const [quizWagerDraft, setQuizWagerDraft] = useState('');
+  const [listenerRefreshKey, setListenerRefreshKey] = useState(0);
   const [penaltyDraft, setPenaltyDraft] = useState(defaultPenaltyDraft);
-  const [answerDraft, setAnswerDraft] = useState(defaultDraft);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatDraft, setChatDraft] = useState(defaultChatDraft);
   const [lobbyGameName, setLobbyGameName] = useState('');
@@ -5191,8 +7476,18 @@ function ProductionApp() {
   const roomLoadTimeoutRef = useRef(null);
   const amaStoreSeededRef = useRef({ jay: false, kim: false });
   const autoResumedGameIdRef = useRef(gameId || '');
+  const lastAuthUserIdRef = useRef(firebaseAuth?.currentUser?.uid || '');
   const staleCompletedRestoreRef = useRef(new Set());
+  const gameLibraryRoundsCacheRef = useRef(new Map());
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
+  const hasOpenRoomSession = Boolean(gameId || game?.id);
+  const localTestGameForId = (targetGameId = '') => {
+    if (!targetGameId) return null;
+    if (game?.id === targetGameId && isLocalTestGame(game)) return game;
+    return localArchivedGames.find((entry) => entry?.id === targetGameId && isLocalTestGame(entry)) || null;
+  };
+  const isLocalTestGameTarget = (targetGameId = '') =>
+    Boolean(isLocalTestGameId(targetGameId) || localTestGameForId(targetGameId));
 
   const clearRoomLoadTimer = () => {
     if (roomLoadTimeoutRef.current) {
@@ -5316,12 +7611,26 @@ function ProductionApp() {
 
   useEffect(() => {
     try {
-      if (editingModeEnabled) window.localStorage.setItem(editingModeKey, 'true');
+      if (editingModeEnabled) safeLocalStorageSet(editingModeKey, 'true');
       else window.localStorage.removeItem(editingModeKey);
     } catch {
       // Ignore storage failures.
     }
   }, [editingModeEnabled]);
+
+  useEffect(() => {
+    const update = () =>
+      setConnectionState((current) => ({
+        ...current,
+        online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+      }));
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
+  }, []);
 
   useEffect(() => {
     if (!firebaseAuth) {
@@ -5330,6 +7639,12 @@ function ProductionApp() {
     }
     const unsubscribe = onAuthStateChanged(firebaseAuth, async (nextUser) => {
       debugRoom('authStateChanged', { uid: nextUser?.uid || '', email: nextUser?.email || '' });
+      const previousAuthUserId = lastAuthUserIdRef.current;
+      const nextAuthUserId = nextUser?.uid || '';
+      lastAuthUserIdRef.current = nextAuthUserId;
+      if (nextAuthUserId && nextAuthUserId !== previousAuthUserId) {
+        setMobilePostAuthDashboardDefault();
+      }
       setUser(nextUser);
       setAuthLoading(false);
       if (nextUser && firestore) {
@@ -5370,21 +7685,44 @@ function ProductionApp() {
       }
       if (isLocalTestGameId(gameId)) return;
       if (activeGameFromProfile && activeGameFromProfile !== gameId) {
-        if (isMobileDashboard) {
+        void (async () => {
+          const snap = await getDoc(doc(firestore, 'games', activeGameFromProfile)).catch(() => null);
+          const joinable = snap?.exists?.() ? isJoinableGameSnapshot(snap.data()) : false;
+          if (!joinable) {
+            debugRoom('activeGameNotJoinable', { activeGameFromProfile });
+            await setDoc(
+              doc(firestore, 'users', user.uid),
+              { uid: user.uid, activeGameId: '', updatedAt: serverTimestamp() },
+              { merge: true },
+            ).catch(() => null);
+            clearPersistedActiveGame(activeGameFromProfile);
+            if (activeGameFromProfile === gameId) {
+              setGameId('');
+              setGame(null);
+              setRounds([]);
+              setChatMessages([]);
+              resetRoomLoadState();
+            }
+            setNotice('The saved active game was no longer available, so the app returned to the lobby.');
+            return;
+          }
+          if (isMobileDashboard) {
+            autoResumedGameIdRef.current = activeGameFromProfile;
+            clearPersistedActiveGame(activeGameFromProfile);
+            resetRoomLoadState();
+            return;
+          }
           autoResumedGameIdRef.current = activeGameFromProfile;
-          clearPersistedActiveGame(activeGameFromProfile);
-          resetRoomLoadState();
-          return;
-        }
-        autoResumedGameIdRef.current = activeGameFromProfile;
-        setGameId(data.activeGameId);
-        localStorage.setItem(activeGameKey, activeGameFromProfile);
+          setGameId(activeGameFromProfile);
+          safeLocalStorageSet(activeGameKey, activeGameFromProfile);
+        })();
+        return;
       }
     }, (error) => {
       failRoomLoad(gameId, `Could not read your profile: ${error?.message || error}`, 'profile-listener');
     });
     return unsubscribe;
-  }, [user, gameId, isMobileDashboard]);
+  }, [user, gameId, isMobileDashboard, firestore, listenerRefreshKey]);
 
   useEffect(() => {
     if (!user || !firestore) {
@@ -5392,23 +7730,49 @@ function ProductionApp() {
       return undefined;
     }
     const gamesRef = query(collection(firestore, 'games'), where('playerUids', 'array-contains', user.uid));
+    let isListenerActive = true;
     const unsubscribe = onSnapshot(gamesRef, async (snapshot) => {
+      const visibleGameIds = new Set(snapshot.docs.map((entry) => entry.id));
+      [...gameLibraryRoundsCacheRef.current.keys()].forEach((cacheKey) => {
+        const cachedGameId = cacheKey.split(':')[0] || '';
+        if (!visibleGameIds.has(cachedGameId)) gameLibraryRoundsCacheRef.current.delete(cacheKey);
+      });
       const summaries = await Promise.all(
         snapshot.docs.map(async (entry) => {
           const data = entry.data();
-          const roundsSnap = await getDocs(query(collection(doc(firestore, 'games', entry.id), 'rounds'), orderBy('number', 'asc')));
-          const roundsData = normalizeStoredRounds(roundsSnap.docs.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() })));
+          const status = data.status || 'active';
+          const shouldLoadRounds = COMPLETED_GAME_STATUSES.includes(status);
+          let roundsData = [];
+          if (shouldLoadRounds) {
+            const cacheKey = [
+              entry.id,
+              Number(data.roundsPlayed || 0),
+              getRecordTime(data.endedAt || data.updatedAt || data.createdAt || 0),
+            ].join(':');
+            const cachedRounds = gameLibraryRoundsCacheRef.current.get(cacheKey);
+            if (cachedRounds) {
+              roundsData = cachedRounds;
+            } else {
+              const roundsSnap = await getDocs(query(collection(doc(firestore, 'games', entry.id), 'rounds'), orderBy('number', 'asc')));
+              roundsData = normalizeStoredRounds(roundsSnap.docs.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() })));
+              gameLibraryRoundsCacheRef.current.set(cacheKey, roundsData);
+            }
+          }
           return buildGameLibraryEntry(entry.id, data, roundsData);
         }),
       );
       if (!snapshot.empty) {
         summaries.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       }
+      if (!isListenerActive) return;
       setGameLibrary(summaries.filter(Boolean));
     }, (error) => {
       debugRoom('gameLibrarySnapshotError', { message: error?.message || String(error) });
     });
-    return unsubscribe;
+    return () => {
+      isListenerActive = false;
+      unsubscribe();
+    };
   }, [user, firestore]);
 
   useEffect(() => {
@@ -5456,7 +7820,7 @@ function ProductionApp() {
   }, [user, firestore]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!firestore || !user || hasOpenRoomSession) {
       setRedemptionItems([]);
       return undefined;
     }
@@ -5465,10 +7829,10 @@ function ProductionApp() {
       setRedemptionItems(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('redemptionItemsSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore]);
+  }, [user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!firestore || !user || hasOpenRoomSession) {
       setRedemptionHistory([]);
       return undefined;
     }
@@ -5477,10 +7841,10 @@ function ProductionApp() {
       setRedemptionHistory(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('redemptionHistorySnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore]);
+  }, [user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!firestore || !user || hasOpenRoomSession) {
       setForfeitPriceRequests([]);
       return undefined;
     }
@@ -5489,10 +7853,10 @@ function ProductionApp() {
       setForfeitPriceRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('forfeitRequestsSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore]);
+  }, [user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!firestore || !user || hasOpenRoomSession) {
       setGameInvites([]);
       return undefined;
     }
@@ -5501,10 +7865,10 @@ function ProductionApp() {
       setGameInvites(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('gameInvitesSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore]);
+  }, [user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!firestore || !user || hasOpenRoomSession) {
       setAmaRequests([]);
       return undefined;
     }
@@ -5513,10 +7877,10 @@ function ProductionApp() {
       setAmaRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('amaRequestsSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore]);
+  }, [user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!firestore || !user || hasOpenRoomSession) {
       setDiaryEntries([]);
       return undefined;
     }
@@ -5525,10 +7889,10 @@ function ProductionApp() {
       setDiaryEntries(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('diaryEntriesSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore]);
+  }, [user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user?.uid) {
+    if (!firestore || !user?.uid || hasOpenRoomSession) {
       setQuestionNotes([]);
       return undefined;
     }
@@ -5539,20 +7903,62 @@ function ProductionApp() {
       (error) => debugRoom('questionNotesSnapshotError', { message: error?.message || String(error) }),
     );
     return unsubscribe;
-  }, [user?.uid, firestore]);
+  }, [user?.uid, firestore, hasOpenRoomSession]);
+
+  useEffect(() => {
+    if (!firestore || !user) {
+      setQuestionFeedback([]);
+      return undefined;
+    }
+    const feedbackRef = query(collection(firestore, 'questionFeedback'), where('pairId', '==', buildPairKey()), limit(2000));
+    const unsubscribe = onSnapshot(
+      feedbackRef,
+      (snapshot) => setQuestionFeedback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
+      (error) => debugRoom('questionFeedbackSnapshotError', { message: error?.message || String(error) }),
+    );
+    return unsubscribe;
+  }, [user, firestore]);
+
+  useEffect(() => {
+    if (!firestore || !user) {
+      setQuestionReplays([]);
+      return undefined;
+    }
+    const replayRef = query(collection(firestore, 'questionReplays'), where('pairId', '==', buildPairKey()), limit(3000));
+    const unsubscribe = onSnapshot(
+      replayRef,
+      (snapshot) => setQuestionReplays(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
+      (error) => debugRoom('questionReplaysSnapshotError', { message: error?.message || String(error) }),
+    );
+    return unsubscribe;
+  }, [user, firestore]);
+
+  useEffect(() => {
+    if (!firestore || !user || hasOpenRoomSession) {
+      setQuizAnswers([]);
+      return undefined;
+    }
+    const answersRef = query(collection(firestore, 'quizAnswers'), where('pairId', '==', buildPairKey()), limit(4000));
+    const unsubscribe = onSnapshot(
+      answersRef,
+      (snapshot) => setQuizAnswers(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
+      (error) => debugRoom('quizAnswersSnapshotError', { message: error?.message || String(error) }),
+    );
+    return unsubscribe;
+  }, [user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
     if (!user || !firestore) return undefined;
     const bankRef = collection(firestore, 'questionBank');
     const unsubscribe = onSnapshot(query(bankRef, orderBy('question', 'asc')), async (snapshot) => {
       if (snapshot.empty) {
-        await seedBankIfNeeded();
+        if (!gameId && !game?.id) await seedBankIfNeeded();
         return;
       }
       setBankQuestions(snapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id)));
     }, (error) => debugRoom('bankSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user]);
+  }, [user, firestore, gameId, game?.id]);
 
   useEffect(() => {
     if (isLocalTestGameId(gameId)) {
@@ -5570,15 +7976,17 @@ function ProductionApp() {
     const chatRef = query(collection(gameRef, 'chatMessages'), orderBy('createdAt', 'asc'), limit(60));
     const unsubscribeGame = onSnapshot(gameRef, (snapshot) => {
       debugRoom('gameSnapshot', { gameId, exists: snapshot.exists(), status: snapshot.exists() ? snapshot.data()?.status : 'missing' });
+      setConnectionState((current) => ({ ...current, lastGameSnapshotAt: Date.now(), lastError: '' }));
       setGame((current) => {
         if (snapshot.exists()) {
           resolveRoomLoad(snapshot.id, 'game snapshot');
-          return { id: snapshot.id, ...snapshot.data() };
+          return mergeActiveRoundSnapshot(current, { id: snapshot.id, ...snapshot.data() });
         }
         if (current?.id === snapshot.id || current?.id === gameId) return current;
         return null;
       });
     }, (error) => {
+      setConnectionState((current) => ({ ...current, lastError: error?.message || String(error) }));
       failRoomLoad(gameId, `Could not load the game board: ${error?.message || error}`, 'game-listener');
     });
     const unsubscribeRounds = onSnapshot(roundsRef, (snapshot) => {
@@ -5592,7 +8000,7 @@ function ProductionApp() {
       unsubscribeRounds();
       unsubscribeChat();
     };
-  }, [gameId]);
+  }, [gameId, listenerRefreshKey]);
 
   useEffect(() => {
     if (!game?.id || !COMPLETED_GAME_STATUSES.includes(game.status) || autoResumedGameIdRef.current !== game.id) return undefined;
@@ -5634,26 +8042,17 @@ function ProductionApp() {
   useEffect(() => {
     if (!game?.currentRound) {
       setPenaltyDraft(defaultPenaltyDraft);
-      setAnswerDraft(defaultDraft);
       return;
     }
     setPenaltyDraft({
       jay: normalizePenaltyDraftValue(game.currentRound.penalties?.jay),
       kim: normalizePenaltyDraftValue(game.currentRound.penalties?.kim),
     });
-    const seat = seatForUid(game, user?.uid)
-      || (game?.playerProfiles?.[user?.uid]?.seat === 'kim' ? 'kim' : game?.playerProfiles?.[user?.uid]?.seat === 'jay' ? 'jay' : null)
-      || inferSeatFromUser(user, profile)
-      || null;
-    if (seat && game.currentRound.answers?.[seat]) {
-      setAnswerDraft({
-        ownAnswer: String(game.currentRound.answers[seat].ownAnswer ?? ''),
-        guessedOther: String(game.currentRound.answers[seat].guessedOther ?? ''),
-      });
-    } else {
-      setAnswerDraft(defaultDraft);
-    }
-  }, [game?.currentRound?.id, game?.id, game?.playerProfiles, user?.uid, user?.displayName, user?.email, profile?.displayName]);
+  }, [
+    game?.currentRound?.id,
+    game?.currentRound?.penalties?.jay,
+    game?.currentRound?.penalties?.kim,
+  ]);
 
   useEffect(() => {
     if (!gameId || !game) return;
@@ -5695,16 +8094,16 @@ function ProductionApp() {
       ),
     [currentPlayerStoreId, dashboardSeat, profile?.displayName, user?.displayName, user?.email, user?.uid],
   );
-  const matchesCurrentPlayerIdentity = (value) => {
+  const matchesCurrentPlayerIdentity = useCallback((value) => {
     const normalized = normalizeIdentity(value);
     if (!normalized) return false;
     return currentPlayerIdentityTokens.has(normalized) || (dashboardSeat ? seatFromPlayerRef(value) === dashboardSeat : false);
-  };
-  const canManageStoreForPlayer = (playerRef) => {
+  }, [currentPlayerIdentityTokens, dashboardSeat]);
+  const canManageStoreForPlayer = useCallback((playerRef) => {
     const ownerSeat = seatFromPlayerRef(playerRef);
     if (ownerSeat && dashboardSeat) return ownerSeat === dashboardSeat;
     return matchesCurrentPlayerIdentity(playerRef);
-  };
+  }, [dashboardSeat, matchesCurrentPlayerIdentity]);
   const currentPlayerLifetimeLabel = dashboardSeat
     ? `${PLAYER_LABEL[dashboardSeat] || dashboardSeat}: ${formatScore(Number(playerAccounts?.[dashboardSeat]?.lifetimePenaltyPoints || 0))} penalty points`
     : '';
@@ -5793,8 +8192,14 @@ function ProductionApp() {
     [amaRequests, matchesCurrentPlayerIdentity],
   );
   const currentRound = game?.currentRound || null;
-  const activeGames = gameLibrary.filter((entry) => ['opening', 'active', 'paused'].includes(entry.status));
-  const persistedPreviousGames = gameLibrary.filter((entry) => entry.status === 'completed' || entry.status === 'ended');
+  const activeGames = useMemo(
+    () => gameLibrary.filter((entry) => ['opening', 'active', 'paused'].includes(entry.status)),
+    [gameLibrary],
+  );
+  const persistedPreviousGames = useMemo(
+    () => gameLibrary.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
+    [gameLibrary],
+  );
   const previousGames = useMemo(() => {
     const mergedById = new Map();
     [...localArchivedGames, ...persistedPreviousGames].forEach((entry) => {
@@ -5804,18 +8209,70 @@ function ProductionApp() {
       (left, right) => getRecordTime(right?.endedAt || right?.createdAt || 0) - getRecordTime(left?.endedAt || left?.createdAt || 0),
     );
   }, [localArchivedGames, persistedPreviousGames]);
+  const knownQuizSessionIds = useMemo(
+    () =>
+      new Set(
+        gameLibrary
+          .filter((entry) => (entry?.gameMode || 'standard') === 'quiz')
+          .map((entry) => entry?.id)
+          .filter(Boolean),
+      ),
+    [gameLibrary],
+  );
+  const visibleQuizAnswers = useMemo(
+    () =>
+      (quizAnswers || []).filter((entry) => {
+        const quizSessionId = normalizeText(entry?.quizSessionId || entry?.gameId || '');
+        return !quizSessionId || knownQuizSessionIds.has(quizSessionId);
+      }),
+    [quizAnswers, knownQuizSessionIds],
+  );
   const completedGameAuditRef = useRef(new Set());
   const selectedGameSummary = gameLibrary.find((entry) => entry.id === selectedGameId) || null;
   const selectedLocalGameSummary = localArchivedGames.find((entry) => entry.id === selectedGameId) || null;
   const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || localEndedGameSummary;
   const lobbyRounds = useMemo(() => gameLibrary.flatMap((entry) => entry.rounds || []), [gameLibrary]);
+  const gameBankQuestions = useMemo(
+    () => bankQuestions.filter((question) => (question?.bankType || 'game') !== 'quiz'),
+    [bankQuestions],
+  );
+  const quizBankQuestions = useMemo(
+    () => bankQuestions.filter((question) => question?.bankType === 'quiz'),
+    [bankQuestions],
+  );
   const lobbyCategoryOptions = useMemo(
-    () => deriveCategories(bankQuestions, lobbyRounds, DEFAULT_CATEGORIES).map((category) => category.name).filter(Boolean),
-    [bankQuestions, lobbyRounds],
+    () => deriveCategories(gameBankQuestions, lobbyRounds, DEFAULT_CATEGORIES).map((category) => category.name).filter(Boolean),
+    [gameBankQuestions, lobbyRounds],
   );
   const analytics = useMemo(() => calculateAnalytics(rounds), [rounds]);
-  const lobbyRoundAnalytics = useMemo(() => calculateAnalytics(lobbyRounds), [lobbyRounds]);
-  const bankCount = bankQuestions.length;
+  const redemptionPenaltyAdjustments = useMemo(
+    () =>
+      redemptionHistory
+        .filter((entry) => ['redeemed', 'seen', 'completed'].includes(entry?.status || ''))
+        .map((entry) => {
+          const player = seatFromPlayerRef(entry.pointsDeductedFromPlayerId);
+          const cost = Number(entry.itemCost ?? entry.cost ?? 0);
+          if (!player || !Number.isFinite(cost) || cost <= 0) return null;
+          return {
+            id: entry.id || entry.redemptionId || '',
+            type: 'redemption',
+            player,
+            amount: -cost,
+            redeemedAt: entry.redeemedAt,
+            completedAt: entry.completedAt,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+          };
+        })
+        .filter(Boolean),
+    [redemptionHistory],
+  );
+  const lobbyRoundAnalytics = useMemo(
+    () => calculateAnalytics(lobbyRounds, { penaltyAdjustments: redemptionPenaltyAdjustments }),
+    [lobbyRounds, redemptionPenaltyAdjustments],
+  );
+  const bankCount = gameBankQuestions.length;
+  const quizBankCount = quizBankQuestions.length;
   const trackedGameEntries = useMemo(() => {
     if (!game?.id || isLocalTestGame(game)) return gameLibrary;
     const currentGameSummary = {
@@ -5833,8 +8290,12 @@ function ProductionApp() {
     return nextEntries;
   }, [gameLibrary, game, rounds]);
   const bankQuestionIds = useMemo(
-    () => new Set(bankQuestions.map((question) => question.id).filter(Boolean)),
-    [bankQuestions],
+    () => new Set(gameBankQuestions.map((question) => question.id).filter(Boolean)),
+    [gameBankQuestions],
+  );
+  const quizQuestionIds = useMemo(
+    () => new Set(quizBankQuestions.map((question) => question.id).filter(Boolean)),
+    [quizBankQuestions],
   );
   const reservedQuestionIds = useMemo(
     () =>
@@ -5860,25 +8321,50 @@ function ProductionApp() {
     },
     [trackedGameEntries, bankQuestionIds],
   );
-  const usedQuestionCount = trackedUsedQuestionIds.size;
+  const replayEligibleQuestionIds = useMemo(
+    () =>
+      new Set(
+        (questionReplays || [])
+          .filter((entry) => Boolean(entry?.replayRequested))
+          .map((entry) => normalizeText(entry.questionId || sanitizeNoteKey(entry.questionText || '')))
+          .filter(Boolean),
+      ),
+    [questionReplays],
+  );
+  const effectiveRetiredQuestionIds = useMemo(() => {
+    const next = new Set(trackedUsedQuestionIds);
+    replayEligibleQuestionIds.forEach((questionId) => next.delete(questionId));
+    return next;
+  }, [trackedUsedQuestionIds, replayEligibleQuestionIds]);
+  const usedQuestionCount = effectiveRetiredQuestionIds.size;
   const remainingQuestionCount = Math.max(0, bankCount - usedQuestionCount);
+  const trackedUsedQuizQuestionIds = useMemo(() => {
+    const trackedIds = mergeUniqueIds(...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)));
+    if (!quizQuestionIds.size) return new Set(trackedIds);
+    return new Set(trackedIds.filter((questionId) => quizQuestionIds.has(questionId)));
+  }, [trackedGameEntries, quizQuestionIds]);
+  const usedQuizQuestionCount = trackedUsedQuizQuestionIds.size;
+  const remainingQuizQuestionCount = Math.max(0, quizBankCount - usedQuizQuestionCount);
   const usedQuestionIds = useMemo(() => new Set(rounds.map((round) => round.questionId).filter(Boolean)), [rounds]);
   const availableQuestions = useMemo(() => {
-    const bank = bankQuestions.filter(
+    const bank = gameBankQuestions.filter(
       (question) =>
-        !trackedUsedQuestionIds.has(question.id)
+        !effectiveRetiredQuestionIds.has(question.id)
         && !usedQuestionIds.has(question.id)
         && !reservedQuestionIds.has(question.id),
     );
-    return bank.length ? bank : bankQuestions.length ? [] : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question));
-  }, [bankQuestions, trackedUsedQuestionIds, usedQuestionIds, reservedQuestionIds]);
+    return bank.length ? bank : gameBankQuestions.length ? [] : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question));
+  }, [gameBankQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
   const globalUsedQuestionIds = useMemo(
-    () => new Set(trackedUsedQuestionIds),
-    [trackedUsedQuestionIds],
+    () => new Set(effectiveRetiredQuestionIds),
+    [effectiveRetiredQuestionIds],
   );
   const unusedQuestionCount = Math.max(0, bankCount - globalUsedQuestionIds.size);
-  const previousCompletedGames = persistedPreviousGames.filter((entry) => entry.status === 'completed' || entry.status === 'ended');
+  const previousCompletedGames = useMemo(
+    () => persistedPreviousGames.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
+    [persistedPreviousGames],
+  );
   useEffect(() => {
     previousGames.forEach((entry) => {
       if (!entry?.id || completedGameAuditRef.current.has(entry.id)) return;
@@ -5934,10 +8420,13 @@ function ProductionApp() {
 
   const buildQuestionQueue = async (requestedCount = 10, filters = {}) => {
     const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
-    const questionBankPool = bankSnapshot.empty
+    const requestedBankType = filters.bankType === 'quiz' ? 'quiz' : 'game';
+    const allQuestions = bankSnapshot.empty
       ? STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))
       : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
-    const unavailableQuestionIds = new Set(mergeUniqueIds([...trackedUsedQuestionIds], [...reservedQuestionIds], [lastQuestionId]));
+    const questionBankPool = allQuestions.filter((question) => ((question?.bankType || 'game') === requestedBankType));
+    const retiredQuestionIds = requestedBankType === 'quiz' ? trackedUsedQuizQuestionIds : effectiveRetiredQuestionIds;
+    const unavailableQuestionIds = new Set(mergeUniqueIds([...retiredQuestionIds], [...reservedQuestionIds], [lastQuestionId]));
     const typeSet = new Set((filters.roundTypes || []).filter(Boolean));
     const categorySet = new Set((filters.categories || []).map((category) => normalizeText(category)).filter(Boolean));
     const eligible = dedupeQuestionsById(questionBankPool).filter((question) => {
@@ -5947,7 +8436,7 @@ function ProductionApp() {
       return true;
     });
     const safeRequestedCount = Math.max(1, Number.parseInt(requestedCount, 10) || 10);
-    const unusedEligible = eligible.filter((question) => !trackedUsedQuestionIds.has(question.id));
+    const unusedEligible = eligible.filter((question) => !retiredQuestionIds.has(question.id));
     const selectedUnused = pickDiverseQuestions(unusedEligible, Math.min(safeRequestedCount, unusedEligible.length));
     const selectedUnusedIds = new Set(selectedUnused.map((question) => question.id));
     const fallbackEligible = eligible.filter((question) => !selectedUnusedIds.has(question.id));
@@ -5958,7 +8447,7 @@ function ProductionApp() {
     debugRoom('buildQuestionQueue', {
       requestedCount: safeRequestedCount,
       totalQuestions: questionBankPool.length,
-      usedQuestionCount: trackedUsedQuestionIds.size,
+      usedQuestionCount: retiredQuestionIds.size,
       availableUnusedCount: unusedEligible.length,
       selectedQuestionIds: queue.map((question) => question.id),
     });
@@ -6266,8 +8755,11 @@ function ProductionApp() {
     if (!snapshot.exists()) throw new Error('Game not found.');
     const gameDoc = { id: snapshot.id, ...snapshot.data() };
     const loadedSummary = gameLibrary.find((entry) => entry.id === targetGameId) || null;
+    const isQuizGame = (gameDoc?.gameMode || 'standard') === 'quiz';
     let nextFinalScores = gameDoc.totals || gameDoc.finalScores || { jay: 0, kim: 0 };
     let nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
+    let nextQuizTotals = gameDoc.quizTotals || { jay: 0, kim: 0 };
+    let nextQuizWinner = Number(nextQuizTotals.jay || 0) === Number(nextQuizTotals.kim || 0) ? 'tie' : Number(nextQuizTotals.jay || 0) > Number(nextQuizTotals.kim || 0) ? 'jay' : 'kim';
     let appliedLifetimePoints = false;
     const pendingRound = gameDoc.currentRound || null;
     const effectivePendingRound = pendingRound
@@ -6321,6 +8813,8 @@ function ProductionApp() {
       ? getRoundPenaltyTotals(archivedRoundResult)
       : gameDoc.totals || gameDoc.finalScores || nextFinalScores;
     nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
+    nextQuizTotals = gameDoc.quizTotals || nextQuizTotals;
+    nextQuizWinner = Number(nextQuizTotals.jay || 0) === Number(nextQuizTotals.kim || 0) ? 'tie' : Number(nextQuizTotals.jay || 0) > Number(nextQuizTotals.kim || 0) ? 'jay' : 'kim';
     const finalizedRoundsPlayed = persistedRoundsPlayed + (effectivePendingRound && !alreadyArchivedCurrentRound ? 1 : 0);
     const finalizedUsedQuestionIds = mergeUniqueIds(
       loadedSummary?.rounds?.map((round) => round.questionId) || [],
@@ -6336,17 +8830,43 @@ function ProductionApp() {
       kimCurrent = Number(kimSnap.exists() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : 0);
     }
 
+    const quizWagers = gameDoc.quizWagers || { jay: 0, kim: 0 };
+    const rawJayWager = Math.max(0, Number(quizWagers.jay || 0));
+    const rawKimWager = Math.max(0, Number(quizWagers.kim || 0));
+    const settlementWagerCap = !gameDoc.lifetimePointsApplied
+      ? Math.min(Math.max(0, Math.floor(Number(jayCurrent || 0))), Math.max(0, Math.floor(Number(kimCurrent || 0))))
+      : Math.max(rawJayWager, rawKimWager);
+    const jayWager = isQuizGame ? capQuizWagerAmount(rawJayWager, settlementWagerCap) : rawJayWager;
+    const kimWager = isQuizGame ? capQuizWagerAmount(rawKimWager, settlementWagerCap) : rawKimWager;
+    let wagerPenaltyShiftJay = 0;
+    let wagerPenaltyShiftKim = 0;
+    if (isQuizGame && nextQuizWinner !== 'tie') {
+      if (nextQuizWinner === 'jay') {
+        wagerPenaltyShiftJay = -jayWager;
+        wagerPenaltyShiftKim = kimWager;
+      } else {
+        wagerPenaltyShiftJay = jayWager;
+        wagerPenaltyShiftKim = -kimWager;
+      }
+    }
+
     const batch = writeBatch(firestore);
     if (archivedRoundRef && archivedRoundResult) {
       batch.set(archivedRoundRef, archivedRoundResult);
     }
     if (!gameDoc.lifetimePointsApplied) {
+      const nextJayLifetime = isQuizGame
+        ? Math.max(0, Number(jayCurrent || 0) + wagerPenaltyShiftJay)
+        : addScores(jayCurrent, Number(nextFinalScores.jay || 0));
+      const nextKimLifetime = isQuizGame
+        ? Math.max(0, Number(kimCurrent || 0) + wagerPenaltyShiftKim)
+        : addScores(kimCurrent, Number(nextFinalScores.kim || 0));
       batch.set(
         jayRef,
         {
           uid: fixedPlayerUids.jay,
           displayName: 'Jay',
-          lifetimePenaltyPoints: addScores(jayCurrent, Number(nextFinalScores.jay || 0)),
+          lifetimePenaltyPoints: nextJayLifetime,
           updatedAt: serverTimestamp(),
         },
         { merge: true },
@@ -6356,7 +8876,7 @@ function ProductionApp() {
         {
           uid: fixedPlayerUids.kim,
           displayName: 'Kim',
-          lifetimePenaltyPoints: addScores(kimCurrent, Number(nextFinalScores.kim || 0)),
+          lifetimePenaltyPoints: nextKimLifetime,
           updatedAt: serverTimestamp(),
         },
         { merge: true },
@@ -6369,7 +8889,18 @@ function ProductionApp() {
       endedAt: serverTimestamp(),
       endedBy: endedByUid,
       finalScores: nextFinalScores,
-      winner: nextWinner,
+      winner: isQuizGame ? nextQuizWinner : nextWinner,
+      quizTotals: nextQuizTotals,
+      quizWinner: nextQuizWinner,
+      wagerSettlement: isQuizGame
+        ? {
+            jayWager,
+            kimWager,
+            jayShift: wagerPenaltyShiftJay,
+            kimShift: wagerPenaltyShiftKim,
+            settledAt: serverTimestamp(),
+          }
+        : {},
       roundsPlayed: finalizedRoundsPlayed,
       actualQuestionCount: finalizedRoundsPlayed,
       questionQueueIds: [],
@@ -6425,7 +8956,7 @@ function ProductionApp() {
 
   const buildEndGameConfirmAction = (type, targetGameId, { finalQuestion = false } = {}) => {
     if (!targetGameId) return null;
-    const isLocalTestRoom = isLocalTestGameId(targetGameId);
+    const isLocalTestRoom = isLocalTestGameTarget(targetGameId);
     const body = isLocalTestRoom
       ? (finalQuestion
         ? 'This was the final question. End this local test game and show the summary? Nothing will be saved to Previous Games.'
@@ -6446,7 +8977,7 @@ function ProductionApp() {
   };
 
   const finalizeLocalTestGame = (targetGameId, endedByUid = user?.uid || '', finalStatus = 'completed', options = {}) => {
-    if (!targetGameId || !isLocalTestGameId(targetGameId) || game?.id !== targetGameId) return null;
+    if (!targetGameId || game?.id !== targetGameId || !isLocalTestGame(game)) return null;
 
     const sourceRounds = normalizeStoredRounds(rounds);
     const sourceGame = game;
@@ -7112,7 +9643,7 @@ function ProductionApp() {
     autoResumedGameIdRef.current = '';
     leavePendingGameRef.current = '';
     try {
-      window.localStorage.setItem('kjk-dashboard-tab', 'gameLobby');
+      safeLocalStorageSet('kjk-dashboard-tab', 'gameLobby');
     } catch {
       // Ignore storage failures while returning to the lobby.
     }
@@ -7143,8 +9674,8 @@ function ProductionApp() {
     autoResumedGameIdRef.current = '';
     leavePendingGameRef.current = '';
     try {
-      window.localStorage.setItem('kjk-dashboard-tab', 'activity');
-      window.localStorage.setItem('kjk-activity-tab', 'previousGames');
+      safeLocalStorageSet('kjk-dashboard-tab', 'activity');
+      safeLocalStorageSet('kjk-activity-tab', 'previousGames');
     } catch {
       // Ignore storage failures while returning to the lobby.
     }
@@ -7206,7 +9737,7 @@ function ProductionApp() {
     const preserveBusyState = isBusy;
     if (!preserveBusyState) setIsBusy(true);
     try {
-      if (isLocalTestGameId(actionToConfirm.gameId)) {
+      if (isLocalTestGameTarget(actionToConfirm.gameId)) {
         const endingCurrentRoom = isCurrentGameSession(actionToConfirm.gameId);
         if (actionToConfirm.type === 'end' || actionToConfirm.type === 'complete-game') {
           const result = finalizeLocalTestGame(
@@ -7252,8 +9783,8 @@ function ProductionApp() {
           autoResumedGameIdRef.current = '';
           leavePendingGameRef.current = '';
           try {
-            window.localStorage.setItem('kjk-dashboard-tab', 'activity');
-            window.localStorage.setItem('kjk-activity-tab', 'previousGames');
+            safeLocalStorageSet('kjk-dashboard-tab', 'activity');
+            safeLocalStorageSet('kjk-activity-tab', 'previousGames');
           } catch {
             // Ignore storage failures while returning to the lobby.
           }
@@ -7274,6 +9805,7 @@ function ProductionApp() {
           await endGameById(actionToConfirm.gameId, user?.uid || '');
         }
         await deleteGameById(actionToConfirm.gameId);
+        setGameLibrary((current) => current.filter((entry) => entry?.id !== actionToConfirm.gameId));
         if (isCurrentGameSession(actionToConfirm.gameId)) {
           setGameId('');
           localStorage.removeItem(activeGameKey);
@@ -7443,7 +9975,23 @@ function ProductionApp() {
         setDoc(doc(firestore, 'users', fixedPlayerUids.kim), { lifetimePenaltyPoints: 0, updatedAt: serverTimestamp() }, { merge: true }),
       ]);
       setNotice('Jay and Kim lifetime balances reset to zero.');
+      return true;
     }, 'Could not reset lifetime balances.');
+
+  const saveLifetimeBalancesAction = async ({ jay = 0, kim = 0 } = {}) =>
+    withBusy(async () => {
+      const jayBalance = Number(jay);
+      const kimBalance = Number(kim);
+      if (!Number.isFinite(jayBalance) || !Number.isFinite(kimBalance)) {
+        throw new Error('Enter numeric balances for Jay and Kim.');
+      }
+      await Promise.all([
+        setDoc(doc(firestore, 'users', fixedPlayerUids.jay), { lifetimePenaltyPoints: jayBalance, updatedAt: serverTimestamp() }, { merge: true }),
+        setDoc(doc(firestore, 'users', fixedPlayerUids.kim), { lifetimePenaltyPoints: kimBalance, updatedAt: serverTimestamp() }, { merge: true }),
+      ]);
+      setNotice('Jay and Kim lifetime balances updated.');
+      return true;
+    }, 'Could not update lifetime balances.');
 
   const updateQuestionBankUsage = async (questions = [], used = true) => {
     if (!firestore || !questions.length) return;
@@ -7482,7 +10030,17 @@ function ProductionApp() {
     try {
       return await work();
     } catch (error) {
-      setNotice(error.message || fallback);
+      const message = String(error?.message || fallback || '');
+      const normalizedMessage = normalizeText(message);
+      if (
+        normalizedMessage.includes('quota exceeded')
+        || normalizedMessage.includes('quotaexceeded')
+        || (normalizedMessage.includes('storage') && normalizedMessage.includes('quota'))
+      ) {
+        console.warn('Suppressed storage quota warning from gameplay UI.', error);
+        return null;
+      }
+      setNotice(message || fallback);
       return null;
     } finally {
       setIsBusy(false);
@@ -7507,17 +10065,23 @@ function ProductionApp() {
       : 'Editing Mode disabled. New games will save normally.');
   };
 
-  const syncGoogleSheetQuestions = async ({ sheetValue, existingQuestions, overwriteExisting = true }) => {
+  const syncGoogleSheetQuestions = async ({
+    sheetValue,
+    existingQuestions,
+    overwriteExisting = true,
+    targetBankType = 'game',
+  }) => {
     const reference = parseGoogleSheetReference(sheetValue);
     if (!reference) throw new Error('Enter a valid Google Sheet URL or ID.');
-    const gids = [...new Set((reference.gids?.length ? reference.gids : [reference.gid]).filter(Boolean))];
-    const targets = gids.length
-      ? gids.map((gid) => ({
-          gid,
-          csvUrl: `https://docs.google.com/spreadsheets/d/${reference.id}/export?format=csv&gid=${gid}`,
-        }))
-      : [{ gid: '', csvUrl: reference.csvUrl }];
-    const nextExistingQuestions = [...existingQuestions];
+    const sheetName = targetBankType === 'quiz' ? 'Quiz' : 'Questions';
+    const targets = [{
+      gid: '',
+      csvUrl: `https://docs.google.com/spreadsheets/d/${reference.id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`,
+      sheetName,
+    }];
+    const nextExistingQuestions = [...existingQuestions].filter(
+      (question) => ((question?.bankType || 'game') === (targetBankType === 'quiz' ? 'quiz' : 'game')),
+    );
     const importedQuestions = [];
     const updatedQuestions = [];
     let importedTotal = 0;
@@ -7535,17 +10099,26 @@ function ProductionApp() {
         existingQuestions: nextExistingQuestions,
         overwriteExisting,
         importedAt: new Date().toISOString(),
-        sourceLabel: `${reference.id}${target.gid ? `:${target.gid}` : ''}`,
+        sourceLabel: `${reference.id}:${target.sheetName || target.gid || 'Questions'}`,
       });
+      const parsedResult = targetBankType === 'quiz'
+        ? parseGoogleSheetQuizImport({
+            rawText,
+            existingQuestions: nextExistingQuestions.filter((question) => (question?.bankType || 'game') === 'quiz'),
+            overwriteExisting,
+            importedAt: new Date().toISOString(),
+            sourceLabel: `${reference.id}:${target.sheetName || 'Quiz'}`,
+          })
+        : result;
 
-      importedQuestions.push(...result.imports);
-      updatedQuestions.push(...result.updates);
-      importedTotal += result.summary.imported;
-      updatedTotal += result.summary.updated;
-      duplicatedTotal += result.summary.duplicates;
-      invalidTotal += result.summary.invalid;
-      skippedTotal += result.summary.skipped;
-      nextExistingQuestions.push(...result.imports, ...result.updates);
+      importedQuestions.push(...parsedResult.imports);
+      updatedQuestions.push(...parsedResult.updates);
+      importedTotal += parsedResult.summary.imported;
+      updatedTotal += parsedResult.summary.updated;
+      duplicatedTotal += parsedResult.summary.duplicates;
+      invalidTotal += parsedResult.summary.invalid;
+      skippedTotal += parsedResult.summary.skipped;
+      nextExistingQuestions.push(...parsedResult.imports, ...parsedResult.updates);
     }
 
     return {
@@ -7586,7 +10159,7 @@ function ProductionApp() {
       },
       { merge: true },
     );
-    if (nextGameId) localStorage.setItem(activeGameKey, nextGameId);
+    if (nextGameId) safeLocalStorageSet(activeGameKey, nextGameId);
     else localStorage.removeItem(activeGameKey);
     setGameId(nextGameId);
   };
@@ -7619,6 +10192,7 @@ function ProductionApp() {
 
   useEffect(() => {
     if (!user || !firestore || autoSheetImportAttemptedRef.current) return;
+    if (gameId || game?.id) return;
     if (!bankQuestions.length || bankQuestions.length > STARTER_QUESTIONS.length) return;
     const looksStarterOnly = isStarterOnlyQuestionBank(bankQuestions);
     if (!looksStarterOnly) return;
@@ -7639,7 +10213,7 @@ function ProductionApp() {
       .catch((error) => {
         console.warn('Automatic Google Sheet top-up failed.', error);
       });
-  }, [user, firestore, bankQuestions, sheetInput]);
+  }, [user, firestore, bankQuestions, sheetInput, gameId, game?.id]);
 
   const saveDisplayNameProfile = async (nextDisplayName) =>
     withBusy(async () => {
@@ -7695,6 +10269,10 @@ function ProductionApp() {
   const savePrivateQuestionNote = async ({ round = null, noteText = '' } = {}) =>
     withBusy(async () => {
       if (!firestore || !user?.uid) throw new Error('You must be signed in.');
+      if (isLocalTestGame(game) || isLocalTestGameId(game?.id)) {
+        setNotice('Editing Mode: private question notes are local only and were not saved to Firebase.');
+        return true;
+      }
       const trimmedNote = normalizeText(noteText);
       if (!trimmedNote) throw new Error('Write a note before saving.');
       const questionId = normalizeText(round?.questionId || '') || sanitizeNoteKey(round?.question || '');
@@ -7725,21 +10303,509 @@ function ProductionApp() {
       return true;
     }, 'Could not save private note.');
 
+  const updatePrivateQuestionNote = async (noteId, noteText) =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid) throw new Error('You must be signed in.');
+      const cleanNoteId = normalizeText(noteId);
+      const trimmedNote = normalizeText(noteText);
+      if (!cleanNoteId) throw new Error('Missing note id.');
+      if (!trimmedNote) throw new Error('Write a note before saving.');
+      await setDoc(
+        doc(firestore, 'users', user.uid, 'questionNotes', cleanNoteId),
+        {
+          noteText: trimmedNote,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      setNotice('Private note updated.');
+      return true;
+    }, 'Could not update private note.');
+
+  const deletePrivateQuestionNote = async (noteId) =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid) throw new Error('You must be signed in.');
+      const cleanNoteId = normalizeText(noteId);
+      if (!cleanNoteId) throw new Error('Missing note id.');
+      await deleteDoc(doc(firestore, 'users', user.uid, 'questionNotes', cleanNoteId));
+      setNotice('Private note deleted.');
+      return true;
+    }, 'Could not delete private note.');
+
+  const saveQuestionFeedback = async ({ round = null, feedbackValue = '' } = {}) => {
+    if (!firestore || !user?.uid || !game?.id || !round) return;
+    if (isLocalTestGame(game) || isLocalTestGameId(game?.id)) {
+      setNotice('Editing Mode: question feedback is local only and was not saved to Firebase.');
+      return;
+    }
+    const cleanFeedback = feedbackValue === 'liked' ? 'liked' : feedbackValue === 'disliked' ? 'disliked' : '';
+    if (!cleanFeedback) return;
+    const questionId = normalizeText(round?.questionId || '') || sanitizeNoteKey(round?.question || '');
+    if (!questionId) return;
+    const feedbackId = `${game.id}-${questionId}-${user.uid}`;
+    const feedbackRef = doc(firestore, 'questionFeedback', feedbackId);
+    await setDoc(
+      feedbackRef,
+      {
+        feedbackId,
+        pairId: buildPairKey(),
+        userId: user.uid,
+        userSeat: seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '',
+        gameId: game.id,
+        joinCode: game?.joinCode || game?.roomCode || game?.code || '',
+        questionId: normalizeText(round?.questionId || ''),
+        questionText: normalizeText(round?.question || ''),
+        category: normalizeText(round?.category || ''),
+        roundType: normalizeText(round?.roundType || ''),
+        feedbackValue: cleanFeedback,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+  };
+
+  const saveQuestionReplayRequest = async ({ round = null } = {}) => {
+    if (!firestore || !user?.uid || !game?.id || !round) return;
+    if ((game?.gameMode || 'standard') !== 'standard' || (game?.questionBankType || 'game') !== 'game') return;
+    if (isLocalTestGame(game) || isLocalTestGameId(game?.id)) {
+      setNotice('Editing Mode: replay requests are local only and were not saved to Firebase.');
+      return;
+    }
+    const questionId = normalizeText(round?.questionId || '') || sanitizeNoteKey(round?.question || '');
+    if (!questionId) return;
+    const replayId = `${questionId}-${user.uid}`;
+    const replayRef = doc(firestore, 'questionReplays', replayId);
+    await setDoc(
+      replayRef,
+      {
+        replayId,
+        pairId: buildPairKey(),
+        userId: user.uid,
+        userSeat: seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '',
+        gameId: game.id,
+        joinCode: game?.joinCode || game?.roomCode || game?.code || '',
+        questionId: normalizeText(round?.questionId || ''),
+        questionText: normalizeText(round?.question || ''),
+        category: normalizeText(round?.category || ''),
+        roundType: normalizeText(round?.roundType || ''),
+        replayRequested: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+    setNotice('Question can appear again.');
+  };
+
+  const saveQuizWager = async () =>
+    withBusy(async () => {
+      if (!user?.uid || !game?.id) throw new Error('Open a quiz game first.');
+      if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('Wagers are for Quick Fire Quiz only.');
+      const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+      if (!seat) throw new Error('Could not determine your player seat.');
+      if (!game?.seats?.jay || !game?.seats?.kim) throw new Error('Both players must join before negotiating the quiz wager.');
+      if (isQuizWagerAgreementLocked(game)) throw new Error('The shared quiz wager is already agreed.');
+      const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
+      const wagerCapAmount = isCurrentLocalTestGame && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
+      const requestedWagerValue = sanitizeQuizWagerAmount(quizWagerDraft);
+      if (requestedWagerValue > wagerCapAmount) throw new Error(`Quiz wager cannot exceed ${formatScore(wagerCapAmount)}.`);
+      const wagerValue = capQuizWagerAmount(requestedWagerValue, wagerCapAmount);
+      const nextAgreement = {
+        ...defaultQuizWagerAgreement(),
+        ...(game.quizWagerAgreement || {}),
+        status: 'proposal_pending',
+        amount: null,
+        proposedAmount: wagerValue,
+        proposedBySeat: seat,
+        proposalStatus: 'pending',
+        rejectedBySeat: '',
+        acceptedBySeat: '',
+        wheelOptIn: { jay: false, kim: false },
+        wheelBaseAmount: 0,
+        wheelSlots: [],
+        wheelResultIndex: null,
+        wheelCountdownStartedAt: '',
+        wheelSpinStartedAt: '',
+        wheelSpinEndsAt: '',
+        lockedByWheel: false,
+        proposedAt: new Date().toISOString(),
+      };
+      if (isCurrentLocalTestGame) {
+        setGame((current) =>
+          current
+            ? {
+                ...current,
+                quizWagerAgreement: nextAgreement,
+                quizReadyState: defaultQuizReadyState('opening'),
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        setNotice(`Shared wager proposed: ${formatScore(wagerValue)}.`);
+        return true;
+      }
+      if (!firestore) throw new Error('Firebase is not configured.');
+      const gameRef = doc(firestore, 'games', game.id);
+      await setDoc(
+        gameRef,
+        {
+          quizWagerAgreement: nextAgreement,
+          quizReadyState: defaultQuizReadyState('opening'),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      setNotice(`Shared wager proposed: ${formatScore(wagerValue)}.`);
+    }, 'Could not save quiz wager.');
+
+  const acceptQuizWager = async () =>
+    withBusy(async () => {
+      if (!user?.uid || !game?.id) throw new Error('Open a quiz game first.');
+      if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('Wagers are for Quick Fire Quiz only.');
+      const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+      if (!seat) throw new Error('Could not determine your player seat.');
+      const agreement = normalizeQuizWagerAgreement(game);
+      if (agreement.status !== 'proposal_pending' || !Number.isFinite(Number(agreement.proposedAmount))) throw new Error('No wager proposal is waiting for acceptance.');
+      if (agreement.proposedBySeat === seat && !isCurrentLocalTestGame) throw new Error('The other player must accept your wager proposal.');
+      const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
+      const wagerCapAmount = isCurrentLocalTestGame && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
+      const wagerValue = capQuizWagerAmount(agreement.proposedAmount, wagerCapAmount);
+      const nextAgreement = {
+        ...agreement,
+        status: 'agreed',
+        amount: wagerValue,
+        proposalStatus: 'accepted',
+        acceptedBySeat: agreement.proposedBySeat === seat && isCurrentLocalTestGame ? oppositeSeatOf(seat) : seat,
+        rejectedBySeat: '',
+        wheelOptIn: { jay: false, kim: false },
+        lockedByWheel: false,
+        acceptedAt: new Date().toISOString(),
+      };
+      if (isCurrentLocalTestGame) {
+        setGame((current) =>
+          current
+            ? {
+                ...current,
+                quizWagers: { jay: wagerValue, kim: wagerValue },
+                quizWagerAgreement: nextAgreement,
+                quizReadyState: defaultQuizReadyState('opening'),
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        setNotice(`Shared quiz wager agreed: ${formatScore(wagerValue)}.`);
+        return true;
+      }
+      if (!firestore) throw new Error('Firebase is not configured.');
+      await setDoc(
+        doc(firestore, 'games', game.id),
+        {
+          quizWagers: { jay: wagerValue, kim: wagerValue },
+          quizWagerAgreement: nextAgreement,
+          quizReadyState: defaultQuizReadyState('opening'),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      setNotice(`Shared quiz wager agreed: ${formatScore(wagerValue)}.`);
+    }, 'Could not accept quiz wager.');
+
+  const rejectQuizWager = async () =>
+    withBusy(async () => {
+      if (!user?.uid || !game?.id) throw new Error('Open a quiz game first.');
+      if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('Wagers are for Quick Fire Quiz only.');
+      const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+      if (!seat) throw new Error('Could not determine your player seat.');
+      const agreement = normalizeQuizWagerAgreement(game);
+      if (agreement.status !== 'proposal_pending') throw new Error('No wager proposal is waiting for a response.');
+      if (agreement.proposedBySeat === seat && !isCurrentLocalTestGame) throw new Error('The other player must reject your wager proposal.');
+      const nextAgreement = {
+        ...defaultQuizWagerAgreement(),
+        status: 'negotiating',
+        proposalStatus: 'rejected',
+        proposedAmount: agreement.proposedAmount,
+        proposedBySeat: agreement.proposedBySeat,
+        rejectedBySeat: agreement.proposedBySeat === seat && isCurrentLocalTestGame ? oppositeSeatOf(seat) : seat,
+        rejectedAt: new Date().toISOString(),
+      };
+      if (isCurrentLocalTestGame) {
+        setGame((current) =>
+          current
+            ? {
+                ...current,
+                quizWagerAgreement: nextAgreement,
+                quizReadyState: defaultQuizReadyState('opening'),
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        setNotice('Quiz wager rejected. Make a counter proposal.');
+        return true;
+      }
+      if (!firestore) throw new Error('Firebase is not configured.');
+      await setDoc(
+        doc(firestore, 'games', game.id),
+        {
+          quizWagerAgreement: nextAgreement,
+          quizReadyState: defaultQuizReadyState('opening'),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      setNotice('Quiz wager rejected. Make a counter proposal.');
+    }, 'Could not reject quiz wager.');
+
+  const setQuizWheelOptIn = async (optIn = true) =>
+    withBusy(async () => {
+      if (!user?.uid || !game?.id) throw new Error('Open a quiz game first.');
+      if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('The wager wheel is for Quick Fire Quiz only.');
+      const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+      if (!seat) throw new Error('Could not determine your player seat.');
+      if (!game?.seats?.jay || !game?.seats?.kim) throw new Error('Both players must join before using the wager wheel.');
+      if (isQuizWagerAgreementLocked(game)) throw new Error('The shared quiz wager is already agreed.');
+      const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
+      const baseAmount = isCurrentLocalTestGame && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
+      if (baseAmount <= 0) throw new Error('Both players need penalty points before the wheel can set a wager.');
+      const buildAgreement = (source = {}) => {
+        const currentAgreement = normalizeQuizWagerAgreement({ quizWagerAgreement: source.quizWagerAgreement || game.quizWagerAgreement });
+        const slots = currentAgreement.wheelSlots.length && Number(currentAgreement.wheelBaseAmount || 0) === baseAmount
+          ? currentAgreement.wheelSlots
+          : shuffleQuizWheelSlots(buildQuizWheelSlots(baseAmount));
+        const nextOptIn = {
+          jay: Boolean(currentAgreement.wheelOptIn?.jay),
+          kim: Boolean(currentAgreement.wheelOptIn?.kim),
+          [seat]: Boolean(optIn),
+        };
+        if (isCurrentLocalTestGame) {
+          nextOptIn.jay = Boolean(optIn);
+          nextOptIn.kim = Boolean(optIn);
+        }
+        const bothOptedIn = Boolean(nextOptIn.jay && nextOptIn.kim);
+        const now = Date.now();
+        if (!bothOptedIn) {
+          return {
+            ...defaultQuizWagerAgreement(),
+            status: 'negotiating',
+            wheelOptIn: nextOptIn,
+            wheelBaseAmount: baseAmount,
+            wheelSlots: slots,
+          };
+        }
+        const resultIndex = Math.floor(Math.random() * slots.length);
+        return {
+          ...defaultQuizWagerAgreement(),
+          status: 'wheel_countdown',
+          proposedAmount: null,
+          proposedBySeat: '',
+          wheelOptIn: nextOptIn,
+          wheelBaseAmount: baseAmount,
+          wheelSlots: slots,
+          wheelResultIndex: resultIndex,
+          wheelCountdownStartedAt: new Date(now).toISOString(),
+          wheelSpinStartedAt: new Date(now + QUIZ_WHEEL_COUNTDOWN_MS).toISOString(),
+          wheelSpinEndsAt: new Date(now + QUIZ_WHEEL_COUNTDOWN_MS + QUIZ_WHEEL_SPIN_MS).toISOString(),
+          lockedByWheel: false,
+        };
+      };
+      if (isCurrentLocalTestGame) {
+        const nextAgreement = buildAgreement(game);
+        setGame((current) =>
+          current
+            ? {
+                ...current,
+                quizWagerAgreement: nextAgreement,
+                quizReadyState: defaultQuizReadyState('opening'),
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        setNotice(nextAgreement.status === 'wheel_countdown' ? 'Both players chose the wheel.' : 'Wheel choice updated.');
+        return true;
+      }
+      if (!firestore) throw new Error('Firebase is not configured.');
+      const gameRef = doc(firestore, 'games', game.id);
+      await runTransaction(firestore, async (transaction) => {
+        const snap = await transaction.get(gameRef);
+        if (!snap.exists()) throw new Error('Room not found.');
+        const data = snap.data() || {};
+        if (data.currentRound) throw new Error('The quiz has already started.');
+        if (isQuizWagerAgreementLocked(data)) throw new Error('The shared quiz wager is already agreed.');
+        const nextAgreement = buildAgreement(data);
+        transaction.update(gameRef, {
+          quizWagerAgreement: nextAgreement,
+          quizReadyState: defaultQuizReadyState('opening'),
+          updatedAt: serverTimestamp(),
+        });
+      });
+      setNotice(optIn ? 'Wheel choice saved.' : 'Wheel choice cleared.');
+    }, 'Could not update wager wheel choice.');
+
+  const finalizeQuizWheelWager = async () => {
+    if (!game?.id || (game?.gameMode || 'standard') !== 'quiz') return;
+    const agreement = normalizeQuizWagerAgreement(game);
+    const slots = agreement.wheelSlots.length ? agreement.wheelSlots : buildQuizWheelSlots(agreement.wheelBaseAmount);
+    const resultIndex = Math.max(0, Math.min(Math.max(0, slots.length - 1), Number(agreement.wheelResultIndex || 0)));
+    const wagerValue = capQuizWagerAmount(slots[resultIndex] || 0, agreement.wheelBaseAmount);
+    if (agreement.status === 'wheel_locked' || !Number.isFinite(Date.parse(agreement.wheelSpinEndsAt || ''))) return;
+    if (Date.now() < Date.parse(agreement.wheelSpinEndsAt || '')) return;
+    const nextAgreement = {
+      ...agreement,
+      status: 'wheel_locked',
+      amount: wagerValue,
+      proposalStatus: 'accepted',
+      lockedByWheel: true,
+      lockedAt: new Date().toISOString(),
+    };
+    if (isCurrentLocalTestGame) {
+      setGame((current) =>
+        current
+          ? {
+              ...current,
+              quizWagers: { jay: wagerValue, kim: wagerValue },
+              quizWagerAgreement: nextAgreement,
+              quizReadyState: defaultQuizReadyState('opening'),
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      setNotice(`Wager wheel landed on ${formatScore(wagerValue)}.`);
+      return;
+    }
+    if (!firestore) return;
+    const gameRef = doc(firestore, 'games', game.id);
+    await runTransaction(firestore, async (transaction) => {
+      const snap = await transaction.get(gameRef);
+      if (!snap.exists()) return;
+      const data = snap.data() || {};
+      const liveAgreement = normalizeQuizWagerAgreement(data);
+      if (liveAgreement.status === 'wheel_locked' || liveAgreement.status === 'agreed') return;
+      const liveSlots = liveAgreement.wheelSlots.length ? liveAgreement.wheelSlots : buildQuizWheelSlots(liveAgreement.wheelBaseAmount);
+      const liveIndex = Math.max(0, Math.min(Math.max(0, liveSlots.length - 1), Number(liveAgreement.wheelResultIndex || 0)));
+      const liveWagerValue = capQuizWagerAmount(liveSlots[liveIndex] || 0, liveAgreement.wheelBaseAmount);
+      transaction.update(gameRef, {
+        quizWagers: { jay: liveWagerValue, kim: liveWagerValue },
+        quizWagerAgreement: {
+          ...liveAgreement,
+          status: 'wheel_locked',
+          amount: liveWagerValue,
+          proposalStatus: 'accepted',
+          lockedByWheel: true,
+          lockedAt: new Date().toISOString(),
+        },
+        quizReadyState: defaultQuizReadyState('opening'),
+        updatedAt: serverTimestamp(),
+      });
+    });
+    setNotice(`Wager wheel landed on ${formatScore(wagerValue)}.`);
+  };
+
+  const requestQuizOverride = async (requestedFinalResult = '') =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid || !game?.id) throw new Error('Open a quiz game first.');
+      if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('Overrides are for Quick Fire Quiz only.');
+      if (!game?.currentRound?.id) throw new Error('No active quiz round.');
+      const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+      if (!seat) throw new Error('Could not determine your player seat.');
+      const normalizedRequest = requestedFinalResult === 'incorrect' ? 'incorrect' : 'correct';
+      const viewerAnswer = game.currentRound.answers?.[seat] || {};
+      if (!normalizeText(viewerAnswer?.ownAnswer || '')) throw new Error('Submit an answer before requesting an override.');
+      const originalFinal = normalizeText(viewerAnswer?.finalResult || viewerAnswer?.originalSystemResult || (viewerAnswer?.wasCorrect ? 'correct' : 'incorrect')) || 'incorrect';
+      const gameRef = doc(firestore, 'games', game.id);
+      await updateDoc(gameRef, {
+        [`currentRound.overrideRequests.${seat}`]: {
+          requesterSeat: seat,
+          requesterUserId: user.uid,
+          roundId: game.currentRound.id,
+          requestedFinalResult: normalizedRequest,
+          originalFinalResult: originalFinal,
+          status: 'pending',
+          requestedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setNotice('Override requested.');
+    }, 'Could not request override.');
+
+  const respondQuizOverride = async (requestSeat = '', decision = '') =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid || !game?.id) throw new Error('Open a quiz game first.');
+      if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('Overrides are for Quick Fire Quiz only.');
+      if (!game?.currentRound?.id) throw new Error('No active quiz round.');
+      const responderSeat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+      if (!responderSeat) throw new Error('Could not determine your player seat.');
+      const normalizedSeat = requestSeat === 'kim' ? 'kim' : requestSeat === 'jay' ? 'jay' : '';
+      if (!normalizedSeat) throw new Error('Missing override request seat.');
+      if (normalizedSeat === responderSeat) throw new Error('You cannot approve your own override.');
+      const request = game.currentRound.overrideRequests?.[normalizedSeat] || null;
+      if (!request || request.status !== 'pending') throw new Error('No pending override request.');
+      if (request.roundId && request.roundId !== game.currentRound.id) throw new Error('That override request belongs to a previous round.');
+      const requestedFinal = request.requestedFinalResult === 'incorrect' ? 'incorrect' : 'correct';
+      const shouldApprove = decision === 'approved';
+      const gameRef = doc(firestore, 'games', game.id);
+      const answer = game.currentRound.answers?.[normalizedSeat] || {};
+      const timerValue = Number(answer.timerValue || 0);
+      const approvedCorrect = shouldApprove && requestedFinal === 'correct';
+      const nextPointsAwarded = approvedCorrect ? pointsFromTimerSeconds(timerValue) : 0;
+      const nextFinal = shouldApprove ? requestedFinal : (request.originalFinalResult === 'correct' ? 'correct' : 'incorrect');
+      await updateDoc(gameRef, {
+        [`currentRound.overrideRequests.${normalizedSeat}`]: {
+          ...request,
+          status: shouldApprove ? 'approved' : 'rejected',
+          responderSeat,
+          responderUserId: user.uid,
+          decidedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        ...(shouldApprove
+          ? {
+              [`currentRound.answers.${normalizedSeat}.finalResult`]: nextFinal,
+              [`currentRound.answers.${normalizedSeat}.wasCorrect`]: nextFinal === 'correct',
+              [`currentRound.answers.${normalizedSeat}.pointsAwarded`]: nextPointsAwarded,
+              [`currentRound.answers.${normalizedSeat}.overrideStatus`]: 'approved',
+            }
+          : {
+              [`currentRound.answers.${normalizedSeat}.overrideStatus`]: 'rejected',
+            }),
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const roundQuestionId = normalizeText(game.currentRound?.questionId || '') || sanitizeNoteKey(game.currentRound?.question || '');
+      const requesterUserId = request.requesterUserId || answer.submittedBy || '';
+      if (roundQuestionId && requesterUserId) {
+        const quizAnswerId = `${game.id}-${roundQuestionId}-${requesterUserId}`;
+        await updateDoc(doc(firestore, 'quizAnswers', quizAnswerId), {
+          finalResult: nextFinal,
+          wasCorrect: nextFinal === 'correct',
+          pointsAwarded: nextPointsAwarded,
+          overrideStatus: shouldApprove ? 'approved' : 'rejected',
+          updatedAt: serverTimestamp(),
+        }).catch(() => null);
+      }
+      setNotice(shouldApprove ? 'Override approved.' : 'Override rejected.');
+    }, 'Could not respond to override.');
+
   const createGame = async (options = {}) =>
     withBusy(async () => {
       setLocalEndedGameSummary(null);
       if (!firestore || !user) throw new Error('Firebase is not configured.');
+      const gameMode = options.gameMode === 'quiz' ? 'quiz' : 'standard';
+      const trimmedGameName = normalizeText(lobbyGameName);
+      const effectiveGameName = trimmedGameName || (gameMode === 'quiz' ? 'Quick Fire Quiz' : '');
       console.debug('Create New Game clicked', {
-        gameName: lobbyGameName,
-        requestedQuestionCount: lobbyQuestionCount,
+        gameName: effectiveGameName || lobbyGameName,
+        requestedQuestionCount: options.requestedQuestionCount ?? lobbyQuestionCount,
         createCode: lobbyCode,
         mode: options.mode || 'random',
+        gameMode,
         roundTypes: options.roundTypes || [],
         categories: options.categories || [],
       });
-      const trimmedGameName = normalizeText(lobbyGameName);
-      if (!trimmedGameName) throw new Error('Enter a game name.');
-      const requestedQuestionCount = Number.parseInt(lobbyQuestionCount, 10);
+      if (!effectiveGameName) throw new Error('Enter a game name.');
+      const requestedQuestionCount = Number.parseInt(String(options.requestedQuestionCount ?? lobbyQuestionCount), 10);
       if (!Number.isFinite(requestedQuestionCount) || requestedQuestionCount <= 0) {
         throw new Error('Enter a valid number of questions.');
       }
@@ -7748,6 +10814,7 @@ function ProductionApp() {
       const previousRounds = rounds;
       const previousChatMessages = chatMessages;
       const selectionMode = options.mode === 'custom' ? 'custom' : 'random';
+      const targetBankType = gameMode === 'quiz' ? 'quiz' : 'game';
       const selectedRoundTypes = selectionMode === 'custom' ? options.roundTypes || [] : [];
       const selectedCategories = selectionMode === 'custom' ? options.categories || [] : [];
       const creatorSeat = preferredSeatForUser(user, profile);
@@ -7764,6 +10831,7 @@ function ProductionApp() {
         const queueResult = await buildQuestionQueue(requestedQuestionCount, {
           roundTypes: selectedRoundTypes,
           categories: selectedCategories,
+          bankType: targetBankType,
         });
         const queue = queueResult.queue;
         const warning = queueResult.warning;
@@ -7778,17 +10846,17 @@ function ProductionApp() {
             return;
           }
         }
-        const localGameId = makeId(TEST_GAME_PREFIX);
+        const localGameId = `${TEST_GAME_PREFIX}${makeId('local')}`;
         const localJoinCode = `TEST${makeJoinCode().slice(0, 2)}`;
         const hostName = profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player';
         const localOtherPlayerName = inviteTargetSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)';
         const createdAt = new Date().toISOString();
-        const localGameState = {
+	        const localGameState = {
           id: localGameId,
           joinCode: localJoinCode,
           code: localJoinCode,
           roomCode: localJoinCode,
-          gameName: trimmedGameName || `Editing Mode ${localJoinCode}`,
+          gameName: effectiveGameName || `Editing Mode ${localJoinCode}`,
           status: 'active',
           hostUid: user.uid,
           hostDisplayName: hostName,
@@ -7812,9 +10880,15 @@ function ProductionApp() {
               photoURL: '',
             },
           },
-          totals: { jay: 0, kim: 0 },
-          currentRound: null,
+	          totals: { jay: 0, kim: 0 },
+	          quizTotals: { jay: 0, kim: 0 },
+	          quizWagers: { jay: 0, kim: 0 },
+          quizWagerAgreement: gameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
+          quizReadyState: gameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
+	          currentRound: null,
           pairId: buildPairKey(),
+          gameMode,
+          questionBankType: targetBankType,
           questionSelectionMode: selectionMode,
           questionSelectionFilters: {
             roundTypes: selectedRoundTypes,
@@ -7857,7 +10931,7 @@ function ProductionApp() {
         joinCode,
         code: joinCode,
         roomCode: joinCode,
-        gameName: trimmedGameName || `Jay vs Kim ${joinCode}`,
+        gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
         status: 'opening',
         hostUid: user.uid,
         hostDisplayName: profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player',
@@ -7876,8 +10950,14 @@ function ProductionApp() {
           },
         },
         totals: { jay: 0, kim: 0 },
+        quizTotals: { jay: 0, kim: 0 },
+        quizWagers: { jay: 0, kim: 0 },
+        quizWagerAgreement: gameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
+        quizReadyState: gameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
         currentRound: null,
         pairId: buildPairKey(),
+        gameMode,
+        questionBankType: targetBankType,
         questionSelectionMode: selectionMode,
         questionSelectionFilters: {
           roundTypes: selectedRoundTypes,
@@ -7913,8 +10993,8 @@ function ProductionApp() {
         setGame(openingGameState);
         setRounds([]);
         setGameId(gameRef.id);
-        localStorage.setItem(activeGameKey, gameRef.id);
-        setNotice(`Opening ${trimmedGameName || 'new game'}…`);
+        safeLocalStorageSet(activeGameKey, gameRef.id);
+        setNotice(`Opening ${effectiveGameName || 'new game'}…`);
 
         let queue = [];
         let warning = '';
@@ -7926,6 +11006,7 @@ function ProductionApp() {
           const queueResult = await buildQuestionQueue(requestedQuestionCount, {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
+            bankType: targetBankType,
           });
           queue = queueResult.queue;
           warning = queueResult.warning;
@@ -7967,7 +11048,7 @@ function ProductionApp() {
           };
           setGame(createdGameState);
           setGameId(gameRef.id);
-          localStorage.setItem(activeGameKey, gameRef.id);
+          safeLocalStorageSet(activeGameKey, gameRef.id);
           await setDoc(gameRef, createdGameDoc, { merge: true });
           setNotice(`Game ${joinCode} created with ${actualCount} questions.${warning ? ` ${warning}` : ''}`);
           console.debug('Create New Game queue committed', { gameId: gameRef.id, joinCode, actualCount });
@@ -8032,7 +11113,7 @@ function ProductionApp() {
           setGameId(previousGameId || '');
           setRounds(previousRounds || []);
           setChatMessages(previousChatMessages || []);
-          if (previousGameId) localStorage.setItem(activeGameKey, previousGameId);
+          if (previousGameId) safeLocalStorageSet(activeGameKey, previousGameId);
           else localStorage.removeItem(activeGameKey);
         }
         resetRoomLoadState();
@@ -8052,6 +11133,11 @@ function ProductionApp() {
     try {
       autoResumedGameIdRef.current = '';
       armRoomLoadTimeout(targetGameId, inviteId ? 'joining invited game' : 'joining game');
+      setGameId(targetGameId);
+      safeLocalStorageSet(activeGameKey, targetGameId);
+      setGame(null);
+      setRounds([]);
+      setChatMessages([]);
       const fresh = await getDoc(roomRef);
       if (!fresh.exists()) {
         if (inviteId) await setGameInviteStatus(inviteId, { status: 'expired', gameStatus: 'missing', expiredAt: serverTimestamp() });
@@ -8171,7 +11257,7 @@ function ProductionApp() {
       setGameId(previousGameId || '');
       setRounds(previousRounds || []);
       setChatMessages(previousChatMessages || []);
-      if (previousGameId) localStorage.setItem(activeGameKey, previousGameId);
+      if (previousGameId) safeLocalStorageSet(activeGameKey, previousGameId);
       else localStorage.removeItem(activeGameKey);
       resetRoomLoadState();
       throw error;
@@ -8211,13 +11297,32 @@ function ProductionApp() {
       setNotice('Invite dismissed.');
     }, 'Could not dismiss invite.');
 
-  const resumeGame = async (nextGameId) => {
-    if (!nextGameId) return;
-    setLocalEndedGameSummary(null);
-    autoResumedGameIdRef.current = '';
-    armRoomLoadTimeout(nextGameId, 'resuming room');
-    await persistActiveGame(nextGameId);
-  };
+  const resumeGame = async (nextGameId) =>
+    withBusy(async () => {
+      if (!nextGameId) return;
+      const requestedEntry = gameLibrary.find((entry) => entry.id === nextGameId) || null;
+      const requestedCode = gameRoomCodeForLookup(requestedEntry || {});
+      const latestJoinableForCode = requestedCode
+        ? [...gameLibrary]
+            .filter((entry) => gameRoomCodeForLookup(entry) === requestedCode && isGameSessionJoinable(entry))
+            .sort(sortByNewestGameSession)[0] || null
+        : null;
+      const targetGameId = latestJoinableForCode?.id || nextGameId;
+      if (firestore) {
+        const snap = await getDoc(doc(firestore, 'games', targetGameId)).catch(() => null);
+        const joinable = snap?.exists?.() ? isJoinableGameSnapshot(snap.data()) : false;
+        if (!joinable) {
+          clearPersistedActiveGame(targetGameId);
+          if (user) {
+            await setDoc(doc(firestore, 'users', user.uid), { uid: user.uid, activeGameId: '', updatedAt: serverTimestamp() }, { merge: true }).catch(() => null);
+          }
+          throw new Error('That game is no longer available to resume.');
+        }
+      }
+      setLocalEndedGameSummary(null);
+      autoResumedGameIdRef.current = '';
+      await joinGameSessionById(targetGameId);
+    }, 'Could not resume game.');
 
   const leaveGame = async () => {
     autoResumedGameIdRef.current = '';
@@ -8350,54 +11455,377 @@ function ProductionApp() {
     }
     const gameRef = makeGameRef();
     if (!gameRef || !game?.currentRound) return;
-    await setDoc(gameRef, {
-      currentRound: {
-        ...game.currentRound,
-        ...nextRoundPatch,
-        updatedAt: serverTimestamp(),
-      },
+    const patch = Object.fromEntries(
+      Object.entries(nextRoundPatch || {}).map(([key, value]) => [`currentRound.${key}`, value]),
+    );
+    await updateDoc(gameRef, {
+      ...patch,
+      'currentRound.updatedAt': serverTimestamp(),
       updatedAt: serverTimestamp(),
-    }, { merge: true });
+    });
   };
 
   useEffect(() => {
     if (!game?.currentRound || inferredRole !== 'host') return undefined;
+    if ((game?.gameMode || 'standard') === 'quiz') return undefined;
+    if (game.currentRound.status !== 'reveal') return undefined;
+    const nextPenalties = {
+      jay: normalizePenaltyDraftValue(penaltyDraft.jay),
+      kim: normalizePenaltyDraftValue(penaltyDraft.kim),
+    };
+    const serverPenalties = {
+      jay: normalizePenaltyDraftValue(game.currentRound.penalties?.jay),
+      kim: normalizePenaltyDraftValue(game.currentRound.penalties?.kim),
+    };
+    if (nextPenalties.jay === serverPenalties.jay && nextPenalties.kim === serverPenalties.kim) return undefined;
     const timeout = window.setTimeout(() => {
       updateCurrentRound({
-        penalties: {
-          jay: String(penaltyDraft.jay ?? ''),
-          kim: String(penaltyDraft.kim ?? ''),
-        },
+        penalties: nextPenalties,
       }).catch(() => null);
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [penaltyDraft.jay, penaltyDraft.kim, game?.currentRound?.id, inferredRole]);
+  }, [
+    penaltyDraft.jay,
+    penaltyDraft.kim,
+    game?.gameMode,
+    game?.currentRound?.id,
+    game?.currentRound?.status,
+    game?.currentRound?.penalties?.jay,
+    game?.currentRound?.penalties?.kim,
+    inferredRole,
+  ]);
 
-  const submitAnswer = async () =>
+  useEffect(() => {
+    if (!game || !user?.uid) return;
+    const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+    if (!seat) return;
+    const agreement = normalizeQuizWagerAgreement(game);
+    if (Number.isFinite(Number(agreement.proposedAmount))) {
+      setQuizWagerDraft(String(agreement.proposedAmount || ''));
+      return;
+    }
+    if (Number.isFinite(Number(agreement.amount))) {
+      setQuizWagerDraft(String(agreement.amount || ''));
+      return;
+    }
+    setQuizWagerDraft('');
+  }, [
+    game?.id,
+    game?.quizWagerAgreement?.status,
+    game?.quizWagerAgreement?.amount,
+    game?.quizWagerAgreement?.proposedAmount,
+    user?.uid,
+    profile,
+  ]);
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    if (!game?.currentRound || isQuizGame || game.currentRound.status !== 'ready') return;
+    if (isCurrentLocalTestGame) {
+      setGame((current) =>
+        current?.currentRound?.status === 'ready'
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                status: 'open',
+                ready: { jay: true, kim: true },
+                updatedAt: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      return;
+    }
+    const gameRef = makeGameRef();
+    if (!gameRef) return;
+    updateDoc(gameRef, {
+      'currentRound.status': 'open',
+      'currentRound.ready': { jay: true, kim: true },
+      'currentRound.updatedAt': serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => null);
+  }, [game?.id, game?.gameMode, game?.currentRound?.status, isCurrentLocalTestGame]);
+  const quizSetupLaunchRef = useRef('');
+  const quizAdvanceRef = useRef('');
+  const quizTimeoutRevealRef = useRef('');
+  const quizWheelFinalizeRef = useRef('');
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const agreement = normalizeQuizWagerAgreement(game || {});
+    const spinEndsAtMs = Date.parse(agreement.wheelSpinEndsAt || '');
+    const finalizeKey = `${game?.id || ''}:${agreement.wheelSpinEndsAt || ''}:${agreement.wheelResultIndex ?? ''}`;
+    if (!isQuizGame || game?.currentRound || agreement.status === 'agreed' || agreement.status === 'wheel_locked' || !Number.isFinite(spinEndsAtMs)) {
+      if (quizWheelFinalizeRef.current === finalizeKey) quizWheelFinalizeRef.current = '';
+      return undefined;
+    }
+    const remainingMs = Math.max(0, spinEndsAtMs - Date.now());
+    const timeout = window.setTimeout(() => {
+      if (quizWheelFinalizeRef.current === finalizeKey) return;
+      quizWheelFinalizeRef.current = finalizeKey;
+      finalizeQuizWheelWager()
+        .catch(() => null)
+        .finally(() => {
+          quizWheelFinalizeRef.current = '';
+        });
+    }, remainingMs + 50);
+    return () => window.clearTimeout(timeout);
+  }, [
+    game?.id,
+    game?.gameMode,
+    game?.currentRound?.id,
+    game?.quizWagerAgreement?.status,
+    game?.quizWagerAgreement?.wheelSpinEndsAt,
+    game?.quizWagerAgreement?.wheelResultIndex,
+    isCurrentLocalTestGame,
+  ]);
+  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, startOpen = false } = {}) => {
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    return {
+      id: makeId('round'),
+      number: nextRoundNumber,
+      questionId: nextQuestionItem.id,
+      question: nextQuestionItem.question,
+      category: nextQuestionItem.category || '',
+      roundType: nextQuestionItem.roundType || 'numeric',
+      defaultAnswerType: nextQuestionItem.defaultAnswerType || getDefaultAnswerType(nextQuestionItem.roundType),
+      multipleChoiceOptions: nextQuestionItem.multipleChoiceOptions || [],
+      correctAnswer: nextQuestionItem.correctAnswer || '',
+      normalizedCorrectAnswer: nextQuestionItem.normalizedCorrectAnswer || '',
+      notes: nextQuestionItem.notes || '',
+      tags: nextQuestionItem.tags || [],
+      unitLabel: nextQuestionItem.unitLabel || '',
+      status: startOpen ? 'open' : 'ready',
+      ready: startOpen ? { jay: true, kim: true } : { jay: false, kim: false },
+      nextReady: { jay: false, kim: false },
+      answers: {},
+      penalties: { jay: '', kim: '' },
+      quizTimerSeconds: isQuizGame && startOpen ? QUIZ_TIMER_SECONDS : 0,
+      quizTimerStartedAt: isQuizGame && startOpen ? nowIso : '',
+      quizTimerEndsAt: isQuizGame && startOpen ? new Date(now + (QUIZ_TIMER_SECONDS * 1000)).toISOString() : '',
+      createdAt: nowIso,
+    };
+  };
+
+  const markReady = async (seatToReady = '') =>
     withBusy(async () => {
+      const seat = seatToReady === 'kim' ? 'kim' : seatToReady === 'jay' ? 'jay' : currentSeat;
+      if (!seat) return;
+      const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+      const sharedQuizWagerLocked = isQuizWagerAgreementLocked(game);
+
+      if (isQuizGame && !game?.currentRound) {
+        if (!sharedQuizWagerLocked) throw new Error('Both players must agree one shared wager before starting Quick Fire.');
+        if (isCurrentLocalTestGame) {
+          const otherSeat = oppositeSeatOf(seat);
+          setGame((current) => {
+            if (!current || current.currentRound) return current;
+            return {
+              ...current,
+              quizReadyState: {
+                ...(current.quizReadyState || defaultQuizReadyState('opening')),
+                stage: 'opening',
+                ready: {
+                  ...((current.quizReadyState && current.quizReadyState.ready) || { jay: false, kim: false }),
+                  [seat]: true,
+                  [otherSeat]: true,
+                },
+              },
+              updatedAt: new Date().toISOString(),
+            };
+          });
+          return true;
+        }
+
+        const gameRef = makeGameRef();
+        if (!gameRef) return null;
+        await runTransaction(firestore, async (transaction) => {
+          const snap = await transaction.get(gameRef);
+          if (!snap.exists()) throw new Error('Room not found.');
+          const data = snap.data() || {};
+          if (data.currentRound) return;
+          if (!isQuizWagerAgreementLocked(data)) {
+            throw new Error('Both players must agree one shared wager before starting Quick Fire.');
+          }
+          const currentReady = data.quizReadyState?.ready || { jay: false, kim: false };
+          transaction.update(gameRef, {
+            quizReadyState: {
+              stage: 'opening',
+              ready: {
+                ...currentReady,
+                [seat]: true,
+              },
+            },
+            updatedAt: serverTimestamp(),
+          });
+        });
+        return true;
+      }
+
+      if (!game?.currentRound) throw new Error('No active round.');
+
+      if (isQuizGame && game.currentRound.status === 'reveal') {
+        if (isCurrentLocalTestGame) {
+          const otherSeat = oppositeSeatOf(seat);
+          setGame((current) => {
+            if (!current?.currentRound || current.currentRound.status !== 'reveal') return current;
+            return {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                nextReady: {
+                  ...(current.currentRound.nextReady || { jay: false, kim: false }),
+                  [seat]: true,
+                  [otherSeat]: true,
+                },
+                updatedAt: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            };
+          });
+          return true;
+        }
+        const gameRef = makeGameRef();
+        if (!gameRef) return null;
+        await runTransaction(firestore, async (transaction) => {
+          const snap = await transaction.get(gameRef);
+          if (!snap.exists()) throw new Error('Room not found.');
+          const data = snap.data() || {};
+          const round = data.currentRound || null;
+          if (!round || round.status !== 'reveal') return;
+          transaction.update(gameRef, {
+            [`currentRound.nextReady.${seat}`]: true,
+            'currentRound.updatedAt': serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        });
+        return true;
+      }
+
+      if (game.currentRound.status !== 'ready') return;
+
+      if (isCurrentLocalTestGame) {
+        setGame((current) => {
+          if (!current?.currentRound || current.currentRound.status !== 'ready') return current;
+          const nextReady = { ...(current.currentRound.ready || {}), [seat]: true };
+          const bothReady = Boolean(nextReady.jay && nextReady.kim);
+          const nowIso = new Date().toISOString();
+          return {
+            ...current,
+            currentRound: {
+              ...current.currentRound,
+              ready: nextReady,
+              status: bothReady ? 'open' : 'ready',
+              ...(bothReady && isQuizGame
+                ? {
+                    quizTimerSeconds: QUIZ_TIMER_SECONDS,
+                    quizTimerStartedAt: nowIso,
+                    quizTimerEndsAt: new Date(Date.now() + (QUIZ_TIMER_SECONDS * 1000)).toISOString(),
+                  }
+                : {}),
+              updatedAt: nowIso,
+            },
+            updatedAt: nowIso,
+          };
+        });
+        return true;
+      }
+
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) return null;
+      await runTransaction(firestore, async (transaction) => {
+        const snap = await transaction.get(gameRef);
+        if (!snap.exists()) throw new Error('Room not found.');
+        const data = snap.data() || {};
+        const round = data.currentRound || null;
+        if (!round || round.status !== 'ready') return;
+        const ready = { ...(round.ready || {}), [seat]: true };
+        const bothReady = Boolean(ready.jay && ready.kim);
+        const patch = {
+          [`currentRound.ready.${seat}`]: true,
+          'currentRound.updatedAt': serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+        if (bothReady) {
+          patch['currentRound.status'] = 'open';
+          if (isQuizGame) {
+            patch['currentRound.quizTimerSeconds'] = QUIZ_TIMER_SECONDS;
+            patch['currentRound.quizTimerStartedAt'] = new Date().toISOString();
+            patch['currentRound.quizTimerEndsAt'] = new Date(Date.now() + (QUIZ_TIMER_SECONDS * 1000)).toISOString();
+          }
+        }
+        transaction.update(gameRef, patch);
+      });
+      return true;
+    }, 'Could not mark ready.');
+
+  const submitAnswer = async (draftOverride = null) => {
+    try {
       if (!game?.currentRound || !currentSeat) throw new Error('No active round to answer.');
+      if (game.currentRound.status !== 'open') throw new Error('Both players must be ready before answering.');
       const currentAnswers = game.currentRound.answers || {};
+      const draft = draftOverride || {
+        ownAnswer: String(game.currentRound.answers?.[currentSeat]?.ownAnswer ?? ''),
+        guessedOther: String(game.currentRound.answers?.[currentSeat]?.guessedOther ?? ''),
+      };
+      const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+      const submittedAtIso = new Date().toISOString();
+      const quizEndsAtMs = Date.parse(game.currentRound?.quizTimerEndsAt || '');
+      const nowMs = Date.now();
+      const timerMsLeft = Number.isFinite(quizEndsAtMs)
+        ? Math.max(0, quizEndsAtMs - nowMs)
+        : QUIZ_TIMER_SECONDS * 1000;
+      const timerSecondsLeft = Math.max(0, Math.ceil(timerMsLeft / 1000));
+      const quizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, draft.ownAnswer.trim()) : false;
+      const quizPointsAwarded = isQuizGame && quizWasCorrect ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
+      const baseAnswerPayload = {
+        ownAnswer: draft.ownAnswer.trim(),
+        guessedOther: isQuizGame ? '' : draft.guessedOther.trim(),
+        submittedBy: user?.uid || '',
+        displayName: profile?.displayName || user?.displayName || '',
+        submittedAt: submittedAtIso,
+        ...(isQuizGame
+          ? {
+              wasCorrect: quizWasCorrect,
+              originalSystemResult: quizWasCorrect ? 'correct' : 'incorrect',
+              finalResult: quizWasCorrect ? 'correct' : 'incorrect',
+              answerTimeMs: Math.max(0, (QUIZ_TIMER_SECONDS * 1000) - timerMsLeft),
+              timerValue: timerSecondsLeft,
+              pointsAwarded: quizPointsAwarded,
+              overrideStatus: 'none',
+            }
+          : {}),
+      };
       if (isCurrentLocalTestGame) {
         const otherSeat = currentSeat === 'jay' ? 'kim' : 'jay';
         const choiceOptions = inferChoiceOptions(game.currentRound);
         const nextAnswers = {
           ...currentAnswers,
-          [currentSeat]: {
-            ownAnswer: answerDraft.ownAnswer.trim(),
-            guessedOther: answerDraft.guessedOther.trim(),
-            submittedBy: user?.uid || '',
-            displayName: profile?.displayName || user?.displayName || '',
-            submittedAt: new Date().toISOString(),
-          },
+          [currentSeat]: baseAnswerPayload,
         };
         if (!nextAnswers[otherSeat]?.ownAnswer) {
+          const autoOwnAnswer = game.currentRound.roundType === 'numeric' ? '0' : choiceOptions[0] || 'Test mode response';
+          const autoQuizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, autoOwnAnswer) : false;
+          const autoQuizPoints = isQuizGame && autoQuizWasCorrect ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
           nextAnswers[otherSeat] = {
-            ownAnswer: game.currentRound.roundType === 'numeric' ? '0' : choiceOptions[0] || 'Test mode response',
-            guessedOther: answerDraft.ownAnswer.trim() || answerDraft.guessedOther.trim() || choiceOptions[1] || choiceOptions[0] || 'Test guess',
+            ownAnswer: autoOwnAnswer,
+            guessedOther: isQuizGame ? '' : draft.ownAnswer.trim() || draft.guessedOther.trim() || choiceOptions[1] || choiceOptions[0] || 'Test guess',
             submittedBy: 'editing-mode',
             displayName: otherSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)',
             submittedAt: new Date().toISOString(),
             autoSubmitted: true,
+            ...(isQuizGame
+              ? {
+                  wasCorrect: autoQuizWasCorrect,
+                  originalSystemResult: autoQuizWasCorrect ? 'correct' : 'incorrect',
+                  finalResult: autoQuizWasCorrect ? 'correct' : 'incorrect',
+                  answerTimeMs: Math.max(0, (QUIZ_TIMER_SECONDS * 1000) - timerMsLeft),
+                  timerValue: timerSecondsLeft,
+                  pointsAwarded: autoQuizPoints,
+                  overrideStatus: 'none',
+                }
+              : {}),
           };
         }
         const bothAnswered = Boolean(nextAnswers.jay?.ownAnswer && nextAnswers.kim?.ownAnswer);
@@ -8415,28 +11843,110 @@ function ProductionApp() {
               }
             : current,
         );
-        setNotice('Answers submitted');
-        return;
+        return true;
       }
-      const nextAnswers = {
-        ...currentAnswers,
-        [currentSeat]: {
-          ownAnswer: answerDraft.ownAnswer.trim(),
-          guessedOther: answerDraft.guessedOther.trim(),
-          submittedBy: user?.uid || '',
-          displayName: profile?.displayName || user?.displayName || '',
-          submittedAt: new Date().toISOString(),
-        },
-      };
-      const bothAnswered = Boolean(nextAnswers.jay?.ownAnswer && nextAnswers.kim?.ownAnswer);
-      await updateCurrentRound({
-        answers: nextAnswers,
-        status: bothAnswered ? 'reveal' : 'open',
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) throw new Error('Room is missing.');
+      setGame((current) => {
+        if (!current?.currentRound || current.currentRound.id !== game.currentRound.id) return current;
+        const nextAnswers = {
+          ...(current.currentRound.answers || {}),
+          [currentSeat]: baseAnswerPayload,
+        };
+        return {
+          ...current,
+          currentRound: {
+            ...current.currentRound,
+            answers: nextAnswers,
+            status: nextAnswers.jay?.ownAnswer && nextAnswers.kim?.ownAnswer ? 'reveal' : 'open',
+          },
+        };
       });
-      setNotice('Answers submitted');
-    }, 'Could not submit answer.');
+      await runTransaction(firestore, async (transaction) => {
+        const snap = await transaction.get(gameRef);
+        if (!snap.exists()) throw new Error('Room not found.');
+        const data = snap.data() || {};
+        const round = data.currentRound || null;
+        if (!round) throw new Error('No active round to answer.');
+        if (round.status !== 'open') throw new Error('This round is not open for answers.');
+        const serverSeatAnswer = (round.answers || {})[currentSeat] || {};
+        const existingSubmittedBy = serverSeatAnswer.submittedBy || '';
+        const existingSubmittedAt = serverSeatAnswer.submittedAt || '';
+        if (existingSubmittedBy && existingSubmittedBy !== user.uid) {
+          throw new Error('This answer was submitted by another player.');
+        }
+        const payload = {
+          ...baseAnswerPayload,
+          submittedBy: existingSubmittedBy || baseAnswerPayload.submittedBy,
+          submittedAt: existingSubmittedAt || baseAnswerPayload.submittedAt,
+          updatedAt: submittedAtIso,
+        };
+        const serverAnswers = round.answers || {};
+        const nextAnswers = { ...serverAnswers, [currentSeat]: payload };
+        const bothAnswered = Boolean(normalizeText(nextAnswers.jay?.ownAnswer) && normalizeText(nextAnswers.kim?.ownAnswer));
+        const patch = {
+          [`currentRound.answers.${currentSeat}`]: payload,
+          ...(bothAnswered ? { 'currentRound.status': 'reveal' } : {}),
+          'currentRound.updatedAt': serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+        transaction.update(gameRef, patch);
+      });
+      if (isQuizGame) {
+        const roundQuestionId = normalizeText(game.currentRound?.questionId || '') || sanitizeNoteKey(game.currentRound?.question || '');
+        const quizAnswerId = `${game.id}-${roundQuestionId}-${user.uid}`;
+        await setDoc(
+          doc(firestore, 'quizAnswers', quizAnswerId),
+          {
+            quizAnswerId,
+            pairId: buildPairKey(),
+            quizSessionId: game.id,
+            gameId: game.id,
+            questionId: normalizeText(game.currentRound?.questionId || ''),
+            questionText: normalizeText(game.currentRound?.question || ''),
+            category: normalizeText(game.currentRound?.category || ''),
+            questionType: normalizeText(game.currentRound?.roundType || ''),
+            correctAnswer: normalizeText(game.currentRound?.correctAnswer || ''),
+            playerAnswer: draft.ownAnswer.trim(),
+            playerId: user.uid,
+            playerSeat: currentSeat,
+            wasCorrect: quizWasCorrect,
+            originalSystemResult: quizWasCorrect ? 'correct' : 'incorrect',
+            finalResult: quizWasCorrect ? 'correct' : 'incorrect',
+            answerTime: Math.max(0, (QUIZ_TIMER_SECONDS * 1000) - timerMsLeft),
+            answerTimeMs: Math.max(0, (QUIZ_TIMER_SECONDS * 1000) - timerMsLeft),
+            pointsAwarded: quizPointsAwarded,
+            timerValue: timerSecondsLeft,
+            overrideStatus: 'none',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        ).catch((error) => {
+          console.warn('Quiz answer analytics write failed.', error);
+        });
+      }
+      return true;
+    } catch (error) {
+      const message = String(error?.message || 'Could not submit answer.');
+      const normalizedMessage = normalizeText(message);
+      if (
+        normalizedMessage.includes('quota exceeded')
+        || normalizedMessage.includes('quotaexceeded')
+        || (normalizedMessage.includes('storage') && normalizedMessage.includes('quota'))
+      ) {
+        console.warn('Suppressed storage quota warning from answer submit.', error);
+        return null;
+      }
+      setNotice(message);
+      return null;
+    }
+  };
 
   const drawQuestion = (sourceGame = game, sourceRounds = rounds) => {
+    const sourceBankType = sourceGame?.questionBankType === 'quiz' ? 'quiz' : 'game';
+    const sourcePool = sourceBankType === 'quiz' ? quizBankQuestions : gameBankQuestions;
+    const retiredQuestionIds = sourceBankType === 'quiz' ? trackedUsedQuizQuestionIds : effectiveRetiredQuestionIds;
     const localUsedQuestionIds = mergeUniqueIds(
       sourceGame?.usedQuestionIds || [],
       (sourceRounds || []).map((round) => round.questionId),
@@ -8445,19 +11955,21 @@ function ProductionApp() {
     if (sourceGame?.currentRound?.questionId) usedIds.add(sourceGame.currentRound.questionId);
     const previousQuestionId = sourceGame?.currentRound?.questionId || sourceRounds.at(-1)?.questionId || null;
     const questionQueueIds = Array.isArray(sourceGame?.questionQueueIds) ? sourceGame.questionQueueIds.filter(Boolean) : [];
-    const availablePool = bankQuestions.filter(
+    const availablePool = sourcePool.filter(
       (question) =>
-        !trackedUsedQuestionIds.has(question.id)
+        !retiredQuestionIds.has(question.id)
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
     const candidateQuestions = availablePool.length
       ? availablePool
-      : bankQuestions.length
+      : sourcePool.length
         ? []
-        : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question));
+        : sourceBankType === 'quiz'
+          ? []
+          : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question));
     const queuePool = questionQueueIds
-      .map((id) => bankQuestions.find((question) => question.id === id))
+      .map((id) => sourcePool.find((question) => question.id === id))
       .filter((question) => question && !usedIds.has(question.id) && question.id !== previousQuestionId);
     if (queuePool.length) {
       return { question: queuePool[0], remainingQueueIds: questionQueueIds.filter((id) => id !== queuePool[0].id) };
@@ -8481,6 +11993,17 @@ function ProductionApp() {
   const nextQuestion = async () =>
     withBusy(async () => {
       if (!game) throw new Error('No room open.');
+      const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+      if (
+        game.currentRound
+        && game.currentRound.status !== 'reveal'
+        && !(
+          hasSubmittedRoundAnswer(game.currentRound, 'jay')
+          && hasSubmittedRoundAnswer(game.currentRound, 'kim')
+        )
+      ) {
+        throw new Error('Both players must submit their answers before loading the next question.');
+      }
       if (isCurrentLocalTestGame) {
         const completedRoundsBefore = Math.max(Number(game.roundsPlayed || 0), rounds.length);
         const totalQuestionGoal = getGameQuestionGoal(game, rounds);
@@ -8492,14 +12015,14 @@ function ProductionApp() {
 
         let nextRounds = rounds;
         let nextTotals = game.totals || { jay: 0, kim: 0 };
+        let nextQuizTotals = game.quizTotals || { jay: 0, kim: 0 };
         let nextRoundsPlayed = completedRoundsBefore;
         let nextUsedQuestionIds = mergeUniqueIds(game.usedQuestionIds || [], rounds.map((round) => round.questionId));
         let nextGameState = { ...game };
         let savedCurrentRound = false;
 
         if (game.currentRound) {
-          const penalties = toPenaltyScores(penaltyDraft);
-
+          const penalties = isQuizGame ? { jay: 0, kim: 0 } : toPenaltyScores(penaltyDraft);
           const roundResult = createRoundResult(
             {
               ...game.currentRound,
@@ -8521,6 +12044,10 @@ function ProductionApp() {
                 jay: parseAnswerList(game.currentRound.answers?.jay?.guessedOther || ''),
                 kim: parseAnswerList(game.currentRound.answers?.kim?.guessedOther || ''),
               },
+              quizPoints: {
+                jay: Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
+                kim: Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
+              },
             },
             game.currentRound.number || rounds.length + 1,
             nextTotals,
@@ -8528,14 +12055,22 @@ function ProductionApp() {
 
           nextRounds = normalizeStoredRounds([...rounds, roundResult]);
           nextTotals = getRoundPenaltyTotals(roundResult);
+          if (isQuizGame) {
+            nextQuizTotals = {
+              jay: Number(nextQuizTotals.jay || 0) + Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
+              kim: Number(nextQuizTotals.kim || 0) + Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
+            };
+          }
           nextRoundsPlayed = nextRounds.length;
           nextUsedQuestionIds = mergeUniqueIds(nextUsedQuestionIds, game.currentRound.questionId, nextRounds.map((round) => round.questionId));
           nextGameState = {
             ...nextGameState,
             totals: nextTotals,
+            quizTotals: nextQuizTotals,
             roundsPlayed: nextRoundsPlayed,
             usedQuestionIds: nextUsedQuestionIds,
             currentRound: null,
+            quizReadyState: null,
             status: game.status === 'paused' ? 'paused' : 'active',
             updatedAt: new Date().toISOString(),
           };
@@ -8548,6 +12083,11 @@ function ProductionApp() {
         }
 
         if (game.status !== 'completed') {
+          if (isQuizGame && !game.currentRound) {
+            if (!isQuizWagerAgreementLocked(game)) {
+              throw new Error('Both players must agree one shared quiz wager before starting Quick Fire.');
+            }
+          }
           const drawn = drawQuestion(nextGameState, nextRounds);
           const nextQuestionItem = drawn.question;
           if (!nextQuestionItem) {
@@ -8563,29 +12103,14 @@ function ProductionApp() {
             Number(nextGameState.currentRound?.number || 0) + 1,
             1,
           );
-          const nextRound = {
-            id: makeId('round'),
-            number: nextRoundNumber,
-            questionId: nextQuestionItem.id,
-            question: nextQuestionItem.question,
-            category: nextQuestionItem.category || '',
-            roundType: nextQuestionItem.roundType || 'numeric',
-            defaultAnswerType: nextQuestionItem.defaultAnswerType || getDefaultAnswerType(nextQuestionItem.roundType),
-            multipleChoiceOptions: nextQuestionItem.multipleChoiceOptions || [],
-            notes: nextQuestionItem.notes || '',
-            tags: nextQuestionItem.tags || [],
-            unitLabel: nextQuestionItem.unitLabel || '',
-            status: 'open',
-            answers: {},
-            penalties: { jay: '', kim: '' },
-            createdAt: new Date().toISOString(),
-          };
+          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, startOpen: true });
           nextGameState = {
             ...nextGameState,
             totals: nextTotals,
             roundsPlayed: nextRoundsPlayed,
             usedQuestionIds: nextUsedQuestionIds,
             currentRound: nextRound,
+            quizReadyState: null,
             questionQueueIds: drawn.remainingQueueIds,
             status: 'active',
             updatedAt: new Date().toISOString(),
@@ -8607,11 +12132,14 @@ function ProductionApp() {
       }
 
       const totalsBefore = game.totals || { jay: 0, kim: 0 };
+      let totalsAfterSave = totalsBefore;
       let completedRoundsAfterSave = completedRoundsBefore;
+      let nextQuizTotals = game.quizTotals || { jay: 0, kim: 0 };
+      let archivedQuestionId = '';
       let savedCurrentRound = false;
 
       if (game.currentRound) {
-        const penalties = toPenaltyScores(penaltyDraft);
+        const penalties = isQuizGame ? { jay: 0, kim: 0 } : toPenaltyScores(penaltyDraft);
 
         const roundResult = createRoundResult(
           {
@@ -8634,34 +12162,64 @@ function ProductionApp() {
               jay: parseAnswerList(game.currentRound.answers?.jay?.guessedOther || ''),
               kim: parseAnswerList(game.currentRound.answers?.kim?.guessedOther || ''),
             },
+            quizPoints: {
+              jay: Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
+              kim: Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
+            },
           },
           game.currentRound.number || rounds.length + 1,
           totalsBefore,
         );
 
         await setDoc(doc(firestore, 'games', gameId, 'rounds', roundResult.id), roundResult);
-        const totalsAfter = getRoundPenaltyTotals(roundResult);
+        totalsAfterSave = getRoundPenaltyTotals(roundResult);
+        if (isQuizGame) {
+          nextQuizTotals = {
+            jay: Number(nextQuizTotals.jay || 0) + Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
+            kim: Number(nextQuizTotals.kim || 0) + Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
+          };
+        }
         completedRoundsAfterSave = completedRoundsBefore + 1;
+        archivedQuestionId = game.currentRound.questionId || '';
         savedCurrentRound = true;
-        await setDoc(gameRef, {
-          totals: totalsAfter,
-          roundsPlayed: completedRoundsAfterSave,
-          usedQuestionIds: arrayUnion(game.currentRound.questionId),
-          currentRound: null,
-          status: game.status === 'paused' ? 'paused' : 'active',
-          updatedAt: serverTimestamp(),
-        }, { merge: true });
 
         if (totalQuestionGoal > 0 && completedRoundsAfterSave >= totalQuestionGoal) {
+          await setDoc(gameRef, {
+            totals: totalsAfterSave,
+            quizTotals: nextQuizTotals,
+            roundsPlayed: completedRoundsAfterSave,
+            ...(archivedQuestionId ? { usedQuestionIds: arrayUnion(archivedQuestionId) } : {}),
+            currentRound: null,
+            quizReadyState: null,
+            status: game.status === 'paused' ? 'paused' : 'active',
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
           await completeCurrentGameFromNextQuestion('Final round saved. Game ended and moved to Previous Games.');
           return;
         }
       }
 
       if (game.status !== 'completed') {
+        if (isQuizGame && !game.currentRound) {
+          if (!isQuizWagerAgreementLocked(game)) {
+            throw new Error('Both players must agree one shared quiz wager before starting Quick Fire.');
+          }
+        }
         const drawn = drawQuestion();
         const nextQuestionItem = drawn.question;
         if (!nextQuestionItem) {
+          if (savedCurrentRound) {
+            await setDoc(gameRef, {
+              totals: totalsAfterSave,
+              quizTotals: nextQuizTotals,
+              roundsPlayed: completedRoundsAfterSave,
+              ...(archivedQuestionId ? { usedQuestionIds: arrayUnion(archivedQuestionId) } : {}),
+              currentRound: null,
+              quizReadyState: null,
+              status: game.status === 'paused' ? 'paused' : 'active',
+              updatedAt: serverTimestamp(),
+            }, { merge: true });
+          }
           await completeCurrentGameFromNextQuestion(
             savedCurrentRound
               ? 'Final round saved. Game ended and moved to Previous Games.'
@@ -8677,33 +12235,194 @@ function ProductionApp() {
           Number(game.currentRound?.number || 0) + 1,
           1,
         );
-        const nextRound = {
-          id: makeId('round'),
-          number: nextRoundNumber,
-          questionId: nextQuestionItem.id,
-          question: nextQuestionItem.question,
-          category: nextQuestionItem.category || '',
-          roundType: nextQuestionItem.roundType || 'numeric',
-          defaultAnswerType: nextQuestionItem.defaultAnswerType || getDefaultAnswerType(nextQuestionItem.roundType),
-          multipleChoiceOptions: nextQuestionItem.multipleChoiceOptions || [],
-          notes: nextQuestionItem.notes || '',
-          tags: nextQuestionItem.tags || [],
-          unitLabel: nextQuestionItem.unitLabel || '',
-          status: 'open',
-          answers: {},
-          penalties: { jay: '', kim: '' },
-          createdAt: new Date().toISOString(),
-        };
-        await setDoc(gameRef, {
+        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, startOpen: true });
+        const gamePatch = {
+          ...(savedCurrentRound
+            ? {
+                totals: totalsAfterSave,
+                quizTotals: nextQuizTotals,
+                roundsPlayed: completedRoundsAfterSave,
+                ...(archivedQuestionId ? { usedQuestionIds: arrayUnion(archivedQuestionId) } : {}),
+              }
+            : {}),
           currentRound: nextRound,
+          quizReadyState: null,
           questionQueueIds: drawn.remainingQueueIds,
           status: 'active',
           updatedAt: serverTimestamp(),
-        }, { merge: true });
+        };
+        await setDoc(gameRef, gamePatch, { merge: true });
         if (savedCurrentRound) setNotice('Saved and loaded the next question.');
         else setNotice('Question loaded.');
       }
     }, 'Could not move to the next question.');
+
+  const launchQuizRoundFromSetup = async () => {
+    if (!game || !((game?.gameMode || 'standard') === 'quiz') || game.currentRound) return;
+    if (!isQuizWagerAgreementLocked(game)) return;
+    const ready = game.quizReadyState?.ready || { jay: false, kim: false };
+    if (!ready.jay || !ready.kim) return;
+
+    if (isCurrentLocalTestGame) {
+      const drawn = drawQuestion(game, rounds);
+      const nextQuestionItem = drawn.question;
+      if (!nextQuestionItem) {
+        await completeCurrentGameFromNextQuestion('Quiz complete. Summary is now shown in the room.');
+        return;
+      }
+      const nextRoundNumber = Math.max(Number(game.roundsPlayed || 0) + 1, 1);
+      const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame: true, startOpen: true });
+      setGame((current) =>
+        current && !current.currentRound
+          ? {
+              ...current,
+              currentRound: nextRound,
+              questionQueueIds: drawn.remainingQueueIds,
+              quizReadyState: null,
+              status: 'active',
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      setNotice('Quick Fire question started.');
+      return;
+    }
+
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return;
+    await runTransaction(firestore, async (transaction) => {
+      const snap = await transaction.get(gameRef);
+      if (!snap.exists()) throw new Error('Room not found.');
+      const data = snap.data() || {};
+      if (data.currentRound) return;
+      const setupReady = data.quizReadyState?.ready || { jay: false, kim: false };
+      if (!setupReady.jay || !setupReady.kim) return;
+      if (!isQuizWagerAgreementLocked(data)) return;
+      const sourceGame = { ...game, ...data, id: game.id };
+      const drawn = drawQuestion(sourceGame, rounds);
+      if (!drawn.question) throw new Error('No quiz questions are available.');
+      const nextRoundNumber = Math.max(Number(sourceGame.roundsPlayed || 0) + 1, 1);
+      const nextRound = buildRoundFromQuestion(drawn.question, nextRoundNumber, { isQuizGame: true, startOpen: true });
+      transaction.update(gameRef, {
+        currentRound: nextRound,
+        quizReadyState: null,
+        questionQueueIds: drawn.remainingQueueIds,
+        status: 'active',
+        updatedAt: serverTimestamp(),
+      });
+    });
+  };
+
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const ready = game?.quizReadyState?.ready || {};
+    const setupKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${Boolean(ready.jay)}:${Boolean(ready.kim)}`;
+    if (!isQuizGame || game?.currentRound || !ready.jay || !ready.kim) {
+      if (quizSetupLaunchRef.current === setupKey) quizSetupLaunchRef.current = '';
+      return;
+    }
+    if (quizSetupLaunchRef.current === setupKey || isBusy) return;
+    quizSetupLaunchRef.current = setupKey;
+    launchQuizRoundFromSetup()
+      .catch(() => null)
+      .finally(() => {
+        quizSetupLaunchRef.current = '';
+      });
+  }, [
+    game?.id,
+    game?.gameMode,
+    game?.currentRound?.id,
+    game?.currentRound?.questionId,
+    game?.quizReadyState?.ready?.jay,
+    game?.quizReadyState?.ready?.kim,
+    isBusy,
+    rounds.length,
+  ]);
+
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const roundKey = stableRoundIdentityKey(game?.currentRound || {});
+    const ready = game?.currentRound?.nextReady || {};
+    const advanceKey = `${game?.id || ''}:${roundKey}:${Boolean(ready.jay)}:${Boolean(ready.kim)}`;
+    if (!isQuizGame || !game?.currentRound || game.currentRound.status !== 'reveal' || !ready.jay || !ready.kim) {
+      if (quizAdvanceRef.current === advanceKey) quizAdvanceRef.current = '';
+      return;
+    }
+    if (quizAdvanceRef.current === advanceKey || isBusy) return;
+    quizAdvanceRef.current = advanceKey;
+    nextQuestion()
+      .catch(() => null)
+      .finally(() => {
+        quizAdvanceRef.current = '';
+      });
+  }, [
+    game?.id,
+    game?.gameMode,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.nextReady?.jay,
+    game?.currentRound?.nextReady?.kim,
+    isBusy,
+  ]);
+
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const currentRoundKey = stableRoundIdentityKey(game?.currentRound || {});
+    if (!isQuizGame || !game?.currentRound || game.currentRound.status !== 'open') {
+      quizTimeoutRevealRef.current = '';
+      return;
+    }
+    const quizEndsAtMs = Date.parse(game.currentRound?.quizTimerEndsAt || '');
+    if (!Number.isFinite(quizEndsAtMs)) return;
+    const timeoutKey = `${game.id}:${currentRoundKey}`;
+    const remainingMs = Math.max(0, quizEndsAtMs - Date.now());
+    const timeout = window.setTimeout(() => {
+      if (quizTimeoutRevealRef.current === timeoutKey) return;
+      quizTimeoutRevealRef.current = timeoutKey;
+      if (isCurrentLocalTestGame) {
+        setGame((current) =>
+          current?.currentRound && stableRoundIdentityKey(current.currentRound) === currentRoundKey && current.currentRound.status === 'open'
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  status: 'reveal',
+                  updatedAt: new Date().toISOString(),
+                },
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        return;
+      }
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) return;
+      runTransaction(firestore, async (transaction) => {
+        const snap = await transaction.get(gameRef);
+        if (!snap.exists()) return;
+        const data = snap.data() || {};
+        const round = data.currentRound || null;
+        if (!round || round.status !== 'open') return;
+        if (stableRoundIdentityKey(round) !== currentRoundKey) return;
+        transaction.update(gameRef, {
+          'currentRound.status': 'reveal',
+          'currentRound.updatedAt': serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }).catch(() => null);
+    }, remainingMs + 10);
+    return () => window.clearTimeout(timeout);
+  }, [
+    firestore,
+    game?.id,
+    game?.gameMode,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.quizTimerEndsAt,
+    isCurrentLocalTestGame,
+  ]);
 
   const sendChat = async () =>
     withBusy(async () => {
@@ -8762,6 +12481,7 @@ function ProductionApp() {
         sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
         existingQuestions: bankQuestions,
         overwriteExisting: false,
+        targetBankType: 'game',
       });
       await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
       const nextBankCount = bankQuestions.length + result.summary.imported;
@@ -8777,6 +12497,7 @@ function ProductionApp() {
         sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
         existingQuestions: bankQuestions,
         overwriteExisting: true,
+        targetBankType: 'game',
       });
       await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
       const nextBankCount = bankQuestions.length + result.summary.imported;
@@ -8785,6 +12506,38 @@ function ProductionApp() {
       );
       setNotice('Question bank synced from Google Sheet.');
     }, 'Could not sync the question bank.');
+
+  const importQuizSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'quiz',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = quizBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new quiz questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. Quiz bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice(`Quiz import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import quiz questions from the Google Sheet.');
+
+  const syncQuizSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: true,
+        targetBankType: 'quiz',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = quizBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Synced quiz bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. Quiz bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice('Quiz bank synced from Google Sheet.');
+    }, 'Could not sync the quiz bank.');
 
   if (authLoading) {
     return (
@@ -8809,7 +12562,7 @@ function ProductionApp() {
     );
   }
 
-  if (roomLoadState.status === 'error' && !shouldBypassMobileAutoResumeRoom) {
+  if (roomLoadState.status === 'error' && !shouldBypassMobileAutoResumeRoom && !game?.id) {
     return (
       <main className="app production-app lobby-loading-screen">
         <div className="panel lobby-panel lobby-panel--active">
@@ -8911,11 +12664,16 @@ function ProductionApp() {
 
   if (!(gameId || game) || !inferredRole || shouldSuppressCompletedAutoResume || shouldBypassMobileAutoResumeRoom) {
     return (
-      <LobbyScreen
-        user={user}
-        profile={profile}
-        questionNotes={questionNotes}
+	      <LobbyScreen
+	        user={user}
+	        profile={profile}
+	        connectionState={connectionState}
+	        questionNotes={questionNotes}
+	        questionFeedback={questionFeedback}
+	        quizAnswers={visibleQuizAnswers}
         onSaveDisplayName={saveDisplayNameProfile}
+        onUpdateQuestionNote={updatePrivateQuestionNote}
+        onDeleteQuestionNote={deletePrivateQuestionNote}
         playerAccounts={playerAccounts}
         editingModeEnabled={editingModeEnabled}
         onToggleEditingMode={toggleEditingMode}
@@ -8936,12 +12694,15 @@ function ProductionApp() {
         onJoinGameInvite={acceptGameInviteAction}
         onDismissGameInvite={dismissGameInviteAction}
         onSyncQuestionBank={syncSheet}
+        onSyncQuizBank={syncQuizSheet}
         onImportQuestions={importSheet}
+        onImportQuizQuestions={importQuizSheet}
         onResumeGame={resumeGame}
         onViewSummary={setSelectedGameId}
         onEndGame={requestEndGame}
         onDeleteGame={requestDeleteGame}
         onResetBalances={resetLifetimeBalancesAction}
+        onSaveBalances={saveLifetimeBalancesAction}
         onSignOut={signOutUser}
         activeGames={activeGames}
         previousGames={previousGames}
@@ -8949,9 +12710,12 @@ function ProductionApp() {
         lobbyRoundAnalytics={lobbyRoundAnalytics}
         categoryColorMap={categoryColorMap}
         bankCount={bankCount}
-        questionCount={bankQuestions.length || STARTER_QUESTIONS.length}
+        questionCount={gameBankQuestions.length || STARTER_QUESTIONS.length}
         usedQuestionCount={usedQuestionCount}
         remainingQuestionCount={remainingQuestionCount}
+        quizQuestionCount={quizBankCount}
+        usedQuizQuestionCount={usedQuizQuestionCount}
+        remainingQuizQuestionCount={remainingQuizQuestionCount}
         unusedQuestionCount={unusedQuestionCount}
         syncNotice={syncNotice}
         gameInvites={incomingGameInvites}
@@ -8995,12 +12759,16 @@ function ProductionApp() {
     );
   }
 
-  return (
+	  return (
     <GameRoomView
       user={user}
       profile={profile}
+      connectionState={connectionState}
       game={game}
       rounds={rounds}
+      questionFeedback={questionFeedback}
+      questionReplays={questionReplays}
+      playerAccounts={playerAccounts}
       bankQuestions={bankQuestions}
       editingModeEnabled={editingModeEnabled}
       onToggleEditingMode={toggleEditingMode}
@@ -9009,9 +12777,10 @@ function ProductionApp() {
       onLeaveGame={leaveGame}
       onEndGame={() => requestEndGame(game?.id)}
       onPauseToggle={pauseToggle}
-      onNextQuestion={nextQuestion}
-      onSubmitAnswer={submitAnswer}
-      onAddQuestion={addQuestion}
+	      onNextQuestion={nextQuestion}
+	      onSubmitAnswer={submitAnswer}
+	      onMarkReady={markReady}
+	      onAddQuestion={addQuestion}
       onSyncSheet={syncSheet}
       onImportSheet={importSheet}
       onSignOut={signOutUser}
@@ -9022,8 +12791,6 @@ function ProductionApp() {
       currentRound={currentRound}
       penaltyDraft={penaltyDraft}
       setPenaltyDraft={setPenaltyDraft}
-      answerDraft={answerDraft}
-      setAnswerDraft={setAnswerDraft}
       bankDraft={bankDraft}
       setBankDraft={setBankDraft}
       syncNotice={syncNotice}
@@ -9033,7 +12800,22 @@ function ProductionApp() {
       chatDraft={chatDraft}
       setChatDraft={setChatDraft}
       onSendChat={sendChat}
+      onReconnectLiveRoom={() => {
+        setConnectionState((current) => ({ ...current, lastError: '' }));
+        resetRoomLoadState();
+        setListenerRefreshKey((current) => current + 1);
+      }}
       onSaveQuestionNote={savePrivateQuestionNote}
+      onSaveQuestionFeedback={saveQuestionFeedback}
+      onSaveQuestionReplay={saveQuestionReplayRequest}
+      onSaveQuizWager={saveQuizWager}
+      onAcceptQuizWager={acceptQuizWager}
+      onRejectQuizWager={rejectQuizWager}
+      onSetQuizWheelOptIn={setQuizWheelOptIn}
+      onRequestQuizOverride={requestQuizOverride}
+      onRespondQuizOverride={respondQuizOverride}
+      quizWagerDraft={quizWagerDraft}
+      setQuizWagerDraft={setQuizWagerDraft}
     />
   );
 }

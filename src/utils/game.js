@@ -599,6 +599,10 @@ export const createQuestionTemplate = (input = {}) => {
   const defaultAnswerType = normalizeAnswerType(input.defaultAnswerType, roundType);
   const multipleChoiceOptions = parseAnswerList(input.multipleChoiceOptions ?? input.options);
   const normalizedOptions = roundType === 'trueFalse' && !multipleChoiceOptions.length ? DEFAULT_TRUE_FALSE_OPTIONS : multipleChoiceOptions;
+  const bankType = normalizeText(input.bankType).toLowerCase() === 'quiz' ? 'quiz' : 'game';
+  const correctAnswer = normalizeText(input.correctAnswer || '');
+  const normalizedCorrectAnswer = normalizeText(input.normalizedCorrectAnswer || '')
+    || normalizeText(correctAnswer).toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
   const stableId =
     input.id ||
     `question-${normalizeQuestionKey(question)
@@ -626,6 +630,9 @@ export const createQuestionTemplate = (input = {}) => {
     sourceLabel: normalizeText(input.sourceLabel ?? input.importSourceLabel ?? input.sourceNote ?? input.originLabel),
     addedBy: normalizeText(input.addedBy ?? input.sourceAddedBy ?? input.author),
     importedFromGoogleSheet: Boolean(input.importedFromGoogleSheet ?? input.fromGoogleSheet),
+    bankType,
+    correctAnswer,
+    normalizedCorrectAnswer,
     importDate:
       typeof input.importDate === 'string' && !Number.isNaN(Date.parse(input.importDate))
         ? input.importDate
@@ -744,6 +751,68 @@ export const getTotals = (rounds) => {
 };
 
 export const getLeader = (totals) => compareScores(totals.jay, totals.kim);
+
+const getAnalyticsEventTime = (value) => {
+  if (!value) return 0;
+  if (typeof value?.seconds === 'number') {
+    return (value.seconds * 1000) + Math.round((value.nanoseconds || 0) / 1_000_000);
+  }
+  if (value instanceof Date) return value.getTime();
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const getPenaltyAdjustmentDelta = (event = {}) => {
+  const rawPlayer = normalizeText(event.player || event.playerId || event.seat || event.pointsDeductedFromPlayerId).toLowerCase();
+  const player = rawPlayer === 'kim' ? 'kim' : rawPlayer === 'jay' ? 'jay' : '';
+  const amount = Number(event.amount ?? event.delta ?? event.points ?? event.itemCost ?? event.cost ?? 0);
+  if (!player || !Number.isFinite(amount) || amount === 0) return emptyTotals();
+  return {
+    jay: player === 'jay' ? amount : 0,
+    kim: player === 'kim' ? amount : 0,
+  };
+};
+
+const buildCumulativePenaltySeries = (rounds = [], penaltyAdjustments = []) => {
+  const roundEvents = rounds.map((round, index) => ({
+    type: 'round',
+    id: round.id || `round-${index + 1}`,
+    round: round.number || index + 1,
+    order: index,
+    time: getAnalyticsEventTime(round.completedAt || round.createdAt || round.updatedAt),
+    delta: getRoundPenaltyMap(round),
+  }));
+
+  const adjustmentEvents = penaltyAdjustments
+    .map((event, index) => ({
+      type: event.type || 'adjustment',
+      id: event.id || event.redemptionId || `adjustment-${index + 1}`,
+      round: event.round || `S${index + 1}`,
+      order: rounds.length + index,
+      time: getAnalyticsEventTime(event.redeemedAt || event.completedAt || event.createdAt || event.updatedAt),
+      delta: getPenaltyAdjustmentDelta(event),
+    }))
+    .filter((event) => event.delta.jay || event.delta.kim);
+
+  const events = [...roundEvents, ...adjustmentEvents].sort(
+    (left, right) => (left.time || 0) - (right.time || 0) || left.order - right.order,
+  );
+
+  let running = emptyTotals();
+  return events.map((event, index) => {
+    running = {
+      jay: Math.max(0, addScores(running.jay, event.delta.jay)),
+      kim: Math.max(0, addScores(running.kim, event.delta.kim)),
+    };
+    return {
+      round: event.round,
+      eventId: `${event.type}-${event.id}-${index}`,
+      eventType: event.type,
+      jay: running.jay,
+      kim: running.kim,
+    };
+  });
+};
 
 export const createRoundResult = (input, nextNumber = 1, priorTotals = emptyTotals()) => {
   const roundType = normalizeRoundType(input.roundType);
@@ -1037,7 +1106,8 @@ export const exportRoundsCsv = (rounds) => {
   return [headers.map(escape), ...rows].map((row) => row.join(',')).join('\n');
 };
 
-export const calculateAnalytics = (rounds = []) => {
+export const calculateAnalytics = (rounds = [], options = {}) => {
+  const penaltyAdjustments = Array.isArray(options?.penaltyAdjustments) ? options.penaltyAdjustments : [];
   const totals = getTotals(rounds);
   const totalRounds = rounds.length;
   const roundWins = { jay: 0, kim: 0, tie: 0 };
@@ -1179,11 +1249,7 @@ export const calculateAnalytics = (rounds = []) => {
     totalRounds ? totals.kim / totalRounds : 0,
   );
 
-  const cumulativeSeries = rounds.map((round) => ({
-    round: round.number,
-    jay: round.totalsAfterRound.jay,
-    kim: round.totalsAfterRound.kim,
-  }));
+  const cumulativeSeries = buildCumulativePenaltySeries(rounds, penaltyAdjustments);
 
   const roundBars = rounds.map((round) => ({
     round: round.number,

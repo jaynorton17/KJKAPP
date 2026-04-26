@@ -113,6 +113,9 @@ const hasQuestionTemplateChanged = (existingQuestion, nextQuestion) => {
       defaultAnswerType: question.defaultAnswerType,
       answerType: question.answerType,
       multipleChoiceOptions: question.multipleChoiceOptions || [],
+      bankType: question.bankType || 'game',
+      correctAnswer: question.correctAnswer || '',
+      normalizedCorrectAnswer: question.normalizedCorrectAnswer || '',
     });
 
   return comparable(existingQuestion) !== comparable(nextQuestion);
@@ -140,7 +143,7 @@ export const parseGoogleSheetReference = (value) => {
   };
 };
 
-export const parseCsv = (rawText) => {
+const parseCsvRows = (rawText) => {
   const rows = [];
   let row = [];
   let field = '';
@@ -171,16 +174,22 @@ export const parseCsv = (rawText) => {
 
   row.push(field.trim());
   if (row.some(Boolean)) rows.push(row);
-  if (!rows.length) return [];
+  if (!rows.length) return { headers: [], rows: [] };
 
   const headers = rows[0].map(normalizeText);
-  return rows.slice(1).filter((cells) => cells.some(Boolean)).map((cells) => {
+  const parsedRows = rows.slice(1).filter((cells) => cells.some(Boolean)).map((cells) => {
     const item = {};
     headers.forEach((header, index) => {
       item[header] = cells[index] ?? '';
     });
-    return mapRow(item);
+    return item;
   });
+  return { headers, rows: parsedRows };
+};
+
+export const parseCsv = (rawText) => {
+  const parsed = parseCsvRows(rawText);
+  return parsed.rows.map((row) => mapRow(row));
 };
 
 const parseBlockText = (rawText) => {
@@ -420,6 +429,130 @@ export const parseGoogleSheetImport = ({
     updates,
     summary: {
       total: rows.length,
+      imported: imports.length,
+      updated: updates.length,
+      duplicates,
+      invalid,
+      skipped,
+    },
+  };
+};
+
+const normalizeQuizQuestionType = (value) => {
+  const normalized = normalizeHeader(value);
+  if (normalized === 'truefalse' || normalized === 'trueorfalse' || normalized === 'boolean') return 'trueFalse';
+  if (normalized === 'multiplechoice' || normalized === 'multiple' || normalized === 'mcq') return 'multipleChoice';
+  if (normalized === 'text' || normalized === 'written' || normalized === 'shortanswer') return 'text';
+  return 'text';
+};
+
+const normalizeLooseAnswer = (value) =>
+  normalizeText(value)
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+export const parseGoogleSheetQuizImport = ({
+  rawText,
+  existingQuestions = [],
+  overwriteExisting = true,
+  importedAt = new Date().toISOString(),
+  sourceLabel = '',
+}) => {
+  const parsed = parseCsvRows(rawText);
+  const seenQuestions = [];
+  const imports = [];
+  const updates = [];
+  let duplicates = 0;
+  let invalid = 0;
+  let skipped = 0;
+
+  const preview = parsed.rows.map((rawRow, index) => {
+    const row = Object.fromEntries(Object.entries(rawRow).map(([key, value]) => [normalizeHeader(key), value]));
+    const questionText = normalizeText(row.question || '');
+    const category = normalizeText(row.category || '') || 'Uncategorised';
+    const roundType = normalizeQuizQuestionType(row.type);
+    const correctAnswer = normalizeText(row.correctanswer || row.answer || '');
+    const options = [
+      normalizeText(row.multi1 || ''),
+      normalizeText(row.multi2 || ''),
+      normalizeText(row.multi3 || ''),
+      normalizeText(row.multi4 || ''),
+    ].filter(Boolean);
+
+    const errors = [];
+    if (!questionText) errors.push('Missing question text');
+    if (!correctAnswer) errors.push('Missing correct answer');
+    if (roundType === 'multipleChoice' && options.length < 2) errors.push('Multiple choice needs at least 2 options');
+
+    const question = createQuestionTemplate({
+      question: questionText,
+      category,
+      roundType,
+      answerType: roundType === 'text' ? 'text' : 'multipleChoice',
+      defaultAnswerType: roundType === 'text' ? 'text' : 'multipleChoice',
+      multipleChoiceOptions: roundType === 'multipleChoice' || roundType === 'trueFalse' ? options : [],
+      source: 'googleSheetQuiz',
+      sourceLabel,
+      importedFromGoogleSheet: true,
+      importDate: importedAt,
+      bankType: 'quiz',
+      correctAnswer,
+      normalizedCorrectAnswer: normalizeLooseAnswer(correctAnswer),
+    });
+
+    if (errors.length) {
+      invalid += 1;
+      return { index, question, errors, status: 'invalid' };
+    }
+
+    const duplicateImport = seenQuestions.some((entry) => matchesQuestionTemplate(entry, question));
+    if (duplicateImport) {
+      duplicates += 1;
+      return { index, question, errors, status: 'duplicate' };
+    }
+    seenQuestions.push(question);
+
+    const existingMatch = findMatchingQuestion(existingQuestions, question);
+    if (!existingMatch) {
+      imports.push(question);
+      return { index, question, errors, status: 'import' };
+    }
+
+    if (!overwriteExisting) {
+      duplicates += 1;
+      return { index, question, errors, status: 'duplicate', existingId: existingMatch.id };
+    }
+
+    const updatedQuestion = createQuestionTemplate({
+      ...existingMatch,
+      ...question,
+      id: existingMatch.id,
+      used: existingMatch.used,
+      timesPlayed: existingMatch.timesPlayed,
+      lastPlayedAt: existingMatch.lastPlayedAt,
+      createdAt: existingMatch.createdAt,
+      importDate: importedAt,
+    });
+
+    if (hasQuestionTemplateChanged(existingMatch, updatedQuestion)) {
+      updates.push(updatedQuestion);
+      return { index, question: updatedQuestion, errors, status: 'update', existingId: existingMatch.id };
+    }
+
+    skipped += 1;
+    return { index, question: existingMatch, errors, status: 'skipped', existingId: existingMatch.id };
+  });
+
+  return {
+    format: 'googleSheetQuizCsv',
+    preview,
+    imports,
+    updates,
+    summary: {
+      total: parsed.rows.length,
       imported: imports.length,
       updated: updates.length,
       duplicates,

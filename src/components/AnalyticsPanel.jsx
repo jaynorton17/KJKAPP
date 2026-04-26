@@ -170,7 +170,7 @@ function LineChart({ data }) {
         const jayPoint = getPoint(item, index, 'jay');
         const kimPoint = getPoint(item, index, 'kim');
         return (
-          <g key={item.round}>
+          <g key={item.eventId || `${item.round}-${index}`}>
             <circle cx={jayPoint.x} cy={jayPoint.y} r="4.5" className="dot-jay" />
             <rect x={kimPoint.x - 4.5} y={kimPoint.y - 4.5} width="9" height="9" rx="2.5" className="dot-kim" />
           </g>
@@ -729,6 +729,10 @@ function AnalyticsPanel({ analytics, categoryColorMap = CATEGORY_COLOR_MAP, vari
 
   if (variant === 'dashboard') {
     const smartInsights = buildSmartInsights(analytics, summary);
+    const totalPenalty = {
+      jay: Number.isFinite(Number(summary?.lifetimeJayBalance)) ? Number(summary.lifetimeJayBalance) : Number(analytics.totals?.jay || 0),
+      kim: Number.isFinite(Number(summary?.lifetimeKimBalance)) ? Number(summary.lifetimeKimBalance) : Number(analytics.totals?.kim || 0),
+    };
     const gameLeaderLabel = (() => {
       const jayWins = Number(summary?.jayGameWins || 0);
       const kimWins = Number(summary?.kimGameWins || 0);
@@ -754,12 +758,12 @@ function AnalyticsPanel({ analytics, categoryColorMap = CATEGORY_COLOR_MAP, vari
 
           <article className="analytics-cockpit-card analytics-cockpit-card--penalty">
             <div className="analytics-cockpit-head">
-              <span className="analytics-cockpit-label">Total Penalty</span>
-              <span className="analytics-cockpit-meta">{summary?.totalRoundsPlayed ?? analytics.totalRounds ?? 0} rounds logged</span>
+              <span className="analytics-cockpit-label">Global Penalty</span>
+              <span className="analytics-cockpit-meta">Current balance</span>
             </div>
             <CompactPairStat
-              jayValue={formatScore(analytics.totals?.jay || 0)}
-              kimValue={formatScore(analytics.totals?.kim || 0)}
+              jayValue={formatScore(totalPenalty.jay)}
+              kimValue={formatScore(totalPenalty.kim)}
             />
           </article>
 

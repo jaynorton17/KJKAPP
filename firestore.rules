@@ -69,5 +69,17 @@ service cloud.firestore {
     match /gameInvites/{inviteId} {
       allow read, write: if signedIn();
     }
+
+    match /questionFeedback/{feedbackId} {
+      allow read, write: if signedIn();
+    }
+
+    match /questionReplays/{replayId} {
+      allow read, write: if signedIn();
+    }
+
+    match /quizAnswers/{quizAnswerId} {
+      allow read, write: if signedIn();
+    }
   }
 }
