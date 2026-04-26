@@ -869,6 +869,7 @@ function LobbyScreen({
   onCreateGame,
   onJoinGame,
   onJoinGameInvite,
+  onDismissGameInvite,
   onSyncQuestionBank,
   onImportQuestions,
   onResumeGame,
@@ -1318,7 +1319,13 @@ function LobbyScreen({
                 </div>
 
                 {gameInvites.length ? (
-                  <GameInvitesPanel invites={gameInvites} onJoinInvite={onJoinGameInvite} isBusy={isBusy} compact />
+                  <GameInvitesPanel
+                    invites={gameInvites}
+                    onJoinInvite={onJoinGameInvite}
+                    onDismissInvite={onDismissGameInvite}
+                    isBusy={isBusy}
+                    compact
+                  />
                 ) : null}
               </section>
             </div>
@@ -1508,7 +1515,12 @@ function LobbyScreen({
                 <div className="activity-content activity-content--pending">
                   <div className="pending-dashboard-grid pending-dashboard-grid--activity">
                     <div className="pending-dashboard-column">
-                      <GameInvitesPanel invites={gameInvites} onJoinInvite={onJoinGameInvite} isBusy={isBusy} />
+                      <GameInvitesPanel
+                        invites={gameInvites}
+                        onJoinInvite={onJoinGameInvite}
+                        onDismissInvite={onDismissGameInvite}
+                        isBusy={isBusy}
+                      />
 
                       <PendingRedemptionsPanel
                         sectionId="dashboard-pending-redemptions"
@@ -2664,7 +2676,7 @@ function PendingRedemptionsPanel({ items, onMarkSeen, onMarkCompleted, isBusy, s
   );
 }
 
-function GameInvitesPanel({ invites = [], onJoinInvite, isBusy, compact = false }) {
+function GameInvitesPanel({ invites = [], onJoinInvite, onDismissInvite, isBusy, compact = false }) {
   if (!invites.length) return null;
   const visibleInvites = invites.slice(0, compact ? 3 : 8);
   const content = (
@@ -2693,9 +2705,14 @@ function GameInvitesPanel({ invites = [], onJoinInvite, isBusy, compact = false 
                   Join
                 </Button>
               ) : (
-                <Button className="ghost-button compact" disabled>
-                  Unavailable
-                </Button>
+                <>
+                  <Button className="ghost-button compact" disabled>
+                    Unavailable
+                  </Button>
+                  <Button className="ghost-button compact" onClick={() => onDismissInvite(invite)} disabled={isBusy || !onDismissInvite}>
+                    Dismiss
+                  </Button>
+                </>
               )}
             </div>
           </article>
@@ -5695,6 +5712,7 @@ function ProductionApp() {
     () =>
       gameInvites
         .filter((invite) => matchesCurrentPlayerIdentity(invite.invitedForUserId) && invite.invitedByUserId !== user?.uid)
+        .filter((invite) => (invite.status || 'pending') !== 'dismissed')
         .map((invite) => {
           const linkedGame =
             (game?.id === invite.gameId ? game : null)
@@ -8178,6 +8196,21 @@ function ProductionApp() {
       });
     }, 'Could not join invited game.');
 
+  const dismissGameInviteAction = async (invite) =>
+    withBusy(async () => {
+      if (!invite?.id) throw new Error('This invite could not be dismissed.');
+      const inviteStatus = invite.displayStatus || invite.status || 'pending';
+      if (inviteStatus === 'pending') throw new Error('Active invites can only be joined, not dismissed.');
+      await setGameInviteStatus(invite.id, {
+        status: 'dismissed',
+        gameStatus: invite.gameStatus || 'unavailable',
+        dismissedAt: serverTimestamp(),
+        dismissedByUserId: user?.uid || '',
+      });
+      setGameInvites((current) => current.filter((entry) => entry.id !== invite.id));
+      setNotice('Invite dismissed.');
+    }, 'Could not dismiss invite.');
+
   const resumeGame = async (nextGameId) => {
     if (!nextGameId) return;
     setLocalEndedGameSummary(null);
@@ -8901,6 +8934,7 @@ function ProductionApp() {
         onCreateGame={createGame}
         onJoinGame={joinGame}
         onJoinGameInvite={acceptGameInviteAction}
+        onDismissGameInvite={dismissGameInviteAction}
         onSyncQuestionBank={syncSheet}
         onImportQuestions={importSheet}
         onResumeGame={resumeGame}
