@@ -481,14 +481,14 @@ const inferChoiceOptions = (round = {}) => {
 };
 
 const decodeRankedAnswer = (value, count = 3) => {
-  const items = parseAnswerList(value);
+  const rawValue = Array.isArray(value) ? value : String(value || '').split(/\n|,|;/);
+  const items = rawValue.map((item) => String(item ?? '').replace(/^\d+[.)]\s*/, ''));
   return Array.from({ length: count }, (_, index) => items[index] || '');
 };
 
 const encodeRankedAnswer = (items = []) =>
   items
-    .map((item) => normalizeText(item))
-    .filter(Boolean)
+    .map((item) => String(item ?? '').replace(/\r?\n/g, ' '))
     .join('\n');
 
 const buildDiaryAnalyticsSnapshot = (roundAnalytics = null, relatedCategories = []) => {

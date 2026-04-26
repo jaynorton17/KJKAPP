@@ -5757,9 +5757,13 @@ button:disabled {
 }
 
 .room-reveal-center-card strong {
+  display: block;
+  max-width: 100%;
   font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
-  font-size: clamp(1.35rem, 2.6vw, 2.5rem);
-  line-height: 0.9;
+  font-size: clamp(1.25rem, 2.1vw, 2rem);
+  line-height: 0.95;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
   text-transform: uppercase;
 }
 
@@ -6306,11 +6310,20 @@ button:disabled {
 
 .top-bar--room {
   align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+}
+
+.top-bar--room .top-bar-left,
+.top-bar--room .brand-lockup,
+.top-bar--room .top-actions {
+  grid-area: auto;
 }
 
 .top-actions--room {
   flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: flex-start;
+  max-width: 100%;
   overflow: visible;
   row-gap: 6px;
 }
@@ -6319,6 +6332,13 @@ button:disabled {
 .top-actions--room > button,
 .top-actions--room > details {
   flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.top-actions--room > .status-pill {
+  justify-content: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .room-end-game-button {
