@@ -3568,6 +3568,15 @@ function QuizSetupStagePanel({
     }
   }, [shouldPreferWheelMode]);
 
+  const onRejectAndPropose = async () => {
+    try {
+      if (pendingProposal) await onRejectQuizWager();
+    } catch (err) {
+      // ignore reject errors and continue to propose
+    }
+    await onSaveQuizWager();
+  };
+
   return (
     <>
     <section className="room-active-frame room-active-frame--setup room-active-frame--quiz room-active-frame--quiz-setup" aria-label="Quick Fire quiz setup">
@@ -3607,12 +3616,9 @@ function QuizSetupStagePanel({
                 <span className="quiz-negotiation-focus-label">Shared wager</span>
                 <strong>{formatScore(activeWagerDisplayAmount)}</strong>
                 <p>{negotiationStatusText}</p>
-                <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-choice-manual-actions">
-                  <Button className="ghost-button compact quiz-wager-reject-button" onClick={onRejectQuizWager} disabled={isBusy || manualIsLocked || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || wheelActive}>
-                    Reject
-                  </Button>
-                  <Button className="ghost-button compact quiz-wager-propose-button" onClick={onSaveQuizWager} disabled={isBusy || manualIsLocked || !bothPlayersJoined || sharedWagerLocked || wheelActive}>
-                    Propose New Price
+                <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-choice-manual-actions quiz-choice-manual-single">
+                  <Button className="ghost-button compact quiz-wager-propose-button" onClick={onRejectAndPropose} disabled={isBusy || manualIsLocked || !bothPlayersJoined || sharedWagerLocked || wheelActive}>
+                    Reject and Propose New Wager
                   </Button>
                   <Button className="primary-button compact quiz-wager-accept-button" onClick={onAcceptQuizWager} disabled={isBusy || manualIsLocked || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || sharedWagerLocked || wheelActive}>
                     Accept

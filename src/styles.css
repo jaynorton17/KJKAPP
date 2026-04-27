@@ -4716,7 +4716,8 @@ button:disabled {
 
 .quiz-choice-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 0.9fr) minmax(340px, 1.18fr) minmax(300px, 1fr);
+  /* Left, middle (chat), right (wheel). Keep right column capped so it remains visible on narrower screens. */
+  grid-template-columns: minmax(200px, 1fr) minmax(300px, 1fr) minmax(220px, 320px);
   gap: 12px;
   align-items: stretch;
   width: 100%;
@@ -4725,6 +4726,40 @@ button:disabled {
   min-height: 0;
   height: 100%;
   margin-inline: auto;
+  overflow: visible;
+}
+
+/* Ensure wheel zone hugs the right side and its action button stays at the bottom */
+.quiz-choice-zone--wheel {
+  justify-self: end;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+.quiz-wheel-stage {
+  justify-self: center;
+}
+
+.quiz-wheel-action-stack {
+  margin-top: auto; /* pin spin button to bottom of wheel column */
+  padding-top: 8px;
+}
+
+@media (max-width: 980px) {
+  /* On medium/narrow screens, allow the middle column to shrink before pushing the wheel offscreen */
+  .quiz-choice-grid {
+    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) minmax(200px, 280px);
+  }
+}
+
+@media (max-width: 700px) {
+  /* Mobile: stack with wheel below content but keep Spin button full-width at bottom */
+  .mobile-board-panel .quiz-choice-grid {
+    grid-template-columns: 1fr;
+  }
+  .quiz-wheel-action-stack .primary-button {
+    width: 100%;
+  }
 }
 
 .quiz-choice-zone {
@@ -5018,16 +5053,18 @@ button:disabled {
 }
 
 .quiz-choice-zone__content--wheel {
-  align-content: start;
-  justify-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 10px;
-  grid-template-rows: minmax(0, 1fr) auto;
   padding-block: 0;
+  min-height: 0;
 }
 
 .quiz-choice-wheel-card {
   width: 100%;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   align-content: center;
   border: 0;
   background: transparent;
@@ -5336,8 +5373,31 @@ button:disabled {
   box-shadow: 0 0 16px rgba(255, 211, 105, 0.16);
 }
 
+/* Variant: use single-column stacked actions when reject is merged into propose */
+.quiz-choice-manual-actions.quiz-choice-manual-single {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "propose"
+    "accept";
+  gap: 8px;
+  position: sticky;
+  bottom: 12px;
+  z-index: 2;
+  padding-bottom: 6px;
+  background: linear-gradient(transparent, rgba(7, 11, 20, 0.12));
+}
+
+/* Reduce min-height on mobile for stacked actions to keep Accept visible */
+@media (max-width: 640px) {
+  .mobile-board-panel .quiz-choice-manual-actions.quiz-choice-manual-single .compact {
+    min-height: 44px;
+    font-size: 0.74rem;
+  }
+}
+
+
 .quiz-wheel-action-stack {
-  align-self: end;
+  margin-top: auto;
   grid-template-columns: 1fr;
   max-width: 420px;
   justify-self: center;
