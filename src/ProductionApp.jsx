@@ -3541,165 +3541,182 @@ function QuizSetupStagePanel({
   const viewerReady = hasQuizSetupReadySeat(game, currentPlayer);
   const otherReady = hasQuizSetupReadySeat(game, otherPlayer);
   const shouldPreferWheelMode = Boolean(agreement.lockedByWheel || wheelActive || viewerWheelOptedIn || otherWheelOptedIn);
-  const [wagerMode, setWagerMode] = useState(shouldPreferWheelMode ? 'wheel' : 'manual');
-  const isWheelMode = wagerMode === 'wheel';
-  const isManualMode = !isWheelMode;
+  const [selectionMode, setSelectionMode] = useState(() => (shouldPreferWheelMode ? 'wheel' : null));
+  const hasSelectedMode = Boolean(selectionMode);
+  const isManualMode = selectionMode === 'manual';
+  const isChatMode = selectionMode === 'chat';
+  const isWheelMode = selectionMode === 'wheel';
   const cappedProposalAmount = capQuizWagerAmount(agreement.proposedAmount, wheelBaseAmount);
   const activeWagerDisplayAmount = sharedWagerLocked
     ? sharedWagerAmount || 0
     : pendingProposal
       ? cappedProposalAmount
       : capQuizWagerAmount(quizWagerDraft, wheelBaseAmount);
-  const wheelIsLocked = !isWheelMode;
-  const manualIsLocked = isWheelMode || wheelActive;
+  const manualIsInactive = !isManualMode;
+  const wheelIsInactive = !isWheelMode;
+  const manualIsLocked = manualIsInactive || wheelActive || sharedWagerLocked;
+  const wheelIsLocked = wheelIsInactive || sharedWagerLocked;
   const proposalButtonText = pendingProposal ? 'Pose a new value' : 'Propose value';
 
   useEffect(() => {
     if (shouldPreferWheelMode) {
-      setWagerMode('wheel');
-      return;
+      setSelectionMode('wheel');
     }
-    if (sharedWagerLocked) setWagerMode('manual');
-  }, [sharedWagerLocked, shouldPreferWheelMode]);
+  }, [shouldPreferWheelMode]);
 
   return (
+    <>
     <section className="room-active-frame room-active-frame--setup room-active-frame--quiz room-active-frame--quiz-setup" aria-label="Quick Fire quiz setup">
       <div className="scoreboard-sheen" aria-hidden="true" />
       <div className="room-active-stage room-active-stage--answering">
-        <header className="room-active-header room-active-header--quiz-wager">
-          <div>
-            <span className="scoreboard-kicker">Quick Fire Wager</span>
-            <h2>Agree a shared wager</h2>
-            <p className="quiz-wager-intro">Both players must agree the shared wager or lock a wheel result.</p>
-          </div>
-        </header>
-        <div className="quiz-negotiation-grid quiz-negotiation-grid--mode">
-          <section className="quiz-wager-mode-panel">
-            <div className="quiz-wager-mode-tabs" role="tablist" aria-label="Quick Fire wager mode">
-              <button
-                type="button"
-                className={`dashboard-pill tab-button ${wagerMode === 'manual' ? 'is-active' : ''}`}
-                onClick={() => setWagerMode('manual')}
-                disabled={wheelActive || Boolean(agreement.lockedByWheel)}
-                role="tab"
-                aria-selected={wagerMode === 'manual'}
-              >
-                Manual negotiation
-              </button>
-              <button
-                type="button"
-                className={`dashboard-pill tab-button ${wagerMode === 'wheel' ? 'is-active' : ''}`}
-                onClick={() => setWagerMode('wheel')}
-                disabled={wheelActive || (sharedWagerLocked && !agreement.lockedByWheel)}
-                role="tab"
-                aria-selected={wagerMode === 'wheel'}
-              >
-                Wheel spin
-              </button>
+        <section className="quiz-wager-mode-panel">
+          <div className={`quiz-choice-grid ${hasSelectedMode ? `quiz-choice-grid--selected quiz-choice-grid--selected-${selectionMode}` : 'quiz-choice-grid--locked'}`}>
+          <section className={`quiz-choice-zone quiz-choice-zone--manual ${isManualMode ? 'is-active' : 'is-shaded'}`}>
+            <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--manual">
+              <span className="scoreboard-kicker">Quick Fire Wager</span>
+              <h2>Agree a shared wager</h2>
+              <p className="quiz-wager-intro">Both players must agree the shared wager or lock a wheel result.</p>
             </div>
-
-            <div className={`quiz-wager-mode-body quiz-wager-mode-body--split ${isWheelMode ? 'quiz-wager-mode-body--wheel-selected' : 'quiz-wager-mode-body--manual-selected'}`}>
-              <div className="quiz-wager-console">
-                <div className="quiz-wager-left">
-                  <div className={`quiz-wager-amount-card ${manualIsLocked ? 'is-locked' : ''}`}>
-                    {manualIsLocked ? (
-                      <div className="quiz-control-lock" aria-label="Locked" role="img">
-                        <span className="quiz-control-lock__shackle" aria-hidden="true" />
-                        <span className="quiz-control-lock__body" aria-hidden="true" />
-                      </div>
-                    ) : null}
-                    <label className="field quiz-wager-amount-field">
-                      <span>Wager amount</span>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min="0"
-                        max={wheelBaseAmount}
-                        value={sharedWagerLocked ? sharedWagerAmount || 0 : quizWagerDraft}
-                        onChange={(event) => {
-                          const nextValue = event.target.value;
-                          setQuizWagerDraft(nextValue === '' ? '' : String(capQuizWagerAmount(nextValue, wheelBaseAmount)));
-                        }}
-                        placeholder="0"
-                        disabled={sharedWagerLocked || manualIsLocked}
-                      />
-                    </label>
-                    <span className="quiz-wager-cap-copy">{`Enter a value between 0 and ${formatScore(wheelBaseAmount)}.`}</span>
-                    <div className="quiz-negotiation-status">
-                      {sharedWagerLocked ? (
-                        <span>{`Agreed shared wager: ${formatScore(sharedWagerAmount || 0)}.`}</span>
-                      ) : pendingProposal ? (
-                        <span>{`${proposalLabel} proposed ${formatScore(cappedProposalAmount)}.`}</span>
-                      ) : bothPlayersJoined ? (
-                        <span>Either player can propose an amount, then the other can accept, reject, or counter.</span>
-                      ) : (
-                        <span>Waiting for both players to join before the wager can be agreed.</span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className={`quiz-wager-wheel-card ${wheelIsLocked ? 'is-locked' : ''}`}>
-                    <span className="quiz-wager-wheel-label">Wager wheel</span>
-                    <QuizWagerWheelOverlay agreement={agreement} baseAmount={wheelBaseAmount} forceVisible disabled={wheelIsLocked} />
-                  </div>
+            {manualIsInactive ? (
+              <div className="quiz-choice-shade" aria-hidden="true">
+                <div className="quiz-control-lock quiz-choice-lock">
+                  <span className="quiz-control-lock__shackle" aria-hidden="true" />
+                  <span className="quiz-control-lock__body" aria-hidden="true" />
                 </div>
-
-                <div className="quiz-wager-right">
-                  <div className="quiz-negotiation-chat">
-                    <ChatPanel
-                      compact
-                      messages={chatMessages}
-                      draft={chatDraft}
-                      onDraftChange={onChatDraftChange}
-                      onSend={onSendChat}
-                      isBusy={isBusy}
-                      seat={currentPlayer}
-                      displayName={chatDisplayName}
-                    />
-                  </div>
-
-                  {isManualMode ? (
-                    <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack">
-                      <Button className="primary-button compact" onClick={onAcceptQuizWager} disabled={isBusy || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || sharedWagerLocked || wheelActive}>
-                        {`Accept ${formatScore(activeWagerDisplayAmount)}`}
-                      </Button>
-                      <Button className="ghost-button compact quiz-wager-reject-button" onClick={onRejectQuizWager} disabled={isBusy || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || wheelActive}>
-                        Reject
-                      </Button>
-                      <Button className="ghost-button compact quiz-wager-propose-button" onClick={onSaveQuizWager} disabled={isBusy || !bothPlayersJoined || sharedWagerLocked || wheelActive}>
-                        {proposalButtonText}
-                      </Button>
-                    </div>
+              </div>
+            ) : null}
+            <div className={`quiz-choice-zone__content ${manualIsLocked ? 'is-locked' : ''}`}>
+              <div className="quiz-wager-amount-card quiz-choice-manual-card">
+                <label className="field quiz-wager-amount-field">
+                  <span>Wager amount</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    max={wheelBaseAmount}
+                    value={sharedWagerLocked ? sharedWagerAmount || 0 : quizWagerDraft}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      setQuizWagerDraft(nextValue === '' ? '' : String(capQuizWagerAmount(nextValue, wheelBaseAmount)));
+                    }}
+                    placeholder="0"
+                    disabled={sharedWagerLocked || manualIsLocked}
+                  />
+                </label>
+                <span className="quiz-wager-cap-copy">{`Enter a value between 0 and ${formatScore(wheelBaseAmount)}.`}</span>
+                <div className="quiz-negotiation-status">
+                  {sharedWagerLocked ? (
+                    <span>{`Agreed shared wager: ${formatScore(sharedWagerAmount || 0)}.`}</span>
+                  ) : pendingProposal ? (
+                    <span>{`${proposalLabel} proposed ${formatScore(cappedProposalAmount)}.`}</span>
+                  ) : bothPlayersJoined ? (
+                    <span>Either player can propose an amount, then the other can accept, reject, or counter.</span>
                   ) : (
-                    <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-wheel-action-stack">
-                      <Button className="primary-button compact" onClick={() => onSetQuizWheelOptIn?.(true)} disabled={isBusy || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelBaseAmount <= 0 || viewerWheelOptedIn}>
-                        Spin the wheel
-                      </Button>
-                      <div className="quiz-ready-summary quiz-wheel-opt-in-summary" aria-live="polite">
-                        <span className={`submitted-status-pill ${viewerWheelOptedIn ? 'is-submitted' : ''}`}>{viewerWheelOptedIn ? `${viewerLabel} confirmed` : `${viewerLabel} not confirmed`}</span>
-                        <span className={`submitted-status-pill ${otherWheelOptedIn ? 'is-submitted' : ''}`}>{otherWheelOptedIn ? `${oppositeLabel} confirmed` : `${oppositeLabel} not confirmed`}</span>
-                      </div>
-                    </div>
+                    <span>Waiting for both players to join before the wager can be agreed.</span>
                   )}
                 </div>
               </div>
-            </div>
-            <div className="quiz-ready-inline" role="status" aria-live="polite">
-              <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !sharedWagerLocked || viewerReady || wheelActive}>
-                {viewerReady ? 'Ready' : 'Ready to Start'}
-              </Button>
-              {sharedWagerLocked ? (
-                <span>
-                  {viewerReady
-                    ? 'Waiting for the other player. The question appears once both players are ready.'
-                    : 'Tap Ready once the shared wager looks right.'}
-                </span>
-              ) : null}
+
+              <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-choice-manual-actions">
+                <Button className="primary-button compact" onClick={onAcceptQuizWager} disabled={isBusy || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || sharedWagerLocked || wheelActive}>
+                  {`Accept ${formatScore(activeWagerDisplayAmount)}`}
+                </Button>
+                <Button className="ghost-button compact quiz-wager-reject-button" onClick={onRejectQuizWager} disabled={isBusy || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || wheelActive}>
+                  Reject
+                </Button>
+                <Button className="ghost-button compact quiz-wager-propose-button" onClick={onSaveQuizWager} disabled={isBusy || !bothPlayersJoined || sharedWagerLocked || wheelActive}>
+                  {proposalButtonText}
+                </Button>
+              </div>
             </div>
           </section>
+
+          <section className={`quiz-choice-zone quiz-choice-zone--chat ${isChatMode ? 'is-active' : ''}`}>
+            <div className="quiz-choice-zone__intro">
+              <span className="quiz-choice-zone__kicker">YOU CHOOSE</span>
+              <p>Pick how you’d like to agree on the wager.</p>
+            </div>
+            <div className="quiz-choice-zone__choice-stack" aria-label="Quick Fire wager mode">
+              <button
+                type="button"
+                className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--manual ${isManualMode ? 'is-active' : ''}`}
+                onClick={() => setSelectionMode('manual')}
+                aria-pressed={isManualMode}
+              >
+                <span className="quiz-choice-zone__arrow" aria-hidden="true">◀</span>
+                <span className="quiz-choice-option-text">Manual negotiation</span>
+              </button>
+              <button
+                type="button"
+                className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--wheel ${isWheelMode ? 'is-active' : ''}`}
+                onClick={() => setSelectionMode('wheel')}
+                aria-pressed={isWheelMode}
+              >
+                <span className="quiz-choice-option-text">Wheel spin</span>
+                <span className="quiz-choice-zone__arrow" aria-hidden="true">▶</span>
+              </button>
+            </div>
+            <div className="quiz-choice-zone__content quiz-choice-zone__content--chat">
+              <div className="quiz-negotiation-chat quiz-choice-chat">
+                <ChatPanel
+                  compact
+                  messages={chatMessages}
+                  draft={chatDraft}
+                  onDraftChange={onChatDraftChange}
+                  onSend={onSendChat}
+                  isBusy={isBusy}
+                  seat={currentPlayer}
+                  displayName={chatDisplayName}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className={`quiz-choice-zone quiz-choice-zone--wheel ${isWheelMode ? 'is-active' : 'is-shaded'}`}>
+            <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--wheel">
+              <span className="scoreboard-kicker">Wager Wheel</span>
+            </div>
+            {wheelIsInactive ? (
+              <div className="quiz-choice-shade" aria-hidden="true">
+                <div className="quiz-control-lock quiz-choice-lock">
+                  <span className="quiz-control-lock__shackle" aria-hidden="true" />
+                  <span className="quiz-control-lock__body" aria-hidden="true" />
+                </div>
+              </div>
+            ) : null}
+            <div className="quiz-choice-zone__content quiz-choice-zone__content--wheel">
+              <div className={`quiz-wager-wheel-card quiz-choice-wheel-card ${wheelIsLocked ? 'is-locked' : ''}`}>
+                <span className="quiz-wager-wheel-label">Wager wheel</span>
+                <QuizWagerWheelOverlay agreement={agreement} baseAmount={wheelBaseAmount} forceVisible disabled={wheelIsLocked} />
+              </div>
+              <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-wheel-action-stack">
+                <Button className="primary-button compact" onClick={() => onSetQuizWheelOptIn?.(true)} disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelBaseAmount <= 0 || viewerWheelOptedIn}>
+                  Spin the wheel
+                </Button>
+                <div className="quiz-ready-summary quiz-wheel-opt-in-summary" aria-live="polite">
+                  <span className={`submitted-status-pill ${viewerWheelOptedIn ? 'is-submitted' : ''}`}>{viewerWheelOptedIn ? `${viewerLabel} confirmed` : `${viewerLabel} not confirmed`}</span>
+                  <span className={`submitted-status-pill ${otherWheelOptedIn ? 'is-submitted' : ''}`}>{otherWheelOptedIn ? `${oppositeLabel} confirmed` : `${oppositeLabel} not confirmed`}</span>
+                </div>
+              </div>
+            </div>
+          </section>
+          </div>
+        </section>
         </div>
-      </div>
     </section>
+    <div className="quiz-ready-inline quiz-ready-inline--outside" role="status" aria-live="polite">
+      <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !sharedWagerLocked || viewerReady || wheelActive}>
+        {viewerReady ? 'Ready' : 'Ready to Start'}
+      </Button>
+      {sharedWagerLocked ? (
+        <span>
+          {viewerReady
+            ? 'Waiting for the other player. The question appears once both players are ready.'
+            : 'Tap Ready once the shared wager looks right.'}
+        </span>
+      ) : null}
+    </div>
+    </>
   );
 }
 
@@ -6974,7 +6991,7 @@ function GameRoomView({
   if (isMobile) {
     return (
       <main className="app production-app mobile-app" style={{ '--accent': activePalette.accent, '--accent-2': activePalette.accent2, '--accent-3': activePalette.accent3, '--accent-glow': activePalette.glow, '--accent-wash': activePalette.wash }}>
-      <header className="top-bar top-bar--room">
+      <header className={`top-bar top-bar--room ${isQuizGame && showQuizSetupPanel ? 'top-bar--room-quiz-setup' : ''}`}>
         <div className="top-bar-left">
           <div className="brand-lockup brand-lockup--left">
             <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
@@ -7149,19 +7166,35 @@ function GameRoomView({
     );
   }
 
+  const joinedPlayerNames = joinedPlayers.map((player) => player.displayName || 'Player').join(' + ') || 'Waiting for players';
+
   return (
       <main className="app production-app" style={{ '--accent': activePalette.accent, '--accent-2': activePalette.accent2, '--accent-3': activePalette.accent3, '--accent-glow': activePalette.glow, '--accent-wash': activePalette.wash }}>
-      <header className="top-bar top-bar--room">
+      <header className={`top-bar top-bar--room ${isQuizGame && showQuizSetupPanel ? 'top-bar--room-quiz-setup' : ''}`}>
         <div className="top-bar-left">
-          <div className="brand-lockup brand-lockup--left">
-            <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
+          <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
+        </div>
+        <div className="top-bar-center">
+          <div className="brand-lockup brand-lockup--center">
             <h1><span className="brand-mobile-mark">92.1 JKC Radio</span><span className="brand-full-text">KJK KIMJAYKINKS</span></h1>
           </div>
         </div>
-        <div className="top-actions top-actions--room">
-          <span className="status-pill">{roleLabel(role)}</span>
-          <span className="status-pill">{status}</span>
+        <div className={`top-actions top-actions--room ${isQuizGame && showQuizSetupPanel ? 'top-actions--room-quiz' : ''}`}>
+          {isQuizGame && role === 'host' ? (
+            <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
+              {status === 'paused' ? 'Resume' : 'Pause'}
+            </Button>
+          ) : null}
           {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
+          {isQuizGame && showQuizSetupPanel ? (
+            <div className="room-toolbar-stack">
+              {renderRoomOverflowMenu()}
+              <span className="room-players-pill room-players-pill--toolbar" aria-label="Joined players">
+                <span className="room-players-pill__names">{joinedPlayerNames}</span>
+                <span className="room-players-pill__status">Wagering</span>
+              </span>
+            </div>
+          ) : null}
           {!gameEnded ? (
             <Button className="ghost-button compact room-end-game-button" onClick={onEndGame}>
               End Game
@@ -7170,7 +7203,7 @@ function GameRoomView({
           <Button className="ghost-button compact" onClick={onLeaveGame}>
             Leave
           </Button>
-          {renderRoomOverflowMenu()}
+          {!isQuizGame || !showQuizSetupPanel ? renderRoomOverflowMenu() : null}
         </div>
       </header>
 
@@ -7197,17 +7230,6 @@ function GameRoomView({
       ) : (
       <section className={`game-grid ${isQuizGame ? 'game-grid--quiz-focus' : ''}`}>
         <section className={`panel room-sidebar ${isQuizGame ? `room-sidebar--quiz-drawer ${quizSidebarOpen ? 'is-open' : 'is-collapsed'}` : ''}`}>
-          {isQuizGame ? (
-            <button
-              type="button"
-              className="quiz-sidebar-toggle"
-              onClick={() => setQuizSidebarOpen((isOpen) => !isOpen)}
-              aria-expanded={quizSidebarOpen}
-              aria-label={quizSidebarOpen ? 'Hide quiz room details' : 'Show quiz room details'}
-            >
-              <span aria-hidden="true">{quizSidebarOpen ? '<' : '>'}</span>
-            </button>
-          ) : null}
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Players</p>
@@ -7218,7 +7240,7 @@ function GameRoomView({
             <article className={`mini-list-row joined-player-row ${submittedBySeat.jay ? 'is-submitted' : ''}`}>
               <div className="joined-player-row-main">
                 <strong>Jay</strong>
-	                {currentRound || showQuizSetupPanel ? (
+		                {currentRound || showQuizSetupPanel ? (
 	                  <span className={`submitted-status-pill ${(currentRound?.status === 'reveal' && isQuizGame ? nextReadyBySeat.jay : showQuizSetupPanel && isQuizGame ? quizSetupReadyBySeat.jay : submittedBySeat.jay) ? 'is-submitted' : ''}`}>
 	                    {showQuizSetupPanel && isQuizGame
                         ? (quizSetupReadyBySeat.jay ? 'Ready' : 'Wagering')
@@ -7227,9 +7249,9 @@ function GameRoomView({
                           : (submittedBySeat.jay ? 'Submitted' : 'Answering')}
 	                  </span>
 	                ) : null}
-	              </div>
-	              <span>{game?.playerProfiles?.[game?.seats?.jay]?.displayName || 'Waiting'}</span>
-	            </article>
+		              </div>
+		              <span>{game?.playerProfiles?.[game?.seats?.jay]?.displayName || 'Waiting'}</span>
+		            </article>
             <article className={`mini-list-row joined-player-row ${submittedBySeat.kim ? 'is-submitted' : ''}`}>
               <div className="joined-player-row-main">
                 <strong>Kim</strong>
@@ -7242,26 +7264,12 @@ function GameRoomView({
                           : (submittedBySeat.kim ? 'Submitted' : 'Answering')}
 	                  </span>
 	                ) : null}
-	              </div>
-	              <span>{game?.playerProfiles?.[game?.seats?.kim]?.displayName || 'Waiting'}</span>
-	            </article>
+		              </div>
+		              <span>{game?.playerProfiles?.[game?.seats?.kim]?.displayName || 'Waiting'}</span>
+		            </article>
           </div>
-          {isQuizGame ? (
-            <section className="panel host-queue-panel room-status-panel">
-              <div className="panel-heading">
-                <div>
-                  <p className="eyebrow">Quick Fire</p>
-                  <h2>Shared Wager</h2>
-                </div>
-              </div>
-              <span className="quick-desk-status quick-desk-status--inline">{quizWagerStatusLabel}</span>
-              <small className="panel-copy">
-                The first quiz question stays locked until both players accept one shared wager or the wheel result lands.
-              </small>
-            </section>
-          ) : null}
           {role === 'host' ? (
-            currentRound && revealIsReady && !isQuizGame ? (
+            isQuizGame ? null : currentRound && revealIsReady ? (
               <QuickDesk
                 currentRound={currentRound}
                 penaltyDraft={penaltyDraft}
@@ -7283,12 +7291,10 @@ function GameRoomView({
                 </div>
                 <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
                 <p className="panel-copy">
-                  {!currentRound
-                    ? (isQuizGame ? 'Quiz questions appear automatically once both players are ready.' : 'Load the next question when you are ready.')
-                    : 'Players are answering inside the main board.'}
+                  Load the next question when you are ready.
                 </p>
                 <div className="button-row room-host-sidebar-actions">
-                  {!currentRound && !isQuizGame ? (
+                  {!currentRound ? (
                     <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
                       Next Question
                     </Button>
