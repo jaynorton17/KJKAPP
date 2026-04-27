@@ -3576,6 +3576,29 @@ function QuizSetupStagePanel({
         <section className="quiz-wager-mode-panel">
           <div className={`quiz-choice-grid quiz-choice-grid--selected quiz-choice-grid--selected-${selectionMode}`}>
           <section className={`quiz-choice-zone quiz-choice-zone--manual ${isManualMode ? 'is-active' : 'is-shaded'}`} aria-disabled={manualIsInactive}>
+            <div className="quiz-choice-zone__mode-select">
+              <span className="quiz-choice-zone__kicker">You choose</span>
+              <div className="quiz-choice-zone__choice-stack quiz-choice-zone__choice-stack--left" aria-label="Quick Fire wager mode">
+                <button
+                  type="button"
+                  className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--manual ${isManualMode ? 'is-active' : ''}`}
+                  onClick={() => setSelectionMode('manual')}
+                  aria-pressed={isManualMode}
+                >
+                  <span className="quiz-choice-arrow quiz-choice-arrow--left" aria-hidden="true">←</span>
+                  <span className="quiz-choice-option-text">Manual negotiation</span>
+                </button>
+                <button
+                  type="button"
+                  className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--wheel ${isWheelMode ? 'is-active' : ''}`}
+                  onClick={() => setSelectionMode('wheel')}
+                  aria-pressed={isWheelMode}
+                >
+                  <span className="quiz-choice-option-text">Wheel spin</span>
+                  <span className="quiz-choice-arrow quiz-choice-arrow--right" aria-hidden="true">→</span>
+                </button>
+              </div>
+            </div>
             <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--manual">
               <h2>Agree a shared wager</h2>
               <p className="quiz-wager-intro">Both players must agree the shared wager or lock a wheel result.</p>
@@ -3627,28 +3650,8 @@ function QuizSetupStagePanel({
 
           <section className="quiz-choice-zone quiz-choice-zone--chat is-active">
             <div className="quiz-choice-zone__intro">
-              <span className="quiz-choice-zone__kicker">YOU CHOOSE</span>
-              <p>Pick how you’d like to agree on the wager.</p>
-            </div>
-            <div className="quiz-choice-zone__choice-stack" aria-label="Quick Fire wager mode">
-              <button
-                type="button"
-                className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--manual ${isManualMode ? 'is-active' : ''}`}
-                onClick={() => setSelectionMode('manual')}
-                aria-pressed={isManualMode}
-              >
-                <span className="quiz-choice-arrow quiz-choice-arrow--left" aria-hidden="true">←</span>
-                <span className="quiz-choice-option-text">Manual negotiation</span>
-              </button>
-              <button
-                type="button"
-                className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--wheel ${isWheelMode ? 'is-active' : ''}`}
-                onClick={() => setSelectionMode('wheel')}
-                aria-pressed={isWheelMode}
-              >
-                <span className="quiz-choice-option-text">Wheel spin</span>
-                <span className="quiz-choice-arrow quiz-choice-arrow--right" aria-hidden="true">→</span>
-              </button>
+              <span className="quiz-choice-zone__kicker">Wager chat</span>
+              <p>Talk through the shared wager before both players ready up.</p>
             </div>
             <div className="quiz-choice-zone__content quiz-choice-zone__content--chat">
               <div className="quiz-negotiation-chat quiz-choice-chat">
