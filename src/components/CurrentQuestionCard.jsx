@@ -18,9 +18,11 @@ function CurrentQuestionCard({ round, selectedQuestion, nextNumber }) {
         </div>
       </div>
 
-      <p className="question-card-text">
-        {questionText || 'Draw a random question from the bank or type one into Current Round.'}
-      </p>
+      <div className="question-card-text-wrap" role="region" aria-label="Current question">
+        <p className="question-card-text">
+          {questionText || 'Draw a random question from the bank or type one into Current Round.'}
+        </p>
+      </div>
 
       {round ? (
         <div className="round-verdict">
