@@ -3464,12 +3464,6 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
   return (
     <div className={`quiz-wheel-inline quiz-wheel-inline--${displayPhase || 'ready'} ${disabled ? 'quiz-wheel-inline--disabled' : ''}`} role="status" aria-live="polite">
       <div className="quiz-wheel-stage">
-        {disabled ? (
-          <div className="quiz-control-lock" aria-label="Locked" role="img">
-            <span className="quiz-control-lock__shackle" aria-hidden="true" />
-            <span className="quiz-control-lock__body" aria-hidden="true" />
-          </div>
-        ) : null}
         <div className="quiz-wheel-pointer" aria-hidden="true" />
         <div className="quiz-wheel-dial" style={{ transform: `rotate(${rotation}deg)`, '--wheel-counter-rotation': `${-rotation}deg` }} aria-hidden="true">
           {slots.map((slotAmount, index) => {
@@ -3539,12 +3533,9 @@ function QuizSetupStagePanel({
   const viewerWheelOptedIn = Boolean(agreement.wheelOptIn?.[currentPlayer]);
   const otherWheelOptedIn = Boolean(agreement.wheelOptIn?.[otherPlayer]);
   const viewerReady = hasQuizSetupReadySeat(game, currentPlayer);
-  const otherReady = hasQuizSetupReadySeat(game, otherPlayer);
   const shouldPreferWheelMode = Boolean(agreement.lockedByWheel || wheelActive || viewerWheelOptedIn || otherWheelOptedIn);
-  const [selectionMode, setSelectionMode] = useState(() => (shouldPreferWheelMode ? 'wheel' : null));
-  const hasSelectedMode = Boolean(selectionMode);
+  const [selectionMode, setSelectionMode] = useState(() => (shouldPreferWheelMode ? 'wheel' : 'manual'));
   const isManualMode = selectionMode === 'manual';
-  const isChatMode = selectionMode === 'chat';
   const isWheelMode = selectionMode === 'wheel';
   const cappedProposalAmount = capQuizWagerAmount(agreement.proposedAmount, wheelBaseAmount);
   const activeWagerDisplayAmount = sharedWagerLocked
@@ -3556,7 +3547,21 @@ function QuizSetupStagePanel({
   const wheelIsInactive = !isWheelMode;
   const manualIsLocked = manualIsInactive || wheelActive || sharedWagerLocked;
   const wheelIsLocked = wheelIsInactive || sharedWagerLocked;
-  const proposalButtonText = pendingProposal ? 'Pose a new value' : 'Propose value';
+  const activeModeTitle = isWheelMode ? 'Wager Wheel' : 'Negotiation';
+  const wheelHelperText = sharedWagerLocked && agreement.lockedByWheel
+    ? `Wheel locked the shared wager at ${formatScore(sharedWagerAmount || 0)}.`
+    : viewerWheelOptedIn
+      ? `Wheel selected. Waiting for ${oppositeLabel}.`
+      : otherWheelOptedIn
+        ? `${oppositeLabel} selected the wheel. Choose wheel to spin.`
+        : 'Both players must choose the wheel before it spins.';
+  const negotiationStatusText = sharedWagerLocked
+    ? `Agreed shared wager: ${formatScore(sharedWagerAmount || 0)}.`
+    : pendingProposal
+      ? `${proposalLabel} proposed ${formatScore(cappedProposalAmount)}.`
+      : bothPlayersJoined
+        ? 'Enter an amount, propose it, then the other player can accept, reject, or counter.'
+        : 'Waiting for both players to join before the wager can be agreed.';
 
   useEffect(() => {
     if (shouldPreferWheelMode) {
@@ -3570,21 +3575,12 @@ function QuizSetupStagePanel({
       <div className="scoreboard-sheen" aria-hidden="true" />
       <div className="room-active-stage room-active-stage--answering">
         <section className="quiz-wager-mode-panel">
-          <div className={`quiz-choice-grid ${hasSelectedMode ? `quiz-choice-grid--selected quiz-choice-grid--selected-${selectionMode}` : 'quiz-choice-grid--locked'}`}>
+          <div className={`quiz-choice-grid quiz-choice-grid--selected quiz-choice-grid--selected-${selectionMode}`}>
           <section className={`quiz-choice-zone quiz-choice-zone--manual ${isManualMode ? 'is-active' : 'is-shaded'}`}>
             <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--manual">
-              <span className="scoreboard-kicker">Quick Fire Wager</span>
               <h2>Agree a shared wager</h2>
               <p className="quiz-wager-intro">Both players must agree the shared wager or lock a wheel result.</p>
             </div>
-            {manualIsInactive ? (
-              <div className="quiz-choice-shade" aria-hidden="true">
-                <div className="quiz-control-lock quiz-choice-lock">
-                  <span className="quiz-control-lock__shackle" aria-hidden="true" />
-                  <span className="quiz-control-lock__body" aria-hidden="true" />
-                </div>
-              </div>
-            ) : null}
             <div className={`quiz-choice-zone__content ${manualIsLocked ? 'is-locked' : ''}`}>
               <div className="quiz-wager-amount-card quiz-choice-manual-card">
                 <label className="field quiz-wager-amount-field">
@@ -3605,33 +3601,13 @@ function QuizSetupStagePanel({
                 </label>
                 <span className="quiz-wager-cap-copy">{`Enter a value between 0 and ${formatScore(wheelBaseAmount)}.`}</span>
                 <div className="quiz-negotiation-status">
-                  {sharedWagerLocked ? (
-                    <span>{`Agreed shared wager: ${formatScore(sharedWagerAmount || 0)}.`}</span>
-                  ) : pendingProposal ? (
-                    <span>{`${proposalLabel} proposed ${formatScore(cappedProposalAmount)}.`}</span>
-                  ) : bothPlayersJoined ? (
-                    <span>Either player can propose an amount, then the other can accept, reject, or counter.</span>
-                  ) : (
-                    <span>Waiting for both players to join before the wager can be agreed.</span>
-                  )}
+                  <span>{negotiationStatusText}</span>
                 </div>
-              </div>
-
-              <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-choice-manual-actions">
-                <Button className="primary-button compact" onClick={onAcceptQuizWager} disabled={isBusy || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || sharedWagerLocked || wheelActive}>
-                  {`Accept ${formatScore(activeWagerDisplayAmount)}`}
-                </Button>
-                <Button className="ghost-button compact quiz-wager-reject-button" onClick={onRejectQuizWager} disabled={isBusy || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || wheelActive}>
-                  Reject
-                </Button>
-                <Button className="ghost-button compact quiz-wager-propose-button" onClick={onSaveQuizWager} disabled={isBusy || !bothPlayersJoined || sharedWagerLocked || wheelActive}>
-                  {proposalButtonText}
-                </Button>
               </div>
             </div>
           </section>
 
-          <section className={`quiz-choice-zone quiz-choice-zone--chat ${isChatMode ? 'is-active' : ''}`}>
+          <section className="quiz-choice-zone quiz-choice-zone--chat is-active">
             <div className="quiz-choice-zone__intro">
               <span className="quiz-choice-zone__kicker">YOU CHOOSE</span>
               <p>Pick how you’d like to agree on the wager.</p>
@@ -3643,7 +3619,6 @@ function QuizSetupStagePanel({
                 onClick={() => setSelectionMode('manual')}
                 aria-pressed={isManualMode}
               >
-                <span className="quiz-choice-zone__arrow" aria-hidden="true">◀</span>
                 <span className="quiz-choice-option-text">Manual negotiation</span>
               </button>
               <button
@@ -3653,7 +3628,6 @@ function QuizSetupStagePanel({
                 aria-pressed={isWheelMode}
               >
                 <span className="quiz-choice-option-text">Wheel spin</span>
-                <span className="quiz-choice-zone__arrow" aria-hidden="true">▶</span>
               </button>
             </div>
             <div className="quiz-choice-zone__content quiz-choice-zone__content--chat">
@@ -3672,32 +3646,44 @@ function QuizSetupStagePanel({
             </div>
           </section>
 
-          <section className={`quiz-choice-zone quiz-choice-zone--wheel ${isWheelMode ? 'is-active' : 'is-shaded'}`}>
-            <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--wheel">
-              <span className="scoreboard-kicker">Wager Wheel</span>
+          <section className={`quiz-choice-zone quiz-choice-zone--active-mode ${isWheelMode ? 'quiz-choice-zone--wheel' : 'quiz-choice-zone--negotiation'} is-active`}>
+            <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--active">
+              <h2>{activeModeTitle}</h2>
+              <p className="quiz-wager-intro">
+                {isWheelMode ? 'Let the wheel set one shared wager.' : 'Confirm the wager both players are agreeing to.'}
+              </p>
             </div>
-            {wheelIsInactive ? (
-              <div className="quiz-choice-shade" aria-hidden="true">
-                <div className="quiz-control-lock quiz-choice-lock">
-                  <span className="quiz-control-lock__shackle" aria-hidden="true" />
-                  <span className="quiz-control-lock__body" aria-hidden="true" />
+            <div className={`quiz-choice-zone__content quiz-choice-zone__content--active-mode ${isWheelMode ? 'quiz-choice-zone__content--wheel' : 'quiz-choice-zone__content--negotiation'}`}>
+              {isWheelMode ? (
+                <>
+                  <div className={`quiz-wager-wheel-card quiz-choice-wheel-card ${wheelIsLocked ? 'is-locked' : ''}`}>
+                    <QuizWagerWheelOverlay agreement={agreement} baseAmount={wheelBaseAmount} forceVisible disabled={wheelIsLocked} />
+                  </div>
+                  <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-wheel-action-stack">
+                    <Button className="primary-button compact" onClick={() => onSetQuizWheelOptIn?.(true)} disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelBaseAmount <= 0 || viewerWheelOptedIn}>
+                      Spin the Wheel
+                    </Button>
+                    <p className="quiz-mode-helper">{wheelHelperText}</p>
+                  </div>
+                </>
+              ) : (
+                <div className="quiz-negotiation-focus-card">
+                  <span className="quiz-negotiation-focus-label">Shared wager</span>
+                  <strong>{formatScore(activeWagerDisplayAmount)}</strong>
+                  <p>{negotiationStatusText}</p>
+                  <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-choice-manual-actions">
+                    <Button className="ghost-button compact quiz-wager-reject-button" onClick={onRejectQuizWager} disabled={isBusy || manualIsLocked || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || wheelActive}>
+                      Reject
+                    </Button>
+                    <Button className="ghost-button compact quiz-wager-propose-button" onClick={onSaveQuizWager} disabled={isBusy || manualIsLocked || !bothPlayersJoined || sharedWagerLocked || wheelActive}>
+                      Propose New
+                    </Button>
+                    <Button className="primary-button compact quiz-wager-accept-button" onClick={onAcceptQuizWager} disabled={isBusy || manualIsLocked || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || sharedWagerLocked || wheelActive}>
+                      Accept
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ) : null}
-            <div className="quiz-choice-zone__content quiz-choice-zone__content--wheel">
-              <div className={`quiz-wager-wheel-card quiz-choice-wheel-card ${wheelIsLocked ? 'is-locked' : ''}`}>
-                <span className="quiz-wager-wheel-label">Wager wheel</span>
-                <QuizWagerWheelOverlay agreement={agreement} baseAmount={wheelBaseAmount} forceVisible disabled={wheelIsLocked} />
-              </div>
-              <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-wheel-action-stack">
-                <Button className="primary-button compact" onClick={() => onSetQuizWheelOptIn?.(true)} disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelBaseAmount <= 0 || viewerWheelOptedIn}>
-                  Spin the wheel
-                </Button>
-                <div className="quiz-ready-summary quiz-wheel-opt-in-summary" aria-live="polite">
-                  <span className={`submitted-status-pill ${viewerWheelOptedIn ? 'is-submitted' : ''}`}>{viewerWheelOptedIn ? `${viewerLabel} confirmed` : `${viewerLabel} not confirmed`}</span>
-                  <span className={`submitted-status-pill ${otherWheelOptedIn ? 'is-submitted' : ''}`}>{otherWheelOptedIn ? `${oppositeLabel} confirmed` : `${oppositeLabel} not confirmed`}</span>
-                </div>
-              </div>
+              )}
             </div>
           </section>
           </div>
@@ -6761,6 +6747,17 @@ function GameRoomView({
         ? 'Wheel pending'
         : 'Negotiating';
   const showQuizSetupPanel = isQuizGame && !currentRound && !gameEnded;
+  const roomPlayerScorePills = (
+    <div className="room-player-score-pills" aria-label="Player penalty point balances">
+      {seats.map((playerSeat) => (
+        <span className={`status-pill room-player-score-pill room-player-score-pill--${playerSeat}`} key={`room-score-${playerSeat}`}>
+          <SeatFlag seat={playerSeat} className="dashboard-balance-flag" />
+          <span className="room-player-score-pill__name">{gameSeatDisplayName(game, playerSeat, currentRound)}</span>
+          <strong>{formatScore(Number(playerAccounts?.[playerSeat]?.lifetimePenaltyPoints || 0))}</strong>
+        </span>
+      ))}
+    </div>
+  );
   const roomMenuRef = useRef(null);
   const scoreboardColumnRef = useRef(null);
   const [chatColumnHeight, setChatColumnHeight] = useState(0);
@@ -6993,25 +6990,58 @@ function GameRoomView({
       <main className="app production-app mobile-app" style={{ '--accent': activePalette.accent, '--accent-2': activePalette.accent2, '--accent-3': activePalette.accent3, '--accent-glow': activePalette.glow, '--accent-wash': activePalette.wash }}>
       <header className={`top-bar top-bar--room ${isQuizGame && showQuizSetupPanel ? 'top-bar--room-quiz-setup' : ''}`}>
         <div className="top-bar-left">
-          <div className="brand-lockup brand-lockup--left">
-            <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
-            <h1><span className="brand-mobile-mark">92.1 JKC Radio</span><span className="brand-full-text">KJK KIMJAYKINKS</span></h1>
-          </div>
-          <div className="room-players-pill">
-            <span>{joinedPlayers.map((player) => player.displayName || 'Player').join(' + ') || 'Waiting for players'}</span>
-          </div>
+          {isQuizGame && showQuizSetupPanel ? (
+            <div className="room-id-stack">
+              <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
+              <div className="room-id-actions" aria-label="Room actions">
+                {role === 'host' ? (
+                  <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
+                    {status === 'paused' ? 'Resume' : 'Pause'}
+                  </Button>
+                ) : null}
+                {!gameEnded ? (
+                  <Button className="ghost-button compact room-end-game-button" onClick={onEndGame}>
+                    End Game
+                  </Button>
+                ) : null}
+                <Button className="ghost-button compact" onClick={onLeaveGame}>
+                  Leave
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="brand-lockup brand-lockup--left">
+                <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
+                <h1><span className="brand-mobile-mark">92.1 JKC Radio</span><span className="brand-full-text">KJK KIMJAYKINKS</span></h1>
+              </div>
+              <div className="room-players-pill">
+                <span>{joinedPlayers.map((player) => player.displayName || 'Player').join(' + ') || 'Waiting for players'}</span>
+              </div>
+            </>
+          )}
         </div>
         <div className="top-actions top-actions--room">
-          {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
-          {!gameEnded ? (
-            <Button className="ghost-button compact room-end-game-button" onClick={onEndGame}>
-              End Game
-            </Button>
-          ) : null}
-          <Button className="ghost-button compact" onClick={onLeaveGame}>
-            Leave
-          </Button>
-          {renderRoomOverflowMenu()}
+          {isQuizGame && showQuizSetupPanel ? (
+            <>
+              {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
+              {roomPlayerScorePills}
+              {renderRoomOverflowMenu()}
+            </>
+          ) : (
+            <>
+              {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
+              {!gameEnded ? (
+                <Button className="ghost-button compact room-end-game-button" onClick={onEndGame}>
+                  End Game
+                </Button>
+              ) : null}
+              <Button className="ghost-button compact" onClick={onLeaveGame}>
+                Leave
+              </Button>
+              {renderRoomOverflowMenu()}
+            </>
+          )}
         </div>
         </header>
 
@@ -7166,13 +7196,32 @@ function GameRoomView({
     );
   }
 
-  const joinedPlayerNames = joinedPlayers.map((player) => player.displayName || 'Player').join(' + ') || 'Waiting for players';
-
   return (
       <main className="app production-app" style={{ '--accent': activePalette.accent, '--accent-2': activePalette.accent2, '--accent-3': activePalette.accent3, '--accent-glow': activePalette.glow, '--accent-wash': activePalette.wash }}>
       <header className={`top-bar top-bar--room ${isQuizGame && showQuizSetupPanel ? 'top-bar--room-quiz-setup' : ''}`}>
         <div className="top-bar-left">
-          <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
+          {isQuizGame && showQuizSetupPanel ? (
+            <div className="room-id-stack">
+              <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
+              <div className="room-id-actions" aria-label="Room actions">
+                {role === 'host' ? (
+                  <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
+                    {status === 'paused' ? 'Resume' : 'Pause'}
+                  </Button>
+                ) : null}
+                {!gameEnded ? (
+                  <Button className="ghost-button compact room-end-game-button" onClick={onEndGame}>
+                    End Game
+                  </Button>
+                ) : null}
+                <Button className="ghost-button compact" onClick={onLeaveGame}>
+                  Leave
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
+          )}
         </div>
         <div className="top-bar-center">
           <div className="brand-lockup brand-lockup--center">
@@ -7180,30 +7229,31 @@ function GameRoomView({
           </div>
         </div>
         <div className={`top-actions top-actions--room ${isQuizGame && showQuizSetupPanel ? 'top-actions--room-quiz' : ''}`}>
-          {isQuizGame && role === 'host' ? (
-            <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
-              {status === 'paused' ? 'Resume' : 'Pause'}
-            </Button>
-          ) : null}
-          {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
           {isQuizGame && showQuizSetupPanel ? (
-            <div className="room-toolbar-stack">
+            <>
+              {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
+              {roomPlayerScorePills}
               {renderRoomOverflowMenu()}
-              <span className="room-players-pill room-players-pill--toolbar" aria-label="Joined players">
-                <span className="room-players-pill__names">{joinedPlayerNames}</span>
-                <span className="room-players-pill__status">Wagering</span>
-              </span>
-            </div>
-          ) : null}
-          {!gameEnded ? (
-            <Button className="ghost-button compact room-end-game-button" onClick={onEndGame}>
-              End Game
-            </Button>
-          ) : null}
-          <Button className="ghost-button compact" onClick={onLeaveGame}>
-            Leave
-          </Button>
-          {!isQuizGame || !showQuizSetupPanel ? renderRoomOverflowMenu() : null}
+            </>
+          ) : (
+            <>
+              {isQuizGame && role === 'host' ? (
+                <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
+                  {status === 'paused' ? 'Resume' : 'Pause'}
+                </Button>
+              ) : null}
+              {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
+              {!gameEnded ? (
+                <Button className="ghost-button compact room-end-game-button" onClick={onEndGame}>
+                  End Game
+                </Button>
+              ) : null}
+              <Button className="ghost-button compact" onClick={onLeaveGame}>
+                Leave
+              </Button>
+              {renderRoomOverflowMenu()}
+            </>
+          )}
         </div>
       </header>
 
