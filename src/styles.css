@@ -179,8 +179,23 @@ button:disabled {
 }
 
 .game-lobby-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 320px;
   align-items: stretch;
+}
+
+.lobby-chat-card {
+  min-width: 0;
+  width: 320px;
+}
+
+@media (max-width: 900px) {
+  .game-lobby-grid {
+    grid-template-columns: 1fr;
+  }
+  .lobby-chat-card {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
 }
 
 .lobby-invite-top {
@@ -11870,5 +11885,64 @@ select:focus-visible {
       opacity: 0;
       transform: translateX(-50%) translateY(-8px);
     }
+  }
+}
+/* FIX: wager negotiation layout proportions */
+.quiz-wager-layout,
+.quiz-wager-negotiation-layout,
+.quiz-wager-agreement-grid,
+.wager-negotiation-grid,
+.wager-choice-grid {
+  grid-template-columns: minmax(0, 40fr) minmax(160px, 20fr) minmax(0, 40fr) !important;
+  align-items: stretch;
+}
+
+/* Keep the middle selector compact instead of dominating the screen */
+.quiz-wager-choice-panel,
+.wager-choice-panel,
+.quiz-wager-middle-panel,
+.wager-middle-panel {
+  min-width: 0;
+  overflow: visible;
+}
+
+/* Give the wheel room and stop clipping */
+.quiz-wager-wheel-panel,
+.wager-wheel-panel,
+.quiz-wheel-panel {
+  min-width: 0;
+  overflow: visible !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Make the wheel fill the right panel properly */
+.quiz-wager-wheel,
+.wager-wheel,
+.quiz-wheel,
+.quiz-wheel-graphic,
+.wager-wheel-graphic {
+  width: min(100%, 430px) !important;
+  max-width: 430px;
+  aspect-ratio: 1 / 1;
+  height: auto !important;
+}
+
+/* Keep spin button under the wheel */
+.quiz-wager-wheel-panel button,
+.wager-wheel-panel button,
+.quiz-wheel-panel button {
+  margin-top: auto;
+}
+
+/* Mobile/tablet fallback */
+@media (max-width: 900px) {
+  .quiz-wager-layout,
+  .quiz-wager-negotiation-layout,
+  .quiz-wager-agreement-grid,
+  .wager-negotiation-grid,
+  .wager-choice-grid {
+    grid-template-columns: 1fr !important;
   }
 }

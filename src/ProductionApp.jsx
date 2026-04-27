@@ -2071,7 +2071,24 @@ function LobbyScreen({
 	                  </Button>
 	                </div>
 	              </section>
-            </div>
+            
+
+                <section className="panel lobby-panel lobby-panel--lobby lobby-chat-card">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="eyebrow">Lobby</p>
+                      <h2>Lobby Chat</h2>
+                    </div>
+                  </div>
+                  <ChatPanel
+                    messages={lobbyChatMessages}
+                    draft={lobbyChatDraft}
+                    onDraftChange={setLobbyChatDraft}
+                    onSend={sendLobbyChat}
+                    displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+                  />
+                </section>
+</div>
 
           </section>
         ) : null}
@@ -6793,9 +6810,16 @@ function GameRoomView({
     const scoreboardNode = scoreboardColumnRef.current;
     if (!scoreboardNode) return undefined;
 
-    const syncChatHeight = () => {
+    const rafRef = { current: null };
+
+    const syncChatHeightNow = () => {
       const nextHeight = Math.round(scoreboardNode.getBoundingClientRect().height);
       setChatColumnHeight((currentHeight) => (Math.abs(currentHeight - nextHeight) <= 4 ? currentHeight : nextHeight));
+    };
+
+    const syncChatHeight = () => {
+      if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
+      rafRef.current = window.requestAnimationFrame(syncChatHeightNow);
     };
 
     syncChatHeight();
@@ -6803,11 +6827,17 @@ function GameRoomView({
     if (typeof ResizeObserver !== 'undefined') {
       const observer = new ResizeObserver(syncChatHeight);
       observer.observe(scoreboardNode);
-      return () => observer.disconnect();
+      return () => {
+        observer.disconnect();
+        if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
+      };
     }
 
     window.addEventListener('resize', syncChatHeight);
-    return () => window.removeEventListener('resize', syncChatHeight);
+    return () => {
+      window.removeEventListener('resize', syncChatHeight);
+      if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
+    };
   }, [isMobile]);
 
   const closeRoomMenu = () => {
@@ -7533,6 +7563,8 @@ function ProductionApp() {
   const [penaltyDraft, setPenaltyDraft] = useState(defaultPenaltyDraft);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatDraft, setChatDraft] = useState(defaultChatDraft);
+  const [lobbyChatMessages, setLobbyChatMessages] = useState([]);
+  const [lobbyChatDraft, setLobbyChatDraft] = useState(defaultChatDraft);
   const [lobbyGameName, setLobbyGameName] = useState('');
   const isMobileDashboard = useMediaQuery('(max-width: 900px)');
   const leavePendingGameRef = useRef('');
@@ -12589,6 +12621,37 @@ function ProductionApp() {
       });
       setChatDraft('');
     }, 'Could not send chat message.');
+
+  const sendLobbyChat = async () =>
+    withBusy(async () => {
+      const text = lobbyChatDraft.trim();
+      if (!text) return;
+      if (!firestore || !user) throw new Error('Firebase is not configured.');
+      const messageRef = doc(collection(firestore, 'lobbyChat'));
+      await setDoc(messageRef, {
+        text,
+        uid: user.uid || '',
+        displayName: profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player',
+        createdAt: serverTimestamp(),
+      });
+      setLobbyChatDraft('');
+    }, 'Could not send lobby chat message.');
+
+  useEffect(() => {
+    if (!firestore) return undefined;
+    if (activeTab !== 'gameLobby') {
+      setLobbyChatMessages([]);
+      return undefined;
+    }
+
+    const q = query(collection(firestore, 'lobbyChat'), orderBy('createdAt', 'asc'), limit(200));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+      setLobbyChatMessages(msgs);
+    }, (err) => console.warn('Lobby chat listener error', err));
+
+    return () => unsub();
+  }, [firestore, activeTab]);
 
   const addQuestion = async () =>
     withBusy(async () => {
