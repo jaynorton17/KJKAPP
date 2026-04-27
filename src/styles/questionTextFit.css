@@ -1,0 +1,30 @@
+/* Keeps long normal-game questions readable inside the current question frame. */
+.question-card-text-wrap {
+  margin-top: 10px;
+  max-height: clamp(120px, 22vh, 220px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.question-card-text {
+  margin: 0;
+  font-size: clamp(0.9rem, 1.6vw, 1.1rem);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+@media (max-width: 700px) {
+  .question-card-text-wrap {
+    max-height: clamp(110px, 20svh, 190px);
+    padding: 10px 12px;
+  }
+
+  .question-card-text {
+    font-size: clamp(0.86rem, 3.2vw, 1rem);
+    line-height: 1.42;
+  }
+}
