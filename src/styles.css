@@ -4689,8 +4689,8 @@ button:disabled {
 }
 
 .room-active-frame--quiz-setup {
-  min-height: min(820px, calc(100dvh - 150px));
-  height: min(820px, calc(100dvh - 150px));
+  min-height: min(860px, calc(100dvh - 132px));
+  height: min(860px, calc(100dvh - 132px));
   overflow: hidden;
 }
 
@@ -4882,7 +4882,7 @@ button:disabled {
 .quiz-choice-zone__choice-stack {
   display: grid;
   justify-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -4890,20 +4890,20 @@ button:disabled {
   display: grid;
   align-items: center;
   width: min(100%, 300px);
-  min-height: 50px;
+  min-height: 44px;
   font-size: 0.92rem;
 }
 
 .quiz-choice-pill--manual {
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 14px;
-  padding-inline: 16px 20px;
+  gap: 12px;
+  padding-inline: 14px 18px;
 }
 
 .quiz-choice-pill--wheel {
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
-  padding-inline: 20px 16px;
+  gap: 12px;
+  padding-inline: 18px 14px;
 }
 
 .quiz-choice-option-text {
@@ -4913,7 +4913,7 @@ button:disabled {
 
 .quiz-choice-zone__arrow {
   color: rgba(255, 246, 216, 0.86);
-  font-size: 2.2rem;
+  font-size: 2.35rem;
   font-weight: 900;
   line-height: 1;
   text-align: center;
@@ -4999,8 +4999,8 @@ button:disabled {
   width: min(100%, 86%);
   height: 100%;
   min-height: 0;
-  min-height: clamp(360px, 50vh, 600px);
-  padding: 12px;
+  min-height: clamp(440px, 60vh, 720px);
+  padding: 10px;
 }
 
 .quiz-choice-zone__content--wheel {
@@ -6666,6 +6666,10 @@ button:disabled {
 
 .top-bar--room-quiz-setup .top-bar-center {
   grid-column: 2;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .top-bar--room .top-bar-left,
@@ -6698,15 +6702,21 @@ button:disabled {
 }
 
 .top-actions--room-quiz {
+  display: flex;
   align-items: flex-start;
+  justify-content: flex-end;
   gap: 8px;
+  position: relative;
+  z-index: 70;
 }
 
 .room-toolbar-stack {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   justify-items: end;
   align-self: flex-start;
+  position: relative;
+  z-index: 80;
 }
 
 .room-players-pill {
@@ -6723,12 +6733,14 @@ button:disabled {
 }
 
 .room-players-pill--toolbar {
-  width: min(100%, 250px);
+  width: min(100%, 220px);
+  padding: 6px 10px 7px;
+  background: rgba(7, 11, 20, 0.7);
 }
 
 .room-players-pill__names {
   color: #fff;
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   font-weight: 900;
   line-height: 1.15;
   letter-spacing: 0.04em;
@@ -6737,7 +6749,7 @@ button:disabled {
 
 .room-players-pill__status {
   color: rgba(255, 246, 216, 0.72);
-  font-size: 0.61rem;
+  font-size: 0.58rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -6776,7 +6788,7 @@ button:disabled {
 
 .room-settings-menu {
   position: relative;
-  z-index: 60;
+  z-index: 90;
   flex: 0 0 auto;
 }
 
@@ -6788,7 +6800,7 @@ button:disabled {
 
 .room-settings-menu-panel {
   min-width: 220px;
-  z-index: 70;
+  z-index: 120;
 }
 
 .button-label-with-icon {

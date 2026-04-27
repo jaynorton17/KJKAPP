@@ -7229,95 +7229,97 @@ function GameRoomView({
         </section>
       ) : (
       <section className={`game-grid ${isQuizGame ? 'game-grid--quiz-focus' : ''}`}>
-        <section className={`panel room-sidebar ${isQuizGame ? `room-sidebar--quiz-drawer ${quizSidebarOpen ? 'is-open' : 'is-collapsed'}` : ''}`}>
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Players</p>
-              <h2>Joined</h2>
+        {!(isQuizGame && showQuizSetupPanel) ? (
+          <section className={`panel room-sidebar ${isQuizGame ? `room-sidebar--quiz-drawer ${quizSidebarOpen ? 'is-open' : 'is-collapsed'}` : ''}`}>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Players</p>
+                <h2>Joined</h2>
+              </div>
             </div>
-          </div>
-          <div className="joined-player-list">
-            <article className={`mini-list-row joined-player-row ${submittedBySeat.jay ? 'is-submitted' : ''}`}>
-              <div className="joined-player-row-main">
-                <strong>Jay</strong>
-		                {currentRound || showQuizSetupPanel ? (
-	                  <span className={`submitted-status-pill ${(currentRound?.status === 'reveal' && isQuizGame ? nextReadyBySeat.jay : showQuizSetupPanel && isQuizGame ? quizSetupReadyBySeat.jay : submittedBySeat.jay) ? 'is-submitted' : ''}`}>
-	                    {showQuizSetupPanel && isQuizGame
+            <div className="joined-player-list">
+              <article className={`mini-list-row joined-player-row ${submittedBySeat.jay ? 'is-submitted' : ''}`}>
+                <div className="joined-player-row-main">
+                  <strong>Jay</strong>
+                  {currentRound || showQuizSetupPanel ? (
+                    <span className={`submitted-status-pill ${(currentRound?.status === 'reveal' && isQuizGame ? nextReadyBySeat.jay : showQuizSetupPanel && isQuizGame ? quizSetupReadyBySeat.jay : submittedBySeat.jay) ? 'is-submitted' : ''}`}>
+                      {showQuizSetupPanel && isQuizGame
                         ? (quizSetupReadyBySeat.jay ? 'Ready' : 'Wagering')
                         : currentRound?.status === 'reveal' && isQuizGame
                           ? (nextReadyBySeat.jay ? 'Next ready' : 'Reviewing')
                           : (submittedBySeat.jay ? 'Submitted' : 'Answering')}
-	                  </span>
-	                ) : null}
-		              </div>
-		              <span>{game?.playerProfiles?.[game?.seats?.jay]?.displayName || 'Waiting'}</span>
-		            </article>
-            <article className={`mini-list-row joined-player-row ${submittedBySeat.kim ? 'is-submitted' : ''}`}>
-              <div className="joined-player-row-main">
-                <strong>Kim</strong>
-	                {currentRound || showQuizSetupPanel ? (
-	                  <span className={`submitted-status-pill ${(currentRound?.status === 'reveal' && isQuizGame ? nextReadyBySeat.kim : showQuizSetupPanel && isQuizGame ? quizSetupReadyBySeat.kim : submittedBySeat.kim) ? 'is-submitted' : ''}`}>
-	                    {showQuizSetupPanel && isQuizGame
+                    </span>
+                  ) : null}
+                </div>
+                <span>{game?.playerProfiles?.[game?.seats?.jay]?.displayName || 'Waiting'}</span>
+              </article>
+              <article className={`mini-list-row joined-player-row ${submittedBySeat.kim ? 'is-submitted' : ''}`}>
+                <div className="joined-player-row-main">
+                  <strong>Kim</strong>
+                  {currentRound || showQuizSetupPanel ? (
+                    <span className={`submitted-status-pill ${(currentRound?.status === 'reveal' && isQuizGame ? nextReadyBySeat.kim : showQuizSetupPanel && isQuizGame ? quizSetupReadyBySeat.kim : submittedBySeat.kim) ? 'is-submitted' : ''}`}>
+                      {showQuizSetupPanel && isQuizGame
                         ? (quizSetupReadyBySeat.kim ? 'Ready' : 'Wagering')
                         : currentRound?.status === 'reveal' && isQuizGame
                           ? (nextReadyBySeat.kim ? 'Next ready' : 'Reviewing')
                           : (submittedBySeat.kim ? 'Submitted' : 'Answering')}
-	                  </span>
-	                ) : null}
-		              </div>
-		              <span>{game?.playerProfiles?.[game?.seats?.kim]?.displayName || 'Waiting'}</span>
-		            </article>
-          </div>
-          {role === 'host' ? (
-            isQuizGame ? null : currentRound && revealIsReady ? (
-              <QuickDesk
-                currentRound={currentRound}
-                penaltyDraft={penaltyDraft}
-                setPenaltyDraft={setPenaltyDraft}
-                onNextQuestion={onNextQuestion}
-                onPauseToggle={onPauseToggle}
-                status={status}
-                isPaused={status === 'paused'}
-                isCompleted={status === 'completed'}
-                isBusy={isBusy}
-              />
+                    </span>
+                  ) : null}
+                </div>
+                <span>{game?.playerProfiles?.[game?.seats?.kim]?.displayName || 'Waiting'}</span>
+              </article>
+            </div>
+            {role === 'host' ? (
+              isQuizGame ? null : currentRound && revealIsReady ? (
+                <QuickDesk
+                  currentRound={currentRound}
+                  penaltyDraft={penaltyDraft}
+                  setPenaltyDraft={setPenaltyDraft}
+                  onNextQuestion={onNextQuestion}
+                  onPauseToggle={onPauseToggle}
+                  status={status}
+                  isPaused={status === 'paused'}
+                  isCompleted={status === 'completed'}
+                  isBusy={isBusy}
+                />
+              ) : (
+                <section className="panel host-queue-panel room-status-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="eyebrow">Host</p>
+                      <h2>Controls</h2>
+                    </div>
+                  </div>
+                  <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
+                  <p className="panel-copy">
+                    Load the next question when you are ready.
+                  </p>
+                  <div className="button-row room-host-sidebar-actions">
+                    {!currentRound ? (
+                      <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
+                        Next Question
+                      </Button>
+                    ) : null}
+                    <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
+                      {status === 'paused' ? 'Resume' : 'Pause'}
+                    </Button>
+                    <span className="quick-desk-status">{currentRound ? `Round ${currentRound.number}` : 'Waiting'}</span>
+                  </div>
+                </section>
+              )
             ) : (
               <section className="panel host-queue-panel room-status-panel">
                 <div className="panel-heading">
                   <div>
-                    <p className="eyebrow">Host</p>
-                    <h2>Controls</h2>
+                    <p className="eyebrow">Room</p>
+                    <h2>Status</h2>
                   </div>
                 </div>
-                <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
-                <p className="panel-copy">
-                  Load the next question when you are ready.
-                </p>
-                <div className="button-row room-host-sidebar-actions">
-                  {!currentRound ? (
-                    <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
-                      Next Question
-                    </Button>
-                  ) : null}
-                  <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
-                    {status === 'paused' ? 'Resume' : 'Pause'}
-                  </Button>
-                  <span className="quick-desk-status">{currentRound ? `Round ${currentRound.number}` : 'Waiting'}</span>
-                </div>
+                <p className="panel-copy">Waiting for the host to launch the next question.</p>
               </section>
-            )
-          ) : (
-            <section className="panel host-queue-panel room-status-panel">
-              <div className="panel-heading">
-                <div>
-                  <p className="eyebrow">Room</p>
-                  <h2>Status</h2>
-                </div>
-              </div>
-              <p className="panel-copy">Waiting for the host to launch the next question.</p>
-            </section>
-          )}
-        </section>
+            )}
+          </section>
+        ) : null}
 
         <section className="scoreboard-column" ref={scoreboardColumnRef}>
 	          {showActiveRoundFrame ? (
