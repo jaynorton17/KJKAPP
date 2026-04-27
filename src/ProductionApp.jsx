@@ -3621,9 +3621,7 @@ function QuizSetupStagePanel({
               </div>
             </div>
             {manualIsInactive ? (
-              <div className="quiz-choice-inactive-overlay" aria-hidden="true">
-                <span>Choose Manual Negotiation to use these controls.</span>
-              </div>
+              <div className="quiz-choice-inactive-overlay" aria-hidden="true" />
             ) : null}
           </section>
 
@@ -3685,9 +3683,7 @@ function QuizSetupStagePanel({
               </div>
             </div>
             {wheelIsInactive ? (
-              <div className="quiz-choice-inactive-overlay" aria-hidden="true">
-                <span>Choose Wheel Spin to use the wheel.</span>
-              </div>
+              <div className="quiz-choice-inactive-overlay" aria-hidden="true" />
             ) : null}
           </section>
           </div>
