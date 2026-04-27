@@ -1,0 +1,62 @@
+/* Targeted override for the quiz wager negotiation screen.
+   Keeps the three desktop panels balanced at 40 / 20 / 40 without touching wager logic. */
+
+.quiz-choice-grid {
+  display: grid !important;
+  grid-template-columns: minmax(0, 40fr) minmax(180px, 20fr) minmax(0, 40fr) !important;
+  gap: 12px !important;
+  align-items: stretch !important;
+}
+
+.quiz-choice-zone--manual,
+.quiz-choice-zone--wheel {
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+.quiz-choice-zone--chat {
+  min-width: 160px !important;
+  max-width: none !important;
+  overflow: hidden !important;
+}
+
+.quiz-choice-zone--chat .quiz-choice-zone__content,
+.quiz-choice-zone__content--chat {
+  max-height: 360px !important;
+  overflow: auto !important;
+}
+
+.quiz-choice-zone--wheel,
+.quiz-choice-zone__content--wheel,
+.quiz-choice-wheel-card {
+  overflow: visible !important;
+}
+
+.quiz-choice-wheel-card .quiz-wheel-stage {
+  --quiz-wheel-size: min(28vw, 430px) !important;
+  --quiz-wheel-slot-offset: calc(var(--quiz-wheel-size) * -0.39) !important;
+  width: var(--quiz-wheel-size) !important;
+  height: calc(var(--quiz-wheel-size) * 0.62) !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+}
+
+.quiz-choice-wheel-card .quiz-wheel-dial {
+  width: var(--quiz-wheel-size) !important;
+  height: var(--quiz-wheel-size) !important;
+}
+
+.quiz-wheel-action-stack {
+  margin-top: auto !important;
+}
+
+@media (max-width: 900px) {
+  .quiz-choice-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .quiz-choice-wheel-card .quiz-wheel-stage {
+    --quiz-wheel-size: min(76vw, 292px) !important;
+    height: calc(var(--quiz-wheel-size) * 0.62) !important;
+  }
+}
