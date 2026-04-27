@@ -4975,28 +4975,6 @@ button:disabled {
   justify-content: center;
 }
 
-.quiz-choice-manual-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-areas:
-    "reject propose"
-    "reject accept";
-  align-items: stretch;
-  align-self: stretch;
-}
-
-.quiz-choice-manual-actions .quiz-wager-reject-button {
-  grid-area: reject;
-}
-
-.quiz-choice-manual-actions .quiz-wager-propose-button {
-  grid-area: propose;
-}
-
-.quiz-choice-manual-actions .quiz-wager-accept-button {
-  grid-area: accept;
-}
-
 .quiz-choice-caption {
   display: flex;
   align-items: center;
@@ -5293,6 +5271,27 @@ button:disabled {
   gap: 10px;
   width: 100%;
   margin: 0;
+}
+
+.quiz-wager-action-stack.quiz-choice-manual-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "reject propose"
+    "reject accept";
+  align-items: stretch;
+}
+
+.quiz-choice-manual-actions .quiz-wager-reject-button {
+  grid-area: reject;
+}
+
+.quiz-choice-manual-actions .quiz-wager-propose-button {
+  grid-area: propose;
+}
+
+.quiz-choice-manual-actions .quiz-wager-accept-button {
+  grid-area: accept;
 }
 
 .quiz-wager-action-stack .compact {
