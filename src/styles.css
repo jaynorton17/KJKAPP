@@ -11949,7 +11949,7 @@ select:focus-visible {
 
 /* Quiz negotiation layout repair: scoped to the Quick Fire wager screen. */
 .quiz-choice-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.42fr) minmax(360px, 1.25fr) !important;
+  grid-template-columns: minmax(0, 40fr) minmax(260px, 20fr) minmax(0, 40fr) !important;
 }
 
 .quiz-choice-zone--manual .quiz-choice-zone__content--manual {
@@ -11975,19 +11975,19 @@ select:focus-visible {
 
 .quiz-choice-zone--wheel .quiz-choice-wheel-card {
   width: 100% !important;
-  min-height: clamp(420px, 52vh, 620px) !important;
+  min-height: clamp(360px, 44vh, 500px) !important;
   padding: 14px !important;
   place-items: center !important;
   overflow: visible !important;
 }
 
 .quiz-choice-zone--wheel .quiz-choice-wheel-card .quiz-wheel-stage {
-  --quiz-wheel-size: min(34vw, 520px) !important;
+  --quiz-wheel-size: min(22vw, 360px) !important;
   --quiz-wheel-slot-offset: calc(var(--quiz-wheel-size) * -0.39) !important;
   display: grid !important;
-  width: min(100%, 560px) !important;
+  width: min(100%, 420px) !important;
   height: auto !important;
-  min-height: calc(var(--quiz-wheel-size) + 80px) !important;
+  min-height: auto !important;
   justify-items: center !important;
   overflow: visible !important;
 }
@@ -12014,11 +12014,11 @@ select:focus-visible {
 
 @media (max-width: 1120px) {
   .quiz-choice-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(190px, 0.45fr) minmax(300px, 1.1fr) !important;
+    grid-template-columns: minmax(0, 40fr) minmax(220px, 20fr) minmax(0, 40fr) !important;
   }
 
   .quiz-choice-zone--wheel .quiz-choice-wheel-card .quiz-wheel-stage {
-    --quiz-wheel-size: min(32vw, 430px) !important;
+    --quiz-wheel-size: min(22vw, 320px) !important;
   }
 }
 
