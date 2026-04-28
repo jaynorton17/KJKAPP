@@ -3609,7 +3609,7 @@ function QuizSetupStagePanel({
             <div className={`quiz-choice-zone__content quiz-choice-zone__content--manual ${manualIsLocked ? 'is-locked' : ''}`}>
               <div className="quiz-wager-amount-card quiz-choice-manual-card">
                 <label className="field quiz-wager-amount-field">
-                  <span>Wager amount</span>
+                  <span>Insert wager amount here</span>
                   <input
                     type="number"
                     inputMode="numeric"
@@ -3620,7 +3620,7 @@ function QuizSetupStagePanel({
                       const nextValue = event.target.value;
                       setQuizWagerDraft(nextValue === '' ? '' : String(capQuizWagerAmount(nextValue, wheelBaseAmount)));
                     }}
-                    placeholder="0"
+                    placeholder="Insert wager amount here"
                     disabled={sharedWagerLocked || manualIsLocked}
                   />
                 </label>

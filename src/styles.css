@@ -5278,20 +5278,25 @@ button:disabled {
 
 .quiz-wager-amount-field {
   justify-items: center;
-  gap: 8px;
-  width: min(100%, 420px);
+  gap: 10px;
+  width: min(100%, 560px);
   margin-inline: auto;
 }
 
 .quiz-wager-amount-field span {
   width: 100%;
+  color: rgba(255, 246, 216, 0.9);
+  font-size: clamp(0.9rem, 1.05vw, 1.08rem);
+  font-weight: 950;
+  letter-spacing: 0.04em;
   text-align: center;
+  text-transform: uppercase;
 }
 
 .quiz-wager-amount-field input {
-  min-height: 48px;
+  min-height: 64px;
   text-align: center;
-  font-size: 1.1rem;
+  font-size: clamp(1.35rem, 2vw, 1.8rem);
   font-weight: 900;
 }
 
