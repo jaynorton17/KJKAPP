@@ -11985,11 +11985,18 @@ select:focus-visible {
   --quiz-wheel-size: min(22vw, 360px) !important;
   --quiz-wheel-slot-offset: calc(var(--quiz-wheel-size) * -0.39) !important;
   display: grid !important;
-  width: min(100%, 420px) !important;
+  width: min(100%, calc(var(--quiz-wheel-size) + 60px)) !important;
   height: auto !important;
   min-height: auto !important;
+  place-items: center !important;
   justify-items: center !important;
   overflow: visible !important;
+}
+
+.quiz-choice-zone--wheel .quiz-wheel-pointer,
+.quiz-choice-zone--wheel .quiz-wheel-dial {
+  justify-self: center !important;
+  margin-inline: auto !important;
 }
 
 .quiz-choice-zone--wheel .quiz-wheel-action-stack {
