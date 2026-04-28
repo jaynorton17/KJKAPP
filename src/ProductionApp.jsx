@@ -3454,7 +3454,8 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
   const spinStartMs = Date.parse(normalized.wheelSpinStartedAt || '');
   const spinEndMs = Date.parse(normalized.wheelSpinEndsAt || '');
   const segmentDegrees = slots.length ? 360 / slots.length : 360;
-  const finalRotation = (360 * 7) + (360 - ((resultIndex * segmentDegrees) + (segmentDegrees / 2)));
+  const selectedSegmentCenterDegrees = (resultIndex * segmentDegrees) + (segmentDegrees / 2);
+  const finalRotation = (360 * 7) - selectedSegmentCenterDegrees;
   const spinProgress = phase === 'spinning' && Number.isFinite(spinStartMs) && Number.isFinite(spinEndMs)
     ? Math.max(0, Math.min(1, (nowMs - spinStartMs) / Math.max(1, spinEndMs - spinStartMs)))
     : phase === 'landing' || displayPhase === 'locked'
@@ -3483,13 +3484,28 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
       <div className="quiz-wheel-stage">
         <div className="quiz-wheel-pointer" aria-hidden="true" />
         <div className="quiz-wheel-dial" style={{ transform: `rotate(${rotation}deg)`, '--wheel-counter-rotation': `${-rotation}deg` }} aria-hidden="true">
+          {slots.map((_, index) => {
+            const slotBoundaryAngle = index * segmentDegrees;
+            return (
+              <React.Fragment key={`quiz-wheel-boundary-${index}`}>
+                <span
+                  className="quiz-wheel-slot-divider"
+                  style={{ '--slot-divider-angle': `${slotBoundaryAngle}deg` }}
+                />
+                <span
+                  className="quiz-wheel-slot-peg"
+                  style={{ '--slot-divider-angle': `${slotBoundaryAngle}deg` }}
+                />
+              </React.Fragment>
+            );
+          })}
           {slots.map((slotAmount, index) => {
             const slotAngle = (index * segmentDegrees) + (segmentDegrees / 2);
             return (
               <span
                 className="quiz-wheel-slot-label"
                 key={`quiz-wheel-slot-${index}`}
-                style={{ '--slot-angle': `${slotAngle}deg`, '--slot-counter-angle': `${-slotAngle}deg` }}
+                style={{ '--slot-angle': `${slotAngle}deg`, '--slot-label-angle': `${slotAngle + 90}deg` }}
               >
                 {formatScore(slotAmount)}
               </span>
@@ -3560,6 +3576,11 @@ function QuizSetupStagePanel({
     : pendingProposal
       ? cappedProposalAmount
       : capQuizWagerAmount(quizWagerDraft, wheelBaseAmount);
+  const displayedQuizWagerDraft = sharedWagerLocked
+    ? String(sharedWagerAmount || 0)
+    : quizWagerDraft === ''
+      ? '0'
+      : quizWagerDraft;
   const manualIsInactive = !isManualMode;
   const wheelIsInactive = !isWheelMode;
   const manualIsLocked = manualIsInactive || wheelActive || sharedWagerLocked;
@@ -3615,12 +3636,13 @@ function QuizSetupStagePanel({
                     inputMode="numeric"
                     min="0"
                     max={wheelBaseAmount}
-                    value={sharedWagerLocked ? sharedWagerAmount || 0 : quizWagerDraft}
+                    value={displayedQuizWagerDraft}
                     onChange={(event) => {
                       const nextValue = event.target.value;
                       setQuizWagerDraft(nextValue === '' ? '' : String(capQuizWagerAmount(nextValue, wheelBaseAmount)));
                     }}
-                    placeholder="Insert wager amount here"
+                    onFocus={(event) => event.target.select()}
+                    placeholder="0"
                     disabled={sharedWagerLocked || manualIsLocked}
                   />
                 </label>
@@ -3631,8 +3653,10 @@ function QuizSetupStagePanel({
               </div>
               <div className="quiz-negotiation-focus-card">
                 <span className="quiz-negotiation-focus-label">Shared wager</span>
-                <strong>{formatScore(activeWagerDisplayAmount)}</strong>
-                <p>{negotiationStatusText}</p>
+                <div className="quiz-negotiation-focus-body">
+                  <strong>{formatScore(activeWagerDisplayAmount)}</strong>
+                  <p>{negotiationStatusText}</p>
+                </div>
                 <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-choice-manual-actions quiz-choice-manual-single">
                   <Button className="ghost-button compact quiz-wager-propose-button" onClick={onRejectAndPropose} disabled={isBusy || manualIsLocked || !bothPlayersJoined || sharedWagerLocked || wheelActive}>
                     Reject and Propose New Wager

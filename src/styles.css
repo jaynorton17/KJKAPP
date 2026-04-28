@@ -5300,6 +5300,10 @@ button:disabled {
   font-weight: 900;
 }
 
+.quiz-wager-amount-field input::placeholder {
+  color: rgba(255, 255, 255, 0.34);
+}
+
 .quiz-wager-cap-copy {
   color: rgba(255, 255, 255, 0.66);
   font-size: 0.76rem;
@@ -5514,12 +5518,14 @@ button:disabled {
 
 .quiz-negotiation-focus-card {
   display: grid;
-  gap: 14px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 16px;
   justify-items: center;
   width: 100%;
   max-width: 520px;
   margin: auto;
-  padding: clamp(16px, 2vw, 24px);
+  min-height: clamp(290px, 34vh, 380px);
+  padding: clamp(24px, 2.4vw, 30px) clamp(16px, 2vw, 24px) clamp(16px, 2vw, 24px);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
   background:
@@ -5534,7 +5540,16 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.quiz-negotiation-focus-card > strong {
+.quiz-negotiation-focus-body {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 0;
+}
+
+.quiz-negotiation-focus-body > strong {
   color: #fff;
   font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
   font-size: clamp(3.4rem, 5.8vw, 5.85rem);
@@ -5543,7 +5558,7 @@ button:disabled {
   text-shadow: 0 14px 32px rgba(0, 0, 0, 0.34);
 }
 
-.quiz-negotiation-focus-card > p,
+.quiz-negotiation-focus-body > p,
 .quiz-mode-helper {
   margin: 0;
   color: rgba(255, 255, 255, 0.76);
@@ -5664,6 +5679,35 @@ button:disabled {
     0 0 28px rgba(255, 255, 255, 0.18);
 }
 
+.quiz-wheel-slot-divider {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: calc(var(--quiz-wheel-size) * 0.43);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.18));
+  border-radius: 999px;
+  transform: translate(-50%, -100%) rotate(var(--slot-divider-angle));
+  transform-origin: center bottom;
+  box-shadow: 0 0 6px rgba(7, 11, 20, 0.3);
+}
+
+.quiz-wheel-slot-peg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: clamp(10px, 1.4vw, 14px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 30%, #fffef4, #d9d3bc 48%, #867c63 100%);
+  border: 1px solid rgba(43, 34, 19, 0.56);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 2px 6px rgba(0, 0, 0, 0.34);
+  transform: translate(-50%, -50%) rotate(var(--slot-divider-angle)) translateY(calc(var(--quiz-wheel-size) * -0.49));
+}
+
 .quiz-wheel-slot-label {
   position: absolute;
   top: 50%;
@@ -5671,22 +5715,24 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: clamp(28px, 18%, 44px);
-  min-height: 18px;
-  padding: 2px 4px;
+  width: auto;
+  min-height: clamp(38px, 18%, 54px);
+  padding: 4px 3px;
   border-radius: 999px;
   background: rgba(5, 9, 18, 0.66);
   color: #fff;
-  font-size: clamp(0.5rem, 1.5vw, 0.64rem);
+  font-size: clamp(0.5rem, 1.3vw, 0.68rem);
   font-weight: 950;
   line-height: 1;
+  letter-spacing: 0.02em;
   text-align: center;
-  white-space: nowrap;
+  white-space: pre;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
   transform:
     translate(-50%, -50%)
-    rotate(var(--slot-angle))
-    translateY(var(--quiz-wheel-slot-offset))
-    rotate(calc(var(--slot-counter-angle) + var(--wheel-counter-rotation, 0deg)));
+    rotate(var(--slot-label-angle))
+    translateY(var(--quiz-wheel-slot-offset));
   box-shadow: 0 1px 5px rgba(0, 0, 0, 0.34);
 }
 
@@ -12012,9 +12058,9 @@ select:focus-visible {
 }
 
 .quiz-choice-zone--manual .quiz-negotiation-focus-card {
-  grid-template-rows: minmax(0, 1fr) auto auto auto minmax(0, 1fr) auto !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
   align-content: stretch !important;
-  min-height: 0 !important;
+  min-height: clamp(290px, 34vh, 380px) !important;
 }
 
 .quiz-choice-zone--manual .quiz-negotiation-focus-label {
@@ -12028,15 +12074,7 @@ select:focus-visible {
 }
 
 .quiz-choice-zone--manual .quiz-negotiation-focus-card > .quiz-wager-action-stack {
-  grid-row: 6 !important;
-}
-
-.quiz-choice-zone--manual .quiz-negotiation-focus-card > strong {
   grid-row: 3 !important;
-}
-
-.quiz-choice-zone--manual .quiz-negotiation-focus-card > p {
-  grid-row: 4 !important;
 }
 
 .quiz-choice-zone--wheel .quiz-wheel-action-stack {
