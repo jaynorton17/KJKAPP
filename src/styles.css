@@ -5443,6 +5443,85 @@ button:disabled {
   justify-content: center;
 }
 
+.quiz-wheel-request-banner {
+  margin: 14px auto 0;
+  max-width: 980px;
+  padding: 14px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(12, 16, 28, 0.86);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #f4f7fb;
+}
+
+.quiz-wheel-request-banner strong {
+  font-size: 0.98rem;
+}
+
+.quiz-wheel-request-banner span {
+  font-size: 0.9rem;
+  color: rgba(244, 247, 251, 0.78);
+}
+
+.quiz-wheel-request-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 11, 18, 0.46);
+}
+
+.quiz-wheel-request-modal {
+  width: min(100%, 520px);
+  padding: 24px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, rgba(19, 26, 43, 0.98) 0%, rgba(11, 16, 28, 0.98) 100%);
+  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.34);
+  color: #f4f7fb;
+}
+
+.quiz-wheel-request-modal h3 {
+  margin: 0 0 10px;
+  font-size: 1.15rem;
+}
+
+.quiz-wheel-request-modal p {
+  margin: 0;
+  color: rgba(244, 247, 251, 0.82);
+}
+
+.quiz-wheel-request-modal__actions {
+  margin-top: 18px;
+  justify-content: flex-start;
+}
+
+@media (max-width: 640px) {
+  .quiz-wheel-request-modal-backdrop {
+    padding: 16px;
+  }
+
+  .quiz-wheel-request-modal {
+    padding: 20px;
+    border-radius: 20px;
+  }
+
+  .quiz-wheel-request-modal__actions {
+    flex-direction: column;
+  }
+
+  .quiz-wheel-request-modal__actions .primary-button,
+  .quiz-wheel-request-modal__actions .ghost-button {
+    width: 100%;
+  }
+}
+
 .quiz-negotiation-status {
   display: flex;
   min-height: 34px;
@@ -5458,6 +5537,20 @@ button:disabled {
   font-size: 0.78rem;
   font-weight: 800;
   line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.quiz-wager-validation {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 118, 118, 0.34);
+  border-radius: 8px;
+  background: rgba(106, 20, 35, 0.26);
+  color: #ffd5d9;
+  font-size: 0.76rem;
+  font-weight: 850;
+  line-height: 1.25;
+  text-align: center;
   overflow-wrap: anywhere;
 }
 
@@ -5668,7 +5761,7 @@ button:disabled {
   border-radius: 50%;
   background:
     repeating-conic-gradient(
-      from -90deg,
+      from calc(-90deg - var(--quiz-wheel-segment-half, 0deg)),
       #ffcc66 0deg 18deg,
       #5fe39b 18deg 36deg,
       #5ab5ff 36deg 54deg,
@@ -5677,6 +5770,32 @@ button:disabled {
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.4) inset,
     0 0 28px rgba(255, 255, 255, 0.18);
+  will-change: transform;
+}
+
+.quiz-wheel-dial--spinning {
+  animation: quiz-wheel-spin var(--wheel-spin-duration, 5000ms) cubic-bezier(0.12, 0.78, 0.2, 1) forwards;
+}
+
+.quiz-wheel-dial--settled {
+  transition: transform 260ms ease-out;
+}
+
+@keyframes quiz-wheel-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(var(--wheel-final-rotation, 0deg));
+  }
+}
+
+.quiz-wheel-dial-wrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--quiz-wheel-size);
+  aspect-ratio: 1;
 }
 
 .quiz-wheel-slot-divider {
@@ -5737,6 +5856,9 @@ button:disabled {
 }
 
 .quiz-wheel-hub {
+  position: absolute;
+  top: 50%;
+  left: 50%;
   display: grid;
   place-items: center;
   width: 42%;
@@ -5746,7 +5868,7 @@ button:disabled {
   background: rgba(7, 11, 20, 0.94);
   color: #fff;
   text-align: center;
-  transform: rotate(var(--hub-counter-rotation, 0deg));
+  transform: translate(-50%, -50%);
 }
 
 .quiz-wheel-hub strong {
@@ -12034,7 +12156,7 @@ select:focus-visible {
 
 .quiz-choice-zone--wheel .quiz-choice-wheel-card .quiz-wheel-stage {
   --quiz-wheel-size: min(22vw, 360px) !important;
-  --quiz-wheel-slot-offset: calc(var(--quiz-wheel-size) * -0.39) !important;
+  --quiz-wheel-slot-offset: calc(var(--quiz-wheel-size) * -0.34) !important;
   display: grid !important;
   width: min(100%, calc(var(--quiz-wheel-size) + 60px)) !important;
   height: auto !important;
@@ -12118,6 +12240,7 @@ select:focus-visible {
 
   .quiz-choice-zone--wheel .quiz-choice-wheel-card .quiz-wheel-stage {
     --quiz-wheel-size: min(76vw, 320px) !important;
+    --quiz-wheel-slot-offset: calc(var(--quiz-wheel-size) * -0.34) !important;
     min-height: auto !important;
   }
 }

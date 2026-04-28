@@ -1,0 +1,636 @@
+/* Targeted override for the quiz wager negotiation screen.
+   Keeps the three desktop panels balanced at 40 / 20 / 40 without touching wager logic. */
+
+.quiz-choice-grid {
+  display: grid !important;
+  /* three-column layout: left and right flexible, centre narrower */
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.48fr) minmax(0, 1fr) !important;
+  gap: 12px !important; /* small gap, no large empty space */
+  justify-content: stretch !important;
+  align-items: stretch !important;
+  width: 100% !important;
+}
+
+/* Force explicit column placement to prevent accidental spanning or translation */
+.quiz-choice-zone--manual { grid-column: 1 !important; }
+.quiz-choice-zone--chat   { grid-column: 2 !important; }
+.quiz-choice-zone--wheel  { grid-column: 3 !important; }
+
+/* Ensure each panel fills its column and has no transforms or extra margins that create gaps */
+.quiz-choice-zone--manual,
+.quiz-choice-zone--chat,
+.quiz-choice-zone--wheel,
+.quiz-choice-zone,
+.quiz-choice-zone > * {
+  width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  justify-self: stretch !important;
+  align-self: stretch !important;
+  transform: none !important;
+  left: auto !important;
+  right: auto !important;
+  position: static !important;
+}
+
+/* Defensive: remove inline translation or absolute positioning on commonly used inner wrappers */
+.quiz-choice-zone__panel-head,
+.quiz-choice-zone__content,
+.quiz-choice-zone__content > * {
+  margin: 0 !important;
+  padding: 6px !important; /* small internal padding preserved */
+  transform: none !important;
+  position: static !important;
+}
+
+/* Keep wheel elements contained and centered within right column */
+.quiz-choice-wheel-card,
+.quiz-choice-zone__content--wheel,
+.quiz-choice-wheel-card .quiz-wheel-stage {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  transform: none !important;
+  justify-self: stretch !important;
+}
+
+/* Do not reset transform on the dial: the spin animation writes transform. */
+.quiz-choice-wheel-card .quiz-wheel-dial {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  justify-self: stretch !important;
+}
+/* Enforce no visual seams: remove borders/shadows on direct children so columns touch */
+.quiz-choice-grid > .quiz-choice-zone,
+.quiz-choice-zone {
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+
+/* Small viewport fallback remains single column */
+@media (max-width: 900px) {
+  .quiz-choice-grid { grid-template-columns: 1fr !important; gap: 12px !important; }
+}
+
+.quiz-choice-zone {
+  padding: 6px !important; /* tighter padding */
+}
+
+.quiz-choice-zone__content,
+.quiz-choice-zone__content--wheel,
+.quiz-choice-zone__content--chat,
+.quiz-choice-zone__content--manual {
+  margin: 0 !important;
+  width: 100% !important;
+}
+
+.quiz-choice-zone__choice-stack .quiz-choice-pill {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* Make wheel occupy its column fully and center the dial within it */
+.quiz-choice-wheel-card {
+  overflow: hidden !important;
+  display: grid !important;
+  justify-items: center !important;
+  align-items: start !important;
+  grid-template-rows: 1fr auto !important;
+  padding: 20px !important;
+  min-height: 560px !important;
+}
+
+.quiz-choice-zone__content--wheel {
+  overflow: hidden !important;
+}
+
+.quiz-choice-wheel-card .quiz-wheel-stage {
+  width: 100% !important;
+  display: block !important;
+  justify-self: center !important;
+  --quiz-wheel-size: min(440px, 46vw) !important;
+  height: auto !important;
+  max-width: 100% !important;
+  margin-bottom: 8px !important;
+}
+
+.quiz-choice-wheel-card .quiz-wheel-dial {
+  width: var(--quiz-wheel-size) !important;
+  height: var(--quiz-wheel-size) !important;
+  max-width: 100% !important;
+}
+
+.quiz-wheel-result,
+.quiz-wheel-opt-in-summary {
+  width: 100% !important;
+  text-align: center !important;
+  display: block !important;
+  margin-top: 8px !important;
+}
+
+.quiz-wheel-action-stack {
+  width: 100% !important;
+}
+.quiz-wheel-action-stack .primary-button {
+  max-width: 100% !important;
+}
+
+.quiz-choice-chat,
+.quiz-negotiation-chat,
+.chat-panel,
+.chat-panel.compact-chat {
+  width: 100% !important;
+}
+
+/* Remove internal borders/shadows so columns touch without visible seams */
+.quiz-choice-grid > .quiz-choice-zone,
+.quiz-choice-zone {
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+
+/* Preserve slight inner panel look via inner wrapper if present */
+.quiz-choice-zone > * {
+  background-clip: padding-box !important;
+}
+
+.quiz-choice-grid > .quiz-choice-zone,
+.quiz-choice-zone {
+  min-width: 0 !important;
+  max-width: none !important;
+  width: auto !important;
+}
+
+.quiz-choice-zone--chat,
+.quiz-choice-zone--manual,
+.quiz-choice-zone--wheel {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.quiz-choice-wheel-card,
+.quiz-choice-zone__content--wheel {
+  margin: 0 !important;
+}
+
+.quiz-choice-grid > * { align-self: stretch !important; }
+
+.quiz-choice-zone--manual,
+.quiz-choice-zone--wheel {
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+.quiz-choice-zone--chat {
+  min-width: 160px !important;
+  max-width: none !important;
+  overflow: hidden !important;
+}
+
+.quiz-choice-zone--chat .quiz-choice-zone__content,
+.quiz-choice-zone__content--chat {
+  max-height: 360px !important;
+  overflow: auto !important;
+}
+
+.quiz-choice-zone--wheel,
+.quiz-choice-zone__content--wheel,
+.quiz-choice-wheel-card {
+  overflow: visible !important;
+}
+
+.quiz-choice-wheel-card .quiz-wheel-stage {
+  --quiz-wheel-size: min(440px, 46vw) !important;
+  --quiz-wheel-slot-offset: calc(var(--quiz-wheel-size) * -0.39) !important;
+  width: var(--quiz-wheel-size) !important;
+  height: calc(var(--quiz-wheel-size) * 0.62) !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+}
+
+.quiz-choice-wheel-card .quiz-wheel-dial {
+  width: var(--quiz-wheel-size) !important;
+  height: var(--quiz-wheel-size) !important;
+}
+
+.quiz-wheel-action-stack {
+  margin-top: auto !important;
+  width: 100% !important;
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+}
+
+/* Visual polish and behavior fixes requested */
+.quiz-choice-zone--manual .quiz-choice-zone__panel-head,
+.quiz-choice-zone--manual .quiz-choice-zone__intro,
+.quiz-wager-amount-card,
+.quiz-negotiation-status,
+.quiz-negotiation-focus-card {
+  text-align: center !important;
+}
+
+/* Hide vertical/broken wheel status text and duplicate summaries — keep slot labels visible */
+.quiz-choice-zone--wheel .quiz-wheel-result,
+.quiz-choice-zone--wheel .quiz-wheel-opt-in-summary,
+.quiz-choice-zone--wheel .quiz-wager-wheel-label {
+  display: none !important;
+}
+
+/* Keep wager amount card untouched (prevent shrinking). Match the button frame below to the top's visual width */
+.quiz-negotiation-focus-card {
+  width: 100% !important;
+  max-width: 380px !important; /* match typical top card width (380px) */
+  margin: 0 auto !important;
+}
+
+/* Ensure wheel slot labels inside the dial remain visible and centered */
+.quiz-choice-wheel-card .quiz-wheel-slot-label {
+  display: inline-block !important;
+  text-align: center !important;
+  max-width: 100% !important;
+}
+
+
+/* Ensure wheel card content stacks: wheel above, result/status below, button at bottom */
+.quiz-choice-zone__content--wheel,
+.quiz-choice-wheel-card {
+  display: grid !important;
+  grid-template-rows: 1fr auto !important;
+  justify-items: center !important;
+  align-items: start !important;
+  overflow: hidden !important;
+}
+
+/* Hide the helper copy that duplicates status beside the wheel */
+.quiz-choice-zone--wheel .quiz-mode-helper,
+.quiz-choice-zone--wheel .quiz-wheel-inline .quiz-wheel-result,
+.quiz-choice-zone--wheel .quiz-wheel-opt-in-summary {
+  display: none !important;
+}
+
+.quiz-wheel-action-stack {
+  margin-top: auto !important;
+  width: 100% !important;
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+}
+
+/* Center the manual panel heading fully */
+.quiz-choice-zone--manual .quiz-choice-zone__panel-head {
+  justify-items: center !important;
+  text-align: center !important;
+}
+
+/* Center negotiation status and inner focus card */
+.quiz-negotiation-status {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  text-align: center !important;
+  width: 100% !important;
+}
+
+.quiz-negotiation-focus-card,
+.quiz-wager-amount-card {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+}
+
+/* Defensive: ensure lobby panel and create-card buttons are interactive */
+
+/* Center the frame containing buttons in the left manual panel */
+.quiz-choice-zone--manual .button-row.quiz-choice-manual-actions,
+.quiz-choice-zone--manual .button-row.live-round-actions {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  margin: 0 auto !important;
+  margin-top: auto !important;
+}
+
+/* Keep single-column stacked variant centered too */
+.quiz-choice-zone--manual .quiz-choice-manual-actions.quiz-choice-manual-single {
+  display: grid !important;
+  justify-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+}
+
+.panel.lobby-panel,
+.create-game-card {
+  position: relative !important;
+  z-index: 2 !important;
+  pointer-events: auto !important;
+}
+
+.lobby-chat-card {
+  position: static !important;
+  z-index: 1 !important;
+}
+
+@media (max-width: 900px) {
+  .quiz-choice-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .quiz-choice-wheel-card .quiz-wheel-stage {
+    --quiz-wheel-size: min(76vw, 292px) !important;
+    height: calc(var(--quiz-wheel-size) * 0.62) !important;
+  }
+}
+
+/* Lobby chat: make chat fill the card and pin composer */
+.lobby-chat-card {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 320px !important;
+}
+.lobby-chat-card .chat-panel,
+.lobby-chat-card .chat-panel.compact-chat {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  padding: 12px !important;
+}
+.lobby-chat-card .chat-log {
+  flex: 1 1 auto !important;
+  overflow: auto !important;
+  margin-bottom: 8px !important;
+}
+.lobby-chat-card .chat-compose {
+  margin-top: auto !important;
+  display: flex !important;
+  gap: 8px !important;
+  align-items: center !important;
+}
+.lobby-chat-card .chat-compose textarea {
+  flex: 1 1 auto !important;
+  resize: none !important;
+}
+/* Prevent layout shift when scrollbar appears: reserve gutter and always show vertical scrollbar */
+html { scrollbar-gutter: stable; }
+body { overflow-y: scroll; }
+
+/* Make lower shared wager/result frame match top wager amount width */
+.quiz-wager-amount-card,
+.quiz-negotiation-focus-card,
+.quiz-choice-zone--manual .quiz-wager-result-card,
+.quiz-choice-zone--manual .quiz-ready-summary,
+.quiz-choice-zone--manual .quiz-wager-action-stack-wrapper,
+.quiz-choice-zone--manual .quiz-wager-action-stack,
+.quiz-choice-zone--manual .quiz-wager-left,
+.quiz-choice-zone--manual .quiz-wager-right {
+  width: 100% !important;
+  max-width: 380px !important;
+  margin: 0 auto !important;
+  text-align: center !important;
+}
+
+.quiz-choice-zone--manual .quiz-wager-action-stack {
+  display: flex !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.quiz-choice-zone--manual .quiz-wager-amount-field {
+  width: min(100%, 560px) !important;
+  gap: 10px !important;
+}
+
+.quiz-choice-zone--manual .quiz-wager-amount-field span {
+  color: rgba(255, 246, 216, 0.9) !important;
+  font-size: clamp(0.9rem, 1.05vw, 1.08rem) !important;
+  font-weight: 950 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+}
+
+.quiz-choice-zone--manual .quiz-wager-amount-field input {
+  min-height: 64px !important;
+  font-size: clamp(1.35rem, 2vw, 1.8rem) !important;
+}
+
+.quiz-choice-zone--manual .quiz-wager-amount-field input::placeholder {
+  color: rgba(255, 255, 255, 0.34) !important;
+}
+
+/* Quiz negotiation layout repair: keep the manual cards full-width and give the wheel frame room. */
+.quiz-choice-grid {
+  grid-template-columns: minmax(0, 40fr) minmax(260px, 20fr) minmax(0, 40fr) !important;
+}
+
+.quiz-choice-zone--manual .quiz-choice-zone__content--manual {
+  justify-items: stretch !important;
+}
+
+.quiz-choice-zone--manual .quiz-wager-amount-card,
+.quiz-choice-zone--manual .quiz-negotiation-focus-card,
+.quiz-choice-zone--manual .quiz-wager-action-stack {
+  width: 100% !important;
+  max-width: none !important;
+  align-self: stretch !important;
+  box-sizing: border-box !important;
+}
+
+.quiz-choice-zone--wheel .quiz-choice-zone__content--wheel {
+  display: grid !important;
+  grid-template-rows: minmax(0, 1fr) auto !important;
+  gap: 12px !important;
+  justify-items: stretch !important;
+  overflow: visible !important;
+}
+
+.quiz-choice-zone--wheel .quiz-choice-wheel-card {
+  width: 100% !important;
+  min-height: clamp(360px, 44vh, 500px) !important;
+  padding: 14px !important;
+  place-items: center !important;
+  overflow: visible !important;
+}
+
+.quiz-choice-zone--wheel .quiz-choice-wheel-card .quiz-wheel-stage {
+  --quiz-wheel-size: min(22vw, 360px) !important;
+  --quiz-wheel-slot-offset: calc(var(--quiz-wheel-size) * -0.39) !important;
+  display: grid !important;
+  width: min(100%, calc(var(--quiz-wheel-size) + 60px)) !important;
+  height: auto !important;
+  min-height: auto !important;
+  gap: 0 !important;
+  place-items: center !important;
+  justify-items: center !important;
+  overflow: visible !important;
+}
+
+.quiz-choice-zone--wheel .quiz-wheel-pointer,
+.quiz-choice-zone--wheel .quiz-wheel-dial {
+  justify-self: center !important;
+  margin-inline: auto !important;
+}
+
+.quiz-choice-zone--wheel .quiz-wheel-pointer {
+  position: relative !important;
+  z-index: 2 !important;
+  margin-bottom: -12px !important;
+}
+
+.quiz-choice-zone--manual .quiz-negotiation-focus-card {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
+  align-content: stretch !important;
+  min-height: clamp(290px, 34vh, 380px) !important;
+}
+
+.quiz-choice-zone--manual .quiz-negotiation-focus-label {
+  color: #fff !important;
+  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif !important;
+  font-size: clamp(1.15rem, 1.45vw, 1.45rem) !important;
+  font-weight: 900 !important;
+  letter-spacing: 0 !important;
+  line-height: 1 !important;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.38) !important;
+}
+
+.quiz-choice-zone--manual .quiz-negotiation-focus-card > .quiz-wager-action-stack {
+  grid-row: 3 !important;
+}
+
+.quiz-choice-zone--manual .quiz-negotiation-focus-body {
+  display: grid !important;
+  align-content: center !important;
+  justify-items: center !important;
+  gap: 14px !important;
+  width: 100% !important;
+  min-height: 0 !important;
+}
+
+.quiz-choice-zone--manual .quiz-negotiation-focus-body > strong,
+.quiz-choice-zone--manual .quiz-negotiation-focus-body > p {
+  margin: 0 !important;
+}
+
+.quiz-choice-zone--wheel .quiz-wheel-action-stack {
+  position: relative !important;
+  z-index: 3 !important;
+  display: grid !important;
+  width: 100% !important;
+  max-width: none !important;
+  justify-content: stretch !important;
+  justify-items: stretch !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+.quiz-choice-zone--wheel .quiz-wheel-action-stack .primary-button {
+  display: inline-flex !important;
+  width: 100% !important;
+  min-height: 52px !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+@media (max-width: 1120px) {
+  .quiz-choice-grid {
+    grid-template-columns: minmax(0, 40fr) minmax(220px, 20fr) minmax(0, 40fr) !important;
+  }
+
+  .quiz-choice-zone--wheel .quiz-choice-wheel-card .quiz-wheel-stage {
+    --quiz-wheel-size: min(22vw, 320px) !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .quiz-choice-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .quiz-choice-zone--wheel .quiz-choice-wheel-card {
+    min-height: auto !important;
+  }
+
+  .quiz-choice-zone--wheel .quiz-choice-wheel-card .quiz-wheel-stage {
+    --quiz-wheel-size: min(76vw, 320px) !important;
+    min-height: auto !important;
+  }
+}
+
+/* Mode selection state for Quick Fire wager negotiation.
+   Imported after the main stylesheet, so these rules deliberately restore the
+   overlay positioning that earlier layout repair rules flatten. */
+.quiz-choice-grid--needs-selection .quiz-choice-zone--manual,
+.quiz-choice-grid--needs-selection .quiz-choice-zone--wheel,
+.quiz-choice-grid--selected-manual .quiz-choice-zone--wheel,
+.quiz-choice-grid--selected-wheel .quiz-choice-zone--manual {
+  position: relative !important;
+}
+
+.quiz-choice-grid--needs-selection .quiz-choice-inactive-overlay,
+.quiz-choice-grid--selected-manual .quiz-choice-zone--wheel .quiz-choice-inactive-overlay,
+.quiz-choice-grid--selected-wheel .quiz-choice-zone--manual .quiz-choice-inactive-overlay {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 20 !important;
+  display: block !important;
+  border-radius: inherit !important;
+  background:
+    linear-gradient(180deg, rgba(4, 8, 18, 0.28), rgba(4, 8, 18, 0.58)),
+    rgba(4, 8, 18, 0.34) !important;
+  pointer-events: none !important;
+}
+
+.quiz-choice-grid--needs-selection .quiz-choice-zone--manual,
+.quiz-choice-grid--needs-selection .quiz-choice-zone--wheel {
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  filter: saturate(0.82) brightness(0.88) !important;
+}
+
+.quiz-choice-grid--needs-selection .quiz-choice-zone--chat .quiz-choice-zone__intro p {
+  color: #fff7d8 !important;
+  font-weight: 950 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+}
+
+.quiz-choice-pill.is-unselected {
+  opacity: 0.86 !important;
+  filter: saturate(0.92) brightness(0.96) !important;
+}
+
+.quiz-choice-pill.is-muted {
+  opacity: 0.54 !important;
+  filter: saturate(0.66) brightness(0.78) !important;
+}
+
+.quiz-choice-pill.is-muted::after,
+.quiz-choice-pill.is-unselected::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(4, 8, 18, 0.18);
+  pointer-events: none;
+}
+
+.quiz-choice-pill.is-unselected::after {
+  background: rgba(4, 8, 18, 0.08);
+}
+
+.quiz-choice-pill.is-muted,
+.quiz-choice-pill.is-unselected {
+  position: relative !important;
+  overflow: hidden !important;
+}
