@@ -11999,6 +11999,26 @@ select:focus-visible {
   margin-inline: auto !important;
 }
 
+.quiz-choice-zone--manual .quiz-negotiation-focus-card {
+  grid-template-rows: minmax(0, 1fr) auto auto auto minmax(0, 1fr) auto !important;
+  align-content: stretch !important;
+  min-height: 0 !important;
+}
+
+.quiz-choice-zone--manual .quiz-negotiation-focus-label {
+  color: #fff !important;
+  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif !important;
+  font-size: clamp(1.15rem, 1.45vw, 1.45rem) !important;
+  font-weight: 900 !important;
+  letter-spacing: 0 !important;
+  line-height: 1 !important;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.38) !important;
+}
+
+.quiz-choice-zone--manual .quiz-negotiation-focus-card > .quiz-wager-action-stack {
+  grid-row: 6 !important;
+}
+
 .quiz-choice-zone--wheel .quiz-wheel-action-stack {
   position: relative !important;
   z-index: 3 !important;
