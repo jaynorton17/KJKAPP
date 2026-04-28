@@ -11988,6 +11988,7 @@ select:focus-visible {
   width: min(100%, calc(var(--quiz-wheel-size) + 60px)) !important;
   height: auto !important;
   min-height: auto !important;
+  gap: 0 !important;
   place-items: center !important;
   justify-items: center !important;
   overflow: visible !important;
@@ -11997,6 +11998,12 @@ select:focus-visible {
 .quiz-choice-zone--wheel .quiz-wheel-dial {
   justify-self: center !important;
   margin-inline: auto !important;
+}
+
+.quiz-choice-zone--wheel .quiz-wheel-pointer {
+  position: relative !important;
+  z-index: 2 !important;
+  margin-bottom: -12px !important;
 }
 
 .quiz-choice-zone--manual .quiz-negotiation-focus-card {
@@ -12017,6 +12024,14 @@ select:focus-visible {
 
 .quiz-choice-zone--manual .quiz-negotiation-focus-card > .quiz-wager-action-stack {
   grid-row: 6 !important;
+}
+
+.quiz-choice-zone--manual .quiz-negotiation-focus-card > strong {
+  grid-row: 3 !important;
+}
+
+.quiz-choice-zone--manual .quiz-negotiation-focus-card > p {
+  grid-row: 4 !important;
 }
 
 .quiz-choice-zone--wheel .quiz-wheel-action-stack {
