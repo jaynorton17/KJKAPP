@@ -3649,10 +3649,26 @@ function QuizSetupStagePanel({
   const wheelBaseAmount = game?.isLocalOnly && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
   const wheelPhase = getQuizWheelPhase(agreement);
   const wheelActive = wheelPhase === 'countdown' || wheelPhase === 'spinning' || wheelPhase === 'landing';
+  const wheelSpinEndsAtMs = Date.parse(agreement.wheelSpinEndsAt || '');
+  const wheelResolved = agreement.status === 'wheel_countdown'
+    && Number.isFinite(wheelSpinEndsAtMs)
+    && nowMs >= wheelSpinEndsAtMs;
   const viewerWheelOptedIn = Boolean(agreement.wheelOptIn?.[currentPlayer]);
   const otherWheelOptedIn = Boolean(agreement.wheelOptIn?.[otherPlayer]);
   const viewerReady = hasQuizSetupReadySeat(game, currentPlayer);
   const otherPlayerReady = hasQuizSetupReadySeat(game, otherPlayer);
+  const effectiveSharedWagerLocked = sharedWagerLocked || wheelResolved;
+  const pendingWheelAmount = agreement.lockedByWheel
+    ? getQuizSharedWagerAmount({ quizWagerAgreement: agreement })
+    : (() => {
+        const storedWheelAmount = Number(agreement.wheelResultAmount);
+        if (Number.isFinite(storedWheelAmount)) return Math.max(0, storedWheelAmount);
+        const resultIndex = Number(agreement.wheelResultIndex);
+        if (Number.isFinite(resultIndex) && Array.isArray(agreement.wheelSlots) && agreement.wheelSlots.length) {
+          return Math.max(0, Number(agreement.wheelSlots[Math.max(0, Math.min(agreement.wheelSlots.length - 1, resultIndex))] || 0));
+        }
+        return Number(sharedQuizWagerAmount || 0);
+      })();
   const readyState = game?.quizReadyState || defaultQuizReadyState('opening');
   const readyStage = normalizeText(readyState.stage || 'opening') || 'opening';
   const countdownEndsAtMs = Date.parse(readyState.countdownEndsAt || '');
@@ -3661,13 +3677,13 @@ function QuizSetupStagePanel({
     : 0;
   const countdownActive = readyStage === 'countdown';
   const bothPlayersReady = Boolean(viewerReady && otherPlayerReady);
-  const launchPending = sharedWagerLocked
+  const launchPending = effectiveSharedWagerLocked
     && Boolean(game?.quizReadyState?.ready?.jay && game?.quizReadyState?.ready?.kim)
     && readyStage !== 'countdown'
     && !game?.currentRound;
-  const showSetupReadyCard = Boolean(sharedWagerLocked || countdownActive || launchPending);
+  const showSetupReadyCard = Boolean(effectiveSharedWagerLocked || countdownActive || launchPending);
   const shouldPreferWheelMode = Boolean(agreement.lockedByWheel || wheelActive || viewerWheelOptedIn || otherWheelOptedIn);
-  const shouldPreferManualMode = Boolean(pendingProposal || (sharedWagerLocked && !agreement.lockedByWheel));
+  const shouldPreferManualMode = Boolean(pendingProposal || (effectiveSharedWagerLocked && !agreement.lockedByWheel));
   const [selectionMode, setSelectionMode] = useState(() => (shouldPreferWheelMode ? 'wheel' : shouldPreferManualMode ? 'manual' : null));
   const hasSelectedWagerMode = selectionMode === 'manual' || selectionMode === 'wheel';
   const isManualMode = selectionMode === 'manual';
@@ -3687,7 +3703,7 @@ function QuizSetupStagePanel({
   const wheelIsLocked = wheelIsInactive || sharedWagerLocked;
   const wheelHelperText = launchPending
     ? `Shared wager locked at ${formatScore(sharedWagerAmount || 0)}. Starting Quick Fire...`
-    : sharedWagerLocked && agreement.lockedByWheel
+    : effectiveSharedWagerLocked && agreement.lockedByWheel
       ? `Wheel locked the shared wager at ${formatScore(sharedWagerAmount || 0)}.`
       : effectiveWheelPendingFromViewer
         ? `Wheel request sent. Waiting for ${oppositeLabel} to agree or reject.`
@@ -3711,15 +3727,20 @@ function QuizSetupStagePanel({
               : bothPlayersJoined
                 ? 'Enter an amount, propose it, then the other player can accept, reject, or counter.'
                 : 'Waiting for both players to join before the wager can be agreed.';
-  const readySetupEyebrow = agreement.lockedByWheel ? 'Wheel spin complete' : 'Shared wager locked';
+  const readySetupAmount = effectiveSharedWagerLocked
+    ? (sharedWagerLocked ? Number(sharedQuizWagerAmount || 0) : pendingWheelAmount)
+    : Number(sharedQuizWagerAmount || 0);
+  const readySetupEyebrow = agreement.lockedByWheel || wheelResolved ? 'Wheel spin complete' : 'Shared wager locked';
   const readySetupHeading = countdownActive
     ? `Quick Fire starts in ${Math.max(1, countdownSecondsLeft || 0)}`
     : 'Both players need to click Ready';
-  const readySetupIntro = agreement.lockedByWheel
-    ? `The wheel locked in ${formatScore(sharedWagerAmount || 0)}.`
-    : `The shared wager is locked at ${formatScore(sharedWagerAmount || 0)}.`;
+  const readySetupIntro = agreement.lockedByWheel || wheelResolved
+    ? `The wheel locked in ${formatScore(readySetupAmount || 0)}.`
+    : `The shared wager is locked at ${formatScore(readySetupAmount || 0)}.`;
   const readySetupStatus = countdownActive
     ? 'Both players are ready. Launching question one now.'
+    : wheelResolved && !sharedWagerLocked
+      ? 'Wheel spin finished. Finalizing the shared wager now...'
     : launchPending || bothPlayersReady
       ? 'Both players are ready. Starting the 3 second countdown...'
       : viewerReady
@@ -3749,10 +3770,11 @@ function QuizSetupStagePanel({
   }, [wheelPending]);
 
   useEffect(() => {
-    if (!countdownActive) return undefined;
+    const shouldTick = countdownActive || (agreement.status === 'wheel_countdown' && Number.isFinite(wheelSpinEndsAtMs) && !sharedWagerLocked);
+    if (!shouldTick) return undefined;
     const timer = window.setInterval(() => setNowMs(Date.now()), 100);
     return () => window.clearInterval(timer);
-  }, [countdownActive]);
+  }, [agreement.status, countdownActive, sharedWagerLocked, wheelSpinEndsAtMs]);
 
   const onManualPrimaryAction = async () => {
     const validationMessage = getQuizWagerValidationMessage(quizWagerDraft, wheelBaseAmount, {
@@ -11306,41 +11328,70 @@ function ProductionApp() {
     }
     if (!firestore) return;
     const gameRef = doc(firestore, 'games', game.id);
-    await runTransaction(firestore, async (transaction) => {
-      const snap = await transaction.get(gameRef);
-      if (!snap.exists()) return;
-      const data = snap.data() || {};
-      const liveAgreement = normalizeQuizWagerAgreement(data);
-      if (liveAgreement.status !== 'wheel_countdown') return;
-      const liveBaseAmount = Math.max(0, Math.floor(Number(liveAgreement.wheelBaseAmount || fallbackBaseAmount || 0)));
-      const liveSlots = liveAgreement.wheelSlots.length ? liveAgreement.wheelSlots : buildQuizWheelSlots(liveBaseAmount);
-      const liveIndex = Math.max(0, Math.min(Math.max(0, liveSlots.length - 1), Number(liveAgreement.wheelResultIndex ?? resultIndex)));
-      const liveStoredResultAmount = Number(liveAgreement.wheelResultAmount);
-      const liveRawResultAmount = Number.isFinite(liveStoredResultAmount) && liveStoredResultAmount > 0
-        ? liveStoredResultAmount
-        : Number(liveSlots[liveIndex] || 0);
-      const liveWagerValue = liveBaseAmount > 0
-        ? capQuizWagerAmount(liveRawResultAmount, liveBaseAmount)
-        : sanitizeQuizWagerAmount(liveRawResultAmount);
-      transaction.update(gameRef, {
-        quizWagers: { jay: liveWagerValue, kim: liveWagerValue },
-        quizWagerAgreement: {
-          ...liveAgreement,
-          status: 'wheel_locked',
-          requestKind: 'wheel',
-          amount: liveWagerValue,
-          wheelBaseAmount: liveBaseAmount,
-          wheelSlots: liveSlots,
-          wheelResultIndex: liveIndex,
-          wheelResultAmount: liveWagerValue,
-          proposalStatus: 'accepted',
-          lockedByWheel: true,
-          lockedAt: new Date().toISOString(),
-        },
-        quizReadyState: defaultQuizReadyState('ready'),
-        updatedAt: serverTimestamp(),
+    const previousAgreement = game?.quizWagerAgreement || defaultQuizWagerAgreement();
+    const previousReadyState = game?.quizReadyState || defaultQuizReadyState('opening');
+    const previousQuizWagers = game?.quizWagers || { jay: 0, kim: 0 };
+    setGame((current) =>
+      current
+        ? {
+            ...current,
+            quizWagers: { jay: wagerValue, kim: wagerValue },
+            quizWagerAgreement: nextAgreement,
+            quizReadyState: defaultQuizReadyState('ready'),
+            updatedAt: new Date().toISOString(),
+          }
+        : current,
+    );
+    try {
+      await runTransaction(firestore, async (transaction) => {
+        const snap = await transaction.get(gameRef);
+        if (!snap.exists()) return;
+        const data = snap.data() || {};
+        const liveAgreement = normalizeQuizWagerAgreement(data);
+        if (liveAgreement.status !== 'wheel_countdown') return;
+        const liveBaseAmount = Math.max(0, Math.floor(Number(liveAgreement.wheelBaseAmount || fallbackBaseAmount || 0)));
+        const liveSlots = liveAgreement.wheelSlots.length ? liveAgreement.wheelSlots : buildQuizWheelSlots(liveBaseAmount);
+        const liveIndex = Math.max(0, Math.min(Math.max(0, liveSlots.length - 1), Number(liveAgreement.wheelResultIndex ?? resultIndex)));
+        const liveStoredResultAmount = Number(liveAgreement.wheelResultAmount);
+        const liveRawResultAmount = Number.isFinite(liveStoredResultAmount) && liveStoredResultAmount > 0
+          ? liveStoredResultAmount
+          : Number(liveSlots[liveIndex] || 0);
+        const liveWagerValue = liveBaseAmount > 0
+          ? capQuizWagerAmount(liveRawResultAmount, liveBaseAmount)
+          : sanitizeQuizWagerAmount(liveRawResultAmount);
+        transaction.update(gameRef, {
+          quizWagers: { jay: liveWagerValue, kim: liveWagerValue },
+          quizWagerAgreement: {
+            ...liveAgreement,
+            status: 'wheel_locked',
+            requestKind: 'wheel',
+            amount: liveWagerValue,
+            wheelBaseAmount: liveBaseAmount,
+            wheelSlots: liveSlots,
+            wheelResultIndex: liveIndex,
+            wheelResultAmount: liveWagerValue,
+            proposalStatus: 'accepted',
+            lockedByWheel: true,
+            lockedAt: new Date().toISOString(),
+          },
+          quizReadyState: defaultQuizReadyState('ready'),
+          updatedAt: serverTimestamp(),
+        });
       });
-    });
+    } catch (error) {
+      setGame((current) =>
+        current
+          ? {
+              ...current,
+              quizWagers: previousQuizWagers,
+              quizWagerAgreement: previousAgreement,
+              quizReadyState: previousReadyState,
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      throw error;
+    }
     setNotice(`Wager wheel landed on ${formatScore(wagerValue)}. Both players can ready up.`);
   };
 
@@ -12203,8 +12254,8 @@ function ProductionApp() {
       if (quizWheelFinalizeRef.current === finalizeKey) quizWheelFinalizeRef.current = '';
       return undefined;
     }
-    const remainingMs = Math.max(0, spinEndsAtMs - Date.now());
-    const timeout = window.setTimeout(() => {
+    const attemptFinalize = () => {
+      if (Date.now() < spinEndsAtMs) return;
       if (quizWheelFinalizeRef.current === finalizeKey) return;
       quizWheelFinalizeRef.current = finalizeKey;
       finalizeQuizWheelWager()
@@ -12212,8 +12263,11 @@ function ProductionApp() {
         .finally(() => {
           quizWheelFinalizeRef.current = '';
         });
-    }, remainingMs + 50);
-    return () => window.clearTimeout(timeout);
+    };
+    attemptFinalize();
+    if (Date.now() >= spinEndsAtMs) return undefined;
+    const interval = window.setInterval(attemptFinalize, 250);
+    return () => window.clearInterval(interval);
   }, [
     game?.id,
     game?.gameMode,
