@@ -282,10 +282,16 @@ const normalizeQuizWagerAgreement = (game = {}) => {
 const getQuizSharedWagerAmount = (game = {}) => {
   const agreement = normalizeQuizWagerAgreement(game);
   const amount = Number(agreement.amount);
-  if (Number.isFinite(amount) && (amount > 0 || !agreement.lockedByWheel)) return Math.max(0, amount);
+  if (Number.isFinite(amount)) return Math.max(0, amount);
   const wheelResultAmount = Number(agreement.wheelResultAmount);
-  if (agreement.lockedByWheel && Number.isFinite(wheelResultAmount)) return Math.max(0, wheelResultAmount);
-  return Number.isFinite(amount) ? Math.max(0, amount) : null;
+  if (Number.isFinite(wheelResultAmount) && (agreement.lockedByWheel || agreement.status === 'wheel_countdown')) {
+    return Math.max(0, wheelResultAmount);
+  }
+  const resultIndex = Number(agreement.wheelResultIndex);
+  if (agreement.status === 'wheel_countdown' && Number.isFinite(resultIndex) && Array.isArray(agreement.wheelSlots) && agreement.wheelSlots.length) {
+    return Math.max(0, Number(agreement.wheelSlots[Math.max(0, Math.min(agreement.wheelSlots.length - 1, resultIndex))] || 0));
+  }
+  return null;
 };
 const isQuizWagerAgreementLocked = (game = {}) => {
   const agreement = normalizeQuizWagerAgreement(game);
@@ -3718,7 +3724,7 @@ function QuizSetupStagePanel({
   const otherWheelOptedIn = Boolean(agreement.wheelOptIn?.[otherPlayer]);
   const viewerReady = hasQuizSetupReadySeat(game, currentPlayer);
   const otherPlayerReady = hasQuizSetupReadySeat(game, otherPlayer);
-  const effectiveSharedWagerLocked = sharedWagerLocked || wheelResolved;
+  const effectiveSharedWagerLocked = isQuizWagerEffectivelyLocked(game, nowMs) || wheelResolved;
   const pendingWheelAmount = agreement.lockedByWheel
     ? getQuizSharedWagerAmount({ quizWagerAgreement: agreement })
     : (() => {
@@ -3885,7 +3891,7 @@ function QuizSetupStagePanel({
                     <span>Starting Quick Fire...</span>
                   </div>
                 ) : (
-                  <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !sharedWagerLocked || viewerReady || wheelActive}>
+                  <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !effectiveSharedWagerLocked || viewerReady || wheelActive}>
                     {viewerReady ? 'Ready' : 'Click Ready'}
                   </Button>
                 )}
@@ -12373,7 +12379,7 @@ function ProductionApp() {
       const seat = seatToReady === 'kim' ? 'kim' : seatToReady === 'jay' ? 'jay' : currentSeat;
       if (!seat) return;
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-      const sharedQuizWagerLocked = isQuizWagerAgreementLocked(game);
+      const sharedQuizWagerLocked = isQuizWagerEffectivelyLocked(game);
 
       if (isQuizGame && !game?.currentRound) {
         if (!sharedQuizWagerLocked) throw new Error('Both players must agree one shared wager before starting Quick Fire.');
@@ -13118,26 +13124,27 @@ function ProductionApp() {
     const localLockedAgreement = normalizeQuizWagerAgreement(game);
     const localSharedWagerAmount = Math.max(0, Number(getQuizSharedWagerAmount(game) || 0));
 
-    if (isCurrentLocalTestGame) {
-      setGame((current) =>
-        current && !current.currentRound
-          ? {
-              ...current,
-              quizReadyState: {
-                ...(current.quizReadyState || defaultQuizReadyState('ready')),
-                stage: 'countdown',
-                ready: {
-                  ...((current.quizReadyState && current.quizReadyState.ready) || { jay: false, kim: false }),
-                  jay: true,
-                  kim: true,
-                },
-                countdownStartedAt: nowIso,
-                countdownEndsAt,
+    setGame((current) =>
+      current && !current.currentRound
+        ? {
+            ...current,
+            quizReadyState: {
+              ...(current.quizReadyState || defaultQuizReadyState('ready')),
+              stage: 'countdown',
+              ready: {
+                ...((current.quizReadyState && current.quizReadyState.ready) || { jay: false, kim: false }),
+                jay: true,
+                kim: true,
               },
-              updatedAt: nowIso,
-            }
-          : current,
-      );
+              countdownStartedAt: current.quizReadyState?.countdownStartedAt || nowIso,
+              countdownEndsAt: current.quizReadyState?.countdownEndsAt || countdownEndsAt,
+            },
+            updatedAt: nowIso,
+          }
+        : current,
+    );
+
+    if (isCurrentLocalTestGame) {
       return;
     }
 
@@ -13199,7 +13206,8 @@ function ProductionApp() {
     const ready = readyState.ready || { jay: false, kim: false };
     const stage = normalizeText(readyState.stage || 'opening') || 'opening';
     const countdownEndsAtMs = Date.parse(readyState.countdownEndsAt || '');
-    if (stage !== 'countdown' || !Number.isFinite(countdownEndsAtMs) || Date.now() < countdownEndsAtMs) return;
+    const localCountdownReady = stage === 'countdown' && Number.isFinite(countdownEndsAtMs) && Date.now() >= countdownEndsAtMs;
+    if (!localCountdownReady) return;
     if (!ready.jay || !ready.kim) return;
 
     if (isCurrentLocalTestGame) {
@@ -13234,13 +13242,34 @@ function ProductionApp() {
       if (!snap.exists()) throw new Error('Room not found.');
       const data = snap.data() || {};
       if (data.currentRound) return;
+      const liveAgreement = normalizeQuizWagerAgreement(data);
+      const liveAgreementLocked = isQuizWagerAgreementLocked(data);
+      const canPromoteLocalLock = !liveAgreementLocked && isQuizWagerEffectivelyLocked(game);
       const liveReadyState = data.quizReadyState || defaultQuizReadyState('opening');
       const setupReady = liveReadyState.ready || { jay: false, kim: false };
+      const mergedReady = {
+        jay: Boolean(setupReady.jay || ready.jay),
+        kim: Boolean(setupReady.kim || ready.kim),
+      };
       const liveStage = normalizeText(liveReadyState.stage || 'opening') || 'opening';
       const liveCountdownEndsAtMs = Date.parse(liveReadyState.countdownEndsAt || '');
-      if (liveStage !== 'countdown' || !Number.isFinite(liveCountdownEndsAtMs) || Date.now() < liveCountdownEndsAtMs) return;
-      if (!setupReady.jay || !setupReady.kim) return;
-      if (!isQuizWagerAgreementLocked(data)) return;
+      const liveCountdownReady = liveStage === 'countdown' && Number.isFinite(liveCountdownEndsAtMs) && Date.now() >= liveCountdownEndsAtMs;
+      if (!liveCountdownReady && !localCountdownReady) return;
+      if (!mergedReady.jay || !mergedReady.kim) return;
+      if (!liveAgreementLocked && !canPromoteLocalLock) return;
+      const promotedAgreement = canPromoteLocalLock
+        ? {
+            ...liveAgreement,
+            ...normalizeQuizWagerAgreement(game),
+            status: normalizeQuizWagerAgreement(game).status || 'wheel_locked',
+            requestKind: normalizeQuizWagerAgreement(game).requestKind || liveAgreement.requestKind || 'wheel',
+            amount: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
+            wheelResultAmount: Number(normalizeQuizWagerAgreement(game).wheelResultAmount || getQuizSharedWagerAmount(game) || 0),
+            proposalStatus: 'accepted',
+            lockedByWheel: Boolean(normalizeQuizWagerAgreement(game).lockedByWheel || liveAgreement.lockedByWheel || normalizeQuizWagerAgreement(game).status === 'wheel_locked'),
+            lockedAt: normalizeQuizWagerAgreement(game).lockedAt || new Date().toISOString(),
+          }
+        : null;
       const sourceGame = { ...game, ...data, id: game.id };
       const drawn = drawQuestion(sourceGame, rounds);
       if (!drawn.question) {
@@ -13253,6 +13282,15 @@ function ProductionApp() {
       const nextRoundNumber = Math.max(Number(sourceGame.roundsPlayed || 0) + 1, 1);
       const nextRound = buildRoundFromQuestion(drawn.question, nextRoundNumber, { isQuizGame: true, startOpen: true });
       transaction.update(gameRef, {
+        ...(promotedAgreement
+          ? {
+              quizWagerAgreement: promotedAgreement,
+              quizWagers: {
+                jay: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
+                kim: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
+              },
+            }
+          : {}),
         currentRound: nextRound,
         quizReadyState: null,
         questionQueueIds: drawn.remainingQueueIds,
