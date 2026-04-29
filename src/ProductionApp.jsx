@@ -3896,6 +3896,27 @@ function QuizSetupStagePanel({
           </section>
           </div>
         </section>
+        <div className="quiz-ready-inline quiz-ready-inline--outside" role="status" aria-live="polite">
+          {countdownActive ? (
+            <div className="quiz-ready-countdown" aria-live="polite">
+              <strong>{Math.max(1, countdownSecondsLeft || 0)}</strong>
+              <span>Starting Quick Fire…</span>
+            </div>
+          ) : !launchPending ? (
+              <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !sharedWagerLocked || viewerReady || wheelActive}>
+                {viewerReady ? 'Ready' : 'Ready to Start'}
+              </Button>
+            ) : null}
+          {sharedWagerLocked || launchPending ? (
+            <span>
+              {launchPending
+                ? 'Shared wager accepted. Waiting for both players to ready up.'
+                : viewerReady
+                  ? 'Waiting for the other player. The question appears once both players are ready.'
+                  : 'Tap Ready once the shared wager looks right.'}
+            </span>
+          ) : null}
+        </div>
         </div>
     </section>
     {effectiveWheelPendingFromViewer ? (
@@ -3904,27 +3925,6 @@ function QuizSetupStagePanel({
         <span>{oppositeLabel} can spin the wheel or reject and return both players to negotiation.</span>
       </div>
     ) : null}
-    <div className="quiz-ready-inline quiz-ready-inline--outside" role="status" aria-live="polite">
-      {countdownActive ? (
-        <div className="quiz-ready-countdown" aria-live="polite">
-          <strong>{Math.max(1, countdownSecondsLeft || 0)}</strong>
-          <span>Starting Quick Fire…</span>
-        </div>
-      ) : !launchPending ? (
-          <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !sharedWagerLocked || viewerReady || wheelActive}>
-            {viewerReady ? 'Ready' : 'Ready to Start'}
-          </Button>
-        ) : null}
-      {sharedWagerLocked || launchPending ? (
-        <span>
-          {launchPending
-            ? 'Shared wager accepted. Waiting for both players to ready up.'
-            : viewerReady
-              ? 'Waiting for the other player. The question appears once both players are ready.'
-              : 'Tap Ready once the shared wager looks right.'}
-        </span>
-      ) : null}
-    </div>
     </>
   );
 }
