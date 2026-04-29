@@ -3658,7 +3658,7 @@ function QuizSetupStagePanel({
   const countdownSecondsLeft = Number.isFinite(countdownEndsAtMs)
     ? Math.max(0, Math.ceil((countdownEndsAtMs - nowMs) / 1000))
     : 0;
-  const countdownActive = readyStage === 'countdown' && countdownSecondsLeft > 0;
+  const countdownActive = readyStage === 'countdown';
   const launchPending = sharedWagerLocked
     && Boolean(game?.quizReadyState?.ready?.jay && game?.quizReadyState?.ready?.kim)
     && readyStage !== 'countdown'
@@ -3907,7 +3907,7 @@ function QuizSetupStagePanel({
     <div className="quiz-ready-inline quiz-ready-inline--outside" role="status" aria-live="polite">
       {countdownActive ? (
         <div className="quiz-ready-countdown" aria-live="polite">
-          <strong>{countdownSecondsLeft || 1}</strong>
+          <strong>{Math.max(1, countdownSecondsLeft || 0)}</strong>
           <span>Starting Quick Fire…</span>
         </div>
       ) : !launchPending ? (
