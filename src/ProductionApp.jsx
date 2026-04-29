@@ -302,6 +302,14 @@ const getQuizWheelPhase = (agreement = {}, nowMs = Date.now()) => {
   if (nowMs < spinEndMs) return 'spinning';
   return 'landing';
 };
+const isQuizWagerEffectivelyLocked = (game = {}, nowMs = Date.now()) => {
+  if (isQuizWagerAgreementLocked(game)) return true;
+  const agreement = normalizeQuizWagerAgreement(game);
+  if (agreement.status !== 'wheel_countdown') return false;
+  const spinEndsAtMs = Date.parse(agreement.wheelSpinEndsAt || '');
+  if (!Number.isFinite(spinEndsAtMs) || nowMs < spinEndsAtMs) return false;
+  return Number.isFinite(Number(getQuizSharedWagerAmount(game)));
+};
 const getQuizWagerAgreementRank = (agreement = {}) => {
   const normalized = normalizeQuizWagerAgreement({ quizWagerAgreement: agreement });
   if (normalized.status === 'agreed' || normalized.status === 'wheel_locked') return 3;
@@ -13100,7 +13108,7 @@ function ProductionApp() {
 
   const startQuizSetupCountdown = async () => {
     if (!game || !((game?.gameMode || 'standard') === 'quiz') || game.currentRound) return;
-    if (!isQuizWagerAgreementLocked(game)) return;
+    if (!isQuizWagerEffectivelyLocked(game)) return;
     const readyState = game.quizReadyState || defaultQuizReadyState('opening');
     const ready = readyState.ready || { jay: false, kim: false };
     const stage = normalizeText(readyState.stage || 'opening') || 'opening';
@@ -13142,7 +13150,7 @@ function ProductionApp() {
       if (data.currentRound) return;
       const liveAgreement = normalizeQuizWagerAgreement(data);
       const liveAgreementLocked = isQuizWagerAgreementLocked(data);
-      const canPromoteLocalLock = !liveAgreementLocked && isQuizWagerAgreementLocked(game);
+      const canPromoteLocalLock = !liveAgreementLocked && isQuizWagerEffectivelyLocked(game);
       if (!liveAgreementLocked && !canPromoteLocalLock) return;
       const liveReadyState = data.quizReadyState || defaultQuizReadyState('opening');
       const liveReady = liveReadyState.ready || { jay: false, kim: false };
@@ -13186,7 +13194,7 @@ function ProductionApp() {
 
   const launchQuizRoundFromSetup = async () => {
     if (!game || !((game?.gameMode || 'standard') === 'quiz') || game.currentRound) return;
-    if (!isQuizWagerAgreementLocked(game)) return;
+    if (!isQuizWagerEffectivelyLocked(game)) return;
     const readyState = game.quizReadyState || defaultQuizReadyState('opening');
     const ready = readyState.ready || { jay: false, kim: false };
     const stage = normalizeText(readyState.stage || 'opening') || 'opening';
@@ -13260,7 +13268,7 @@ function ProductionApp() {
     const ready = readyState?.ready || {};
     const stage = normalizeText(readyState?.stage || 'opening') || 'opening';
     const countdownKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${stage}:${Boolean(ready.jay)}:${Boolean(ready.kim)}:${game?.quizWagerAgreement?.status || ''}:${game?.quizWagerAgreement?.amount ?? ''}:${game?.quizWagerAgreement?.wheelResultAmount ?? ''}`;
-    if (!isQuizGame || game?.currentRound || stage === 'countdown' || !ready.jay || !ready.kim || !isQuizWagerAgreementLocked(game)) {
+    if (!isQuizGame || game?.currentRound || stage === 'countdown' || !ready.jay || !ready.kim || !isQuizWagerEffectivelyLocked(game)) {
       if (quizSetupCountdownRef.current === countdownKey) quizSetupCountdownRef.current = '';
       return undefined;
     }
