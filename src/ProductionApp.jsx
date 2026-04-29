@@ -13173,6 +13173,8 @@ function ProductionApp() {
       };
       const liveStage = normalizeText(liveReadyState.stage || 'opening') || 'opening';
       if (liveStage === 'countdown' || !mergedReady.jay || !mergedReady.kim) return;
+      const nextCountdownStartedAt = liveReadyState.countdownStartedAt || readyState.countdownStartedAt || nowIso;
+      const nextCountdownEndsAt = liveReadyState.countdownEndsAt || readyState.countdownEndsAt || countdownEndsAt;
       const nextAgreement = canPromoteLocalLock
         ? {
             ...liveAgreement,
@@ -13197,8 +13199,8 @@ function ProductionApp() {
           ...liveReadyState,
           stage: 'countdown',
           ready: mergedReady,
-          countdownStartedAt: nowIso,
-          countdownEndsAt,
+          countdownStartedAt: nextCountdownStartedAt,
+          countdownEndsAt: nextCountdownEndsAt,
         },
         updatedAt: serverTimestamp(),
       });
@@ -13345,13 +13347,12 @@ function ProductionApp() {
 
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-    const isHost = roleForUid(game, user?.uid) === 'host';
     const readyState = game?.quizReadyState || null;
     const ready = readyState?.ready || {};
     const stage = normalizeText(readyState?.stage || 'opening') || 'opening';
     const endsAt = readyState?.countdownEndsAt || '';
     const setupKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${stage}:${endsAt}:${Boolean(ready.jay)}:${Boolean(ready.kim)}:${game?.quizWagerAgreement?.status || ''}:${game?.quizWagerAgreement?.amount ?? ''}:${game?.quizWagerAgreement?.wheelResultAmount ?? ''}`;
-    if (!isQuizGame || !isHost || game?.currentRound || stage !== 'countdown') {
+    if (!isQuizGame || game?.currentRound || stage !== 'countdown') {
       if (quizSetupLaunchRef.current === setupKey) quizSetupLaunchRef.current = '';
       return;
     }
@@ -13382,7 +13383,6 @@ function ProductionApp() {
     game?.quizWagerAgreement?.status,
     game?.quizWagerAgreement?.amount,
     game?.quizWagerAgreement?.wheelResultAmount,
-    user?.uid,
     isBusy,
     rounds.length,
   ]);
