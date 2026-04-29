@@ -3667,7 +3667,7 @@ function QuizSetupStagePanel({
         if (Number.isFinite(resultIndex) && Array.isArray(agreement.wheelSlots) && agreement.wheelSlots.length) {
           return Math.max(0, Number(agreement.wheelSlots[Math.max(0, Math.min(agreement.wheelSlots.length - 1, resultIndex))] || 0));
         }
-        return Number(sharedQuizWagerAmount || 0);
+        return Number(sharedWagerAmount || 0);
       })();
   const readyState = game?.quizReadyState || defaultQuizReadyState('opening');
   const readyStage = normalizeText(readyState.stage || 'opening') || 'opening';
@@ -3728,8 +3728,8 @@ function QuizSetupStagePanel({
                 ? 'Enter an amount, propose it, then the other player can accept, reject, or counter.'
                 : 'Waiting for both players to join before the wager can be agreed.';
   const readySetupAmount = effectiveSharedWagerLocked
-    ? (sharedWagerLocked ? Number(sharedQuizWagerAmount || 0) : pendingWheelAmount)
-    : Number(sharedQuizWagerAmount || 0);
+    ? (sharedWagerLocked ? Number(sharedWagerAmount || 0) : pendingWheelAmount)
+    : Number(sharedWagerAmount || 0);
   const readySetupEyebrow = agreement.lockedByWheel || wheelResolved ? 'Wheel spin complete' : 'Shared wager locked';
   const readySetupHeading = countdownActive
     ? `Quick Fire starts in ${Math.max(1, countdownSecondsLeft || 0)}`
@@ -13300,7 +13300,13 @@ function ProductionApp() {
     const unsub = onSnapshot(q, (snapshot) => {
       const msgs = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
       setLobbyChatMessages(msgs);
-    }, (err) => console.warn('Lobby chat listener error', err));
+    }, (err) => {
+      console.warn('Lobby chat listener error', err);
+      setLobbyChatMessages([]);
+      if (String(err?.code || '').includes('permission-denied') || String(err?.message || '').toLowerCase().includes('insufficient permissions')) {
+        setNotice((current) => current || 'Lobby chat is unavailable until Firestore permissions are updated.');
+      }
+    });
 
     return () => unsub();
   }, [firestore]);

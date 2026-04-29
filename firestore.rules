@@ -81,5 +81,9 @@ service cloud.firestore {
     match /quizAnswers/{quizAnswerId} {
       allow read, write: if signedIn();
     }
+
+    match /lobbyChat/{messageId} {
+      allow read, write: if signedIn();
+    }
   }
 }
