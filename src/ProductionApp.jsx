@@ -302,6 +302,43 @@ const getQuizWheelPhase = (agreement = {}, nowMs = Date.now()) => {
   if (nowMs < spinEndMs) return 'spinning';
   return 'landing';
 };
+const getQuizWagerAgreementRank = (agreement = {}) => {
+  const normalized = normalizeQuizWagerAgreement({ quizWagerAgreement: agreement });
+  if (normalized.status === 'agreed' || normalized.status === 'wheel_locked') return 3;
+  if (normalized.status === 'wheel_countdown') return 2;
+  if (normalized.status === 'proposal_pending' || normalized.status === 'wheel_pending') return 1;
+  return 0;
+};
+const getQuizReadyStageRank = (stage = 'opening') => {
+  const normalizedStage = normalizeText(stage || 'opening') || 'opening';
+  if (normalizedStage === 'countdown') return 2;
+  if (normalizedStage === 'ready') return 1;
+  return 0;
+};
+const mergeQuizReadyStateSnapshot = (currentReadyState = null, incomingReadyState = null) => {
+  if (!currentReadyState && !incomingReadyState) return null;
+  const currentState = currentReadyState || defaultQuizReadyState('opening');
+  const incomingState = incomingReadyState || defaultQuizReadyState('opening');
+  const currentRank = getQuizReadyStageRank(currentState.stage);
+  const incomingRank = getQuizReadyStageRank(incomingState.stage);
+  const preferCurrent = currentRank > incomingRank;
+  const ready = {
+    jay: Boolean(currentState.ready?.jay || incomingState.ready?.jay),
+    kim: Boolean(currentState.ready?.kim || incomingState.ready?.kim),
+  };
+  return {
+    ...(preferCurrent ? incomingState : currentState),
+    ...(preferCurrent ? currentState : incomingState),
+    stage: preferCurrent ? currentState.stage : incomingState.stage,
+    ready,
+    countdownStartedAt: preferCurrent
+      ? (currentState.countdownStartedAt || incomingState.countdownStartedAt || '')
+      : (incomingState.countdownStartedAt || currentState.countdownStartedAt || ''),
+    countdownEndsAt: preferCurrent
+      ? (currentState.countdownEndsAt || incomingState.countdownEndsAt || '')
+      : (incomingState.countdownEndsAt || currentState.countdownEndsAt || ''),
+  };
+};
 const hasNextReadySeat = (round = null, seat = 'jay') => Boolean(round?.nextReady?.[seat === 'kim' ? 'kim' : 'jay']);
 const hasQuizSetupReadySeat = (game = null, seat = 'jay') => Boolean(game?.quizReadyState?.ready?.[seat === 'kim' ? 'kim' : 'jay']);
 const getRecordTime = (value) => {
@@ -890,9 +927,25 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     }
   }
   if (!currentGame?.currentRound || !incomingGame?.currentRound) {
-    return currentGame?.id === incomingGame?.id && areStableRoomSnapshotsEqual(currentGame, incomingGame)
-      ? currentGame
-      : incomingGame;
+    if (currentGame?.id === incomingGame?.id) {
+      const currentAgreementRank = getQuizWagerAgreementRank(currentGame?.quizWagerAgreement || null);
+      const incomingAgreementRank = getQuizWagerAgreementRank(incomingGame?.quizWagerAgreement || null);
+      const preserveCurrentAgreement = currentAgreementRank > incomingAgreementRank;
+      const mergedGame = {
+        ...incomingGame,
+        quizWagerAgreement: preserveCurrentAgreement
+          ? (currentGame?.quizWagerAgreement || incomingGame?.quizWagerAgreement || null)
+          : (incomingGame?.quizWagerAgreement || currentGame?.quizWagerAgreement || null),
+        quizWagers: preserveCurrentAgreement
+          ? (currentGame?.quizWagers || incomingGame?.quizWagers || {})
+          : (incomingGame?.quizWagers || currentGame?.quizWagers || {}),
+        quizReadyState: mergeQuizReadyStateSnapshot(currentGame?.quizReadyState || null, incomingGame?.quizReadyState || null),
+      };
+      return areStableRoomSnapshotsEqual(currentGame, mergedGame)
+        ? currentGame
+        : mergedGame;
+    }
+    return incomingGame;
   }
   if (currentGame.id !== incomingGame.id) return incomingGame;
   const currentRound = currentGame.currentRound || {};
