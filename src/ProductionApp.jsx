@@ -3797,6 +3797,7 @@ function QuizSetupStagePanel({
   const readySetupAmount = effectiveSharedWagerLocked
     ? (sharedWagerLocked ? Number(sharedWagerAmount || 0) : pendingWheelAmount)
     : Number(sharedWagerAmount || 0);
+  const readySetupAmountLabel = agreement.lockedByWheel || wheelResolved ? 'Wheel landed on' : 'Shared wager';
   const readySetupEyebrow = agreement.lockedByWheel || wheelResolved ? 'Wheel spin complete' : 'Shared wager locked';
   const readySetupHeading = countdownActive
     ? `Quick Fire starts in ${Math.max(1, countdownSecondsLeft || 0)}`
@@ -3867,6 +3868,10 @@ function QuizSetupStagePanel({
                 <span className="quiz-ready-setup-card__eyebrow">{readySetupEyebrow}</span>
                 <strong>{readySetupHeading}</strong>
                 <p>{readySetupIntro} Both players must click Ready before the 3 second countdown begins.</p>
+              </div>
+              <div className="quiz-ready-setup-card__amount" aria-label={`${readySetupAmountLabel} ${formatScore(readySetupAmount || 0)}`}>
+                <span>{readySetupAmountLabel}</span>
+                <strong>{formatScore(readySetupAmount || 0)}</strong>
               </div>
               <div className="quiz-ready-setup-card__seat-grid">
                 <article className={`quiz-ready-seat-card ${viewerReady ? 'is-ready' : ''}`}>
@@ -11385,7 +11390,7 @@ function ProductionApp() {
               ...current,
               quizWagers: { jay: wagerValue, kim: wagerValue },
               quizWagerAgreement: nextAgreement,
-              quizReadyState: defaultQuizReadyState('ready'),
+              quizReadyState: mergeQuizReadyStateSnapshot(current.quizReadyState || null, defaultQuizReadyState('ready')),
               updatedAt: new Date().toISOString(),
             }
           : current,
@@ -11404,7 +11409,7 @@ function ProductionApp() {
             ...current,
             quizWagers: { jay: wagerValue, kim: wagerValue },
             quizWagerAgreement: nextAgreement,
-            quizReadyState: defaultQuizReadyState('ready'),
+            quizReadyState: mergeQuizReadyStateSnapshot(current.quizReadyState || null, defaultQuizReadyState('ready')),
             updatedAt: new Date().toISOString(),
           }
         : current,
@@ -11426,6 +11431,7 @@ function ProductionApp() {
         const liveWagerValue = liveBaseAmount > 0
           ? capQuizWagerAmount(liveRawResultAmount, liveBaseAmount)
           : sanitizeQuizWagerAmount(liveRawResultAmount);
+        const liveReadyState = mergeQuizReadyStateSnapshot(data.quizReadyState || null, defaultQuizReadyState('ready'));
         transaction.update(gameRef, {
           quizWagers: { jay: liveWagerValue, kim: liveWagerValue },
           quizWagerAgreement: {
@@ -11441,7 +11447,7 @@ function ProductionApp() {
             lockedByWheel: true,
             lockedAt: new Date().toISOString(),
           },
-          quizReadyState: defaultQuizReadyState('ready'),
+          quizReadyState: liveReadyState,
           updatedAt: serverTimestamp(),
         });
       });
@@ -13349,16 +13355,21 @@ function ProductionApp() {
       if (quizSetupLaunchRef.current === setupKey) quizSetupLaunchRef.current = '';
       return;
     }
-    if (quizSetupLaunchRef.current === setupKey || isBusy) return;
-    quizSetupLaunchRef.current = setupKey;
-    launchQuizRoundFromSetup()
-      .catch((error) => {
-        debugRoom('quizSetupLaunchFailed', { gameId: game?.id || '', message: error?.message || String(error) });
-        setNotice(error?.message || 'Could not start Quick Fire.');
-      })
-      .finally(() => {
-        quizSetupLaunchRef.current = '';
-      });
+    const attemptLaunch = () => {
+      if (quizSetupLaunchRef.current === setupKey || isBusy) return;
+      quizSetupLaunchRef.current = setupKey;
+      launchQuizRoundFromSetup()
+        .catch((error) => {
+          debugRoom('quizSetupLaunchFailed', { gameId: game?.id || '', message: error?.message || String(error) });
+          setNotice(error?.message || 'Could not start Quick Fire.');
+        })
+        .finally(() => {
+          quizSetupLaunchRef.current = '';
+        });
+    };
+    attemptLaunch();
+    const interval = window.setInterval(attemptLaunch, 250);
+    return () => window.clearInterval(interval);
   }, [
     game?.id,
     game?.gameMode,
