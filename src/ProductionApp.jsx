@@ -3508,7 +3508,7 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
   const segmentHalfDegrees = segmentDegrees / 2;
   const wheelGraphicStartDegrees = -90;
   const selectedSegmentCenterDegrees = wheelGraphicStartDegrees + (resultIndex * segmentDegrees);
-  const finalRotation = (360 * 7) - selectedSegmentCenterDegrees;
+  const finalRotation = (360 * 7) + wheelGraphicStartDegrees - selectedSegmentCenterDegrees;
   const spinDurationMs = Number.isFinite(spinStartMs) && Number.isFinite(spinEndMs)
     ? Math.max(1, spinEndMs - spinStartMs)
     : QUIZ_WHEEL_SPIN_MS;
@@ -3858,7 +3858,24 @@ function QuizSetupStagePanel({
                 <QuizWagerWheelOverlay agreement={agreement} baseAmount={wheelBaseAmount} forceVisible disabled={wheelIsLocked} />
               </div>
               <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-wheel-action-stack">
-                {wheelPendingFromOther ? null : (
+                {wheelPendingFromOther ? (
+                  <>
+                    <Button
+                      className="primary-button compact"
+                      onClick={onAcceptQuizWager}
+                      disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelBaseAmount <= 0}
+                    >
+                      Accept &amp; Spin
+                    </Button>
+                    <Button
+                      className="ghost-button compact"
+                      onClick={onRejectQuizWager}
+                      disabled={isBusy || wheelIsInactive || sharedWagerLocked || wheelActive}
+                    >
+                      Reject
+                    </Button>
+                  </>
+                ) : (
                   <Button
                     className="primary-button compact"
                     onClick={() => {
