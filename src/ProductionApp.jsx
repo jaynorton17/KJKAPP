@@ -12294,6 +12294,7 @@ function ProductionApp() {
     }).catch(() => null);
   }, [game?.id, game?.gameMode, game?.currentRound?.status, isCurrentLocalTestGame]);
   const quizSetupLaunchRef = useRef('');
+  const quizSetupCountdownRef = useRef('');
   const quizAdvanceRef = useRef('');
   const quizTimeoutRevealRef = useRef('');
   const quizWheelFinalizeRef = useRef('');
@@ -12397,60 +12398,48 @@ function ProductionApp() {
         const optimisticNowIso = new Date().toISOString();
         const optimisticCurrentReady = previousReadyState.ready || { jay: false, kim: false };
         const optimisticNextReady = { ...optimisticCurrentReady, [seat]: true };
-        const optimisticBothReady = Boolean(optimisticNextReady.jay && optimisticNextReady.kim);
         setGame((current) =>
           current && !current.currentRound
             ? {
                 ...current,
                 quizReadyState: {
                   ...(current.quizReadyState || defaultQuizReadyState('ready')),
-                  stage: optimisticBothReady ? 'countdown' : 'ready',
+                  stage: getQuizReadyStageRank(current.quizReadyState?.stage || 'opening') > 0
+                    ? (current.quizReadyState?.stage || 'ready')
+                    : 'ready',
                   ready: {
                     ...((current.quizReadyState && current.quizReadyState.ready) || { jay: false, kim: false }),
                     [seat]: true,
                   },
-                  countdownStartedAt: optimisticBothReady ? optimisticNowIso : (current.quizReadyState?.countdownStartedAt || ''),
-                  countdownEndsAt: optimisticBothReady ? new Date(Date.now() + QUIZ_SETUP_COUNTDOWN_MS).toISOString() : (current.quizReadyState?.countdownEndsAt || ''),
+                  countdownStartedAt: current.quizReadyState?.countdownStartedAt || '',
+                  countdownEndsAt: current.quizReadyState?.countdownEndsAt || '',
                 },
                 updatedAt: optimisticNowIso,
               }
             : current,
         );
         try {
-          await runTransaction(firestore, async (transaction) => {
-            const snap = await transaction.get(gameRef);
-            if (!snap.exists()) throw new Error('Room not found.');
-            const data = snap.data() || {};
-            if (data.currentRound) return;
-            if (!isQuizWagerAgreementLocked(data)) {
-              throw new Error('Both players must agree one shared wager before starting Quick Fire.');
-            }
-            const currentReadyState = data.quizReadyState || defaultQuizReadyState('ready');
-            const currentReady = currentReadyState.ready || { jay: false, kim: false };
-            const nextReady = { ...currentReady, [seat]: true };
-            const bothReady = Boolean(nextReady.jay && nextReady.kim);
-            const nowIso = new Date().toISOString();
-            transaction.update(gameRef, {
-              quizReadyState: {
-                ...currentReadyState,
-                stage: bothReady ? 'countdown' : 'ready',
-                ready: nextReady,
-                countdownStartedAt: bothReady ? nowIso : (currentReadyState.countdownStartedAt || ''),
-                countdownEndsAt: bothReady ? new Date(Date.now() + QUIZ_SETUP_COUNTDOWN_MS).toISOString() : (currentReadyState.countdownEndsAt || ''),
-              },
-              updatedAt: serverTimestamp(),
-            });
+          await updateDoc(gameRef, {
+            [`quizReadyState.ready.${seat}`]: true,
+            updatedAt: serverTimestamp(),
           });
         } catch (error) {
-          setGame((current) =>
-            current && !current.currentRound
-              ? {
-                  ...current,
-                  quizReadyState: previousReadyState,
-                  updatedAt: previousUpdatedAt,
-                }
-              : current,
-          );
+          const normalizedMessage = normalizeText(error?.code || error?.message || '');
+          if (
+            normalizedMessage.includes('permission')
+            || normalizedMessage.includes('notfound')
+            || normalizedMessage.includes('not found')
+          ) {
+            setGame((current) =>
+              current && !current.currentRound
+                ? {
+                    ...current,
+                    quizReadyState: previousReadyState,
+                    updatedAt: previousUpdatedAt,
+                  }
+                : current,
+            );
+          }
           throw error;
         }
         return true;
@@ -13109,6 +13098,63 @@ function ProductionApp() {
       }
     }, 'Could not move to the next question.');
 
+  const startQuizSetupCountdown = async () => {
+    if (!game || !((game?.gameMode || 'standard') === 'quiz') || game.currentRound) return;
+    if (!isQuizWagerAgreementLocked(game)) return;
+    const readyState = game.quizReadyState || defaultQuizReadyState('opening');
+    const ready = readyState.ready || { jay: false, kim: false };
+    const stage = normalizeText(readyState.stage || 'opening') || 'opening';
+    if (stage === 'countdown' || !ready.jay || !ready.kim) return;
+    const nowIso = new Date().toISOString();
+    const countdownEndsAt = new Date(Date.now() + QUIZ_SETUP_COUNTDOWN_MS).toISOString();
+
+    if (isCurrentLocalTestGame) {
+      setGame((current) =>
+        current && !current.currentRound
+          ? {
+              ...current,
+              quizReadyState: {
+                ...(current.quizReadyState || defaultQuizReadyState('ready')),
+                stage: 'countdown',
+                ready: {
+                  ...((current.quizReadyState && current.quizReadyState.ready) || { jay: false, kim: false }),
+                  jay: true,
+                  kim: true,
+                },
+                countdownStartedAt: nowIso,
+                countdownEndsAt,
+              },
+              updatedAt: nowIso,
+            }
+          : current,
+      );
+      return;
+    }
+
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return;
+    await runTransaction(firestore, async (transaction) => {
+      const snap = await transaction.get(gameRef);
+      if (!snap.exists()) throw new Error('Room not found.');
+      const data = snap.data() || {};
+      if (data.currentRound) return;
+      if (!isQuizWagerAgreementLocked(data)) return;
+      const liveReadyState = data.quizReadyState || defaultQuizReadyState('opening');
+      const liveReady = liveReadyState.ready || { jay: false, kim: false };
+      const liveStage = normalizeText(liveReadyState.stage || 'opening') || 'opening';
+      if (liveStage === 'countdown' || !liveReady.jay || !liveReady.kim) return;
+      transaction.update(gameRef, {
+        quizReadyState: {
+          ...liveReadyState,
+          stage: 'countdown',
+          countdownStartedAt: nowIso,
+          countdownEndsAt,
+        },
+        updatedAt: serverTimestamp(),
+      });
+    });
+  };
+
   const launchQuizRoundFromSetup = async () => {
     if (!game || !((game?.gameMode || 'standard') === 'quiz') || game.currentRound) return;
     if (!isQuizWagerAgreementLocked(game)) return;
@@ -13178,6 +13224,39 @@ function ProductionApp() {
       });
     });
   };
+
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const readyState = game?.quizReadyState || null;
+    const ready = readyState?.ready || {};
+    const stage = normalizeText(readyState?.stage || 'opening') || 'opening';
+    const countdownKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${stage}:${Boolean(ready.jay)}:${Boolean(ready.kim)}:${game?.quizWagerAgreement?.status || ''}:${game?.quizWagerAgreement?.amount ?? ''}:${game?.quizWagerAgreement?.wheelResultAmount ?? ''}`;
+    if (!isQuizGame || game?.currentRound || stage === 'countdown' || !ready.jay || !ready.kim || !isQuizWagerAgreementLocked(game)) {
+      if (quizSetupCountdownRef.current === countdownKey) quizSetupCountdownRef.current = '';
+      return;
+    }
+    if (quizSetupCountdownRef.current === countdownKey || isBusy) return;
+    quizSetupCountdownRef.current = countdownKey;
+    startQuizSetupCountdown()
+      .catch((error) => {
+        debugRoom('quizSetupCountdownFailed', { gameId: game?.id || '', message: error?.message || String(error) });
+        setNotice(error?.message || 'Could not start the Quick Fire countdown.');
+      })
+      .finally(() => {
+        quizSetupCountdownRef.current = '';
+      });
+  }, [
+    game?.id,
+    game?.gameMode,
+    game?.currentRound?.id,
+    game?.quizReadyState?.ready?.jay,
+    game?.quizReadyState?.ready?.kim,
+    game?.quizReadyState?.stage,
+    game?.quizWagerAgreement?.status,
+    game?.quizWagerAgreement?.amount,
+    game?.quizWagerAgreement?.wheelResultAmount,
+    isBusy,
+  ]);
 
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
