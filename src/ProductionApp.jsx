@@ -13107,6 +13107,8 @@ function ProductionApp() {
     if (stage === 'countdown' || !ready.jay || !ready.kim) return;
     const nowIso = new Date().toISOString();
     const countdownEndsAt = new Date(Date.now() + QUIZ_SETUP_COUNTDOWN_MS).toISOString();
+    const localLockedAgreement = normalizeQuizWagerAgreement(game);
+    const localSharedWagerAmount = Math.max(0, Number(getQuizSharedWagerAmount(game) || 0));
 
     if (isCurrentLocalTestGame) {
       setGame((current) =>
@@ -13138,15 +13140,42 @@ function ProductionApp() {
       if (!snap.exists()) throw new Error('Room not found.');
       const data = snap.data() || {};
       if (data.currentRound) return;
-      if (!isQuizWagerAgreementLocked(data)) return;
+      const liveAgreement = normalizeQuizWagerAgreement(data);
+      const liveAgreementLocked = isQuizWagerAgreementLocked(data);
+      const canPromoteLocalLock = !liveAgreementLocked && isQuizWagerAgreementLocked(game);
+      if (!liveAgreementLocked && !canPromoteLocalLock) return;
       const liveReadyState = data.quizReadyState || defaultQuizReadyState('opening');
       const liveReady = liveReadyState.ready || { jay: false, kim: false };
+      const mergedReady = {
+        jay: Boolean(liveReady.jay || ready.jay),
+        kim: Boolean(liveReady.kim || ready.kim),
+      };
       const liveStage = normalizeText(liveReadyState.stage || 'opening') || 'opening';
-      if (liveStage === 'countdown' || !liveReady.jay || !liveReady.kim) return;
+      if (liveStage === 'countdown' || !mergedReady.jay || !mergedReady.kim) return;
+      const nextAgreement = canPromoteLocalLock
+        ? {
+            ...liveAgreement,
+            ...localLockedAgreement,
+            status: localLockedAgreement.status || 'wheel_locked',
+            requestKind: localLockedAgreement.requestKind || liveAgreement.requestKind || 'wheel',
+            amount: localSharedWagerAmount,
+            wheelResultAmount: Number(localLockedAgreement.wheelResultAmount || localSharedWagerAmount || 0),
+            proposalStatus: 'accepted',
+            lockedByWheel: Boolean(localLockedAgreement.lockedByWheel || liveAgreement.lockedByWheel || localLockedAgreement.status === 'wheel_locked'),
+            lockedAt: localLockedAgreement.lockedAt || new Date().toISOString(),
+          }
+        : null;
       transaction.update(gameRef, {
+        ...(nextAgreement
+          ? {
+              quizWagerAgreement: nextAgreement,
+              quizWagers: { jay: localSharedWagerAmount, kim: localSharedWagerAmount },
+            }
+          : {}),
         quizReadyState: {
           ...liveReadyState,
           stage: 'countdown',
+          ready: mergedReady,
           countdownStartedAt: nowIso,
           countdownEndsAt,
         },
