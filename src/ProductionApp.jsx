@@ -12339,30 +12339,67 @@ function ProductionApp() {
 
         const gameRef = makeGameRef();
         if (!gameRef) return null;
-        await runTransaction(firestore, async (transaction) => {
-          const snap = await transaction.get(gameRef);
-          if (!snap.exists()) throw new Error('Room not found.');
-          const data = snap.data() || {};
-          if (data.currentRound) return;
-          if (!isQuizWagerAgreementLocked(data)) {
-            throw new Error('Both players must agree one shared wager before starting Quick Fire.');
-          }
-          const currentReadyState = data.quizReadyState || defaultQuizReadyState('ready');
-          const currentReady = currentReadyState.ready || { jay: false, kim: false };
-          const nextReady = { ...currentReady, [seat]: true };
-          const bothReady = Boolean(nextReady.jay && nextReady.kim);
-          const nowIso = new Date().toISOString();
-          transaction.update(gameRef, {
-            quizReadyState: {
-              ...currentReadyState,
-              stage: bothReady ? 'countdown' : 'ready',
-              ready: nextReady,
-              countdownStartedAt: bothReady ? nowIso : (currentReadyState.countdownStartedAt || ''),
-              countdownEndsAt: bothReady ? new Date(Date.now() + QUIZ_SETUP_COUNTDOWN_MS).toISOString() : (currentReadyState.countdownEndsAt || ''),
-            },
-            updatedAt: serverTimestamp(),
+        const previousReadyState = game?.quizReadyState || defaultQuizReadyState('ready');
+        const previousUpdatedAt = game?.updatedAt || '';
+        const optimisticNowIso = new Date().toISOString();
+        const optimisticCurrentReady = previousReadyState.ready || { jay: false, kim: false };
+        const optimisticNextReady = { ...optimisticCurrentReady, [seat]: true };
+        const optimisticBothReady = Boolean(optimisticNextReady.jay && optimisticNextReady.kim);
+        setGame((current) =>
+          current && !current.currentRound
+            ? {
+                ...current,
+                quizReadyState: {
+                  ...(current.quizReadyState || defaultQuizReadyState('ready')),
+                  stage: optimisticBothReady ? 'countdown' : 'ready',
+                  ready: {
+                    ...((current.quizReadyState && current.quizReadyState.ready) || { jay: false, kim: false }),
+                    [seat]: true,
+                  },
+                  countdownStartedAt: optimisticBothReady ? optimisticNowIso : (current.quizReadyState?.countdownStartedAt || ''),
+                  countdownEndsAt: optimisticBothReady ? new Date(Date.now() + QUIZ_SETUP_COUNTDOWN_MS).toISOString() : (current.quizReadyState?.countdownEndsAt || ''),
+                },
+                updatedAt: optimisticNowIso,
+              }
+            : current,
+        );
+        try {
+          await runTransaction(firestore, async (transaction) => {
+            const snap = await transaction.get(gameRef);
+            if (!snap.exists()) throw new Error('Room not found.');
+            const data = snap.data() || {};
+            if (data.currentRound) return;
+            if (!isQuizWagerAgreementLocked(data)) {
+              throw new Error('Both players must agree one shared wager before starting Quick Fire.');
+            }
+            const currentReadyState = data.quizReadyState || defaultQuizReadyState('ready');
+            const currentReady = currentReadyState.ready || { jay: false, kim: false };
+            const nextReady = { ...currentReady, [seat]: true };
+            const bothReady = Boolean(nextReady.jay && nextReady.kim);
+            const nowIso = new Date().toISOString();
+            transaction.update(gameRef, {
+              quizReadyState: {
+                ...currentReadyState,
+                stage: bothReady ? 'countdown' : 'ready',
+                ready: nextReady,
+                countdownStartedAt: bothReady ? nowIso : (currentReadyState.countdownStartedAt || ''),
+                countdownEndsAt: bothReady ? new Date(Date.now() + QUIZ_SETUP_COUNTDOWN_MS).toISOString() : (currentReadyState.countdownEndsAt || ''),
+              },
+              updatedAt: serverTimestamp(),
+            });
           });
-        });
+        } catch (error) {
+          setGame((current) =>
+            current && !current.currentRound
+              ? {
+                  ...current,
+                  quizReadyState: previousReadyState,
+                  updatedAt: previousUpdatedAt,
+                }
+              : current,
+          );
+          throw error;
+        }
         return true;
       }
 
