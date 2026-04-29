@@ -3652,6 +3652,7 @@ function QuizSetupStagePanel({
   const viewerWheelOptedIn = Boolean(agreement.wheelOptIn?.[currentPlayer]);
   const otherWheelOptedIn = Boolean(agreement.wheelOptIn?.[otherPlayer]);
   const viewerReady = hasQuizSetupReadySeat(game, currentPlayer);
+  const otherPlayerReady = hasQuizSetupReadySeat(game, otherPlayer);
   const readyState = game?.quizReadyState || defaultQuizReadyState('opening');
   const readyStage = normalizeText(readyState.stage || 'opening') || 'opening';
   const countdownEndsAtMs = Date.parse(readyState.countdownEndsAt || '');
@@ -3659,10 +3660,12 @@ function QuizSetupStagePanel({
     ? Math.max(0, Math.ceil((countdownEndsAtMs - nowMs) / 1000))
     : 0;
   const countdownActive = readyStage === 'countdown';
+  const bothPlayersReady = Boolean(viewerReady && otherPlayerReady);
   const launchPending = sharedWagerLocked
     && Boolean(game?.quizReadyState?.ready?.jay && game?.quizReadyState?.ready?.kim)
     && readyStage !== 'countdown'
     && !game?.currentRound;
+  const showSetupReadyCard = Boolean(sharedWagerLocked || countdownActive || launchPending);
   const shouldPreferWheelMode = Boolean(agreement.lockedByWheel || wheelActive || viewerWheelOptedIn || otherWheelOptedIn);
   const shouldPreferManualMode = Boolean(pendingProposal || (sharedWagerLocked && !agreement.lockedByWheel));
   const [selectionMode, setSelectionMode] = useState(() => (shouldPreferWheelMode ? 'wheel' : shouldPreferManualMode ? 'manual' : null));
@@ -3708,6 +3711,22 @@ function QuizSetupStagePanel({
               : bothPlayersJoined
                 ? 'Enter an amount, propose it, then the other player can accept, reject, or counter.'
                 : 'Waiting for both players to join before the wager can be agreed.';
+  const readySetupEyebrow = agreement.lockedByWheel ? 'Wheel spin complete' : 'Shared wager locked';
+  const readySetupHeading = countdownActive
+    ? `Quick Fire starts in ${Math.max(1, countdownSecondsLeft || 0)}`
+    : 'Both players need to click Ready';
+  const readySetupIntro = agreement.lockedByWheel
+    ? `The wheel locked in ${formatScore(sharedWagerAmount || 0)}.`
+    : `The shared wager is locked at ${formatScore(sharedWagerAmount || 0)}.`;
+  const readySetupStatus = countdownActive
+    ? 'Both players are ready. Launching question one now.'
+    : launchPending || bothPlayersReady
+      ? 'Both players are ready. Starting the 3 second countdown...'
+      : viewerReady
+        ? `Waiting for ${oppositeLabel} to click Ready.`
+        : otherPlayerReady
+          ? `${oppositeLabel} is ready. Click Ready to start the 3 second countdown.`
+          : 'Both players must click Ready before question one begins.';
 
   useEffect(() => {
     if (shouldPreferWheelMode) {
@@ -3904,27 +3923,44 @@ function QuizSetupStagePanel({
         <span>{oppositeLabel} can spin the wheel or reject and return both players to negotiation.</span>
       </div>
     ) : null}
-    <div className="quiz-ready-inline quiz-ready-inline--outside" role="status" aria-live="polite">
-      {countdownActive ? (
-        <div className="quiz-ready-countdown" aria-live="polite">
-          <strong>{Math.max(1, countdownSecondsLeft || 0)}</strong>
-          <span>Starting Quick Fire…</span>
+    {showSetupReadyCard ? (
+      <section className="quiz-ready-setup-card" role="status" aria-live="polite">
+        <div className="quiz-ready-setup-card__intro">
+          <span className="quiz-ready-setup-card__eyebrow">{readySetupEyebrow}</span>
+          <strong>{readySetupHeading}</strong>
+          <p>{readySetupIntro} Both players must click Ready before the 3 second countdown begins.</p>
         </div>
-      ) : !launchPending ? (
-          <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !sharedWagerLocked || viewerReady || wheelActive}>
-            {viewerReady ? 'Ready' : 'Ready to Start'}
-          </Button>
-        ) : null}
-      {sharedWagerLocked || launchPending ? (
-        <span>
-          {launchPending
-            ? 'Shared wager accepted. Waiting for both players to ready up.'
-            : viewerReady
-              ? 'Waiting for the other player. The question appears once both players are ready.'
-              : 'Tap Ready once the shared wager looks right.'}
-        </span>
-      ) : null}
-    </div>
+        <div className="quiz-ready-setup-card__seat-grid">
+          <article className={`quiz-ready-seat-card ${viewerReady ? 'is-ready' : ''}`}>
+            <div className="quiz-ready-seat-card__label">
+              <SeatFlag seat={currentPlayer} />
+              <span>{viewerLabel}</span>
+            </div>
+            <strong>{viewerReady ? 'Ready' : 'Waiting'}</strong>
+          </article>
+          <article className={`quiz-ready-seat-card ${otherPlayerReady ? 'is-ready' : ''}`}>
+            <div className="quiz-ready-seat-card__label">
+              <SeatFlag seat={otherPlayer} />
+              <span>{oppositeLabel}</span>
+            </div>
+            <strong>{otherPlayerReady ? 'Ready' : 'Waiting'}</strong>
+          </article>
+        </div>
+        <div className="quiz-ready-setup-card__footer">
+          {countdownActive ? (
+            <div className="quiz-ready-countdown" aria-live="polite">
+              <strong>{Math.max(1, countdownSecondsLeft || 0)}</strong>
+              <span>Starting Quick Fire...</span>
+            </div>
+          ) : (
+            <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !sharedWagerLocked || viewerReady || wheelActive}>
+              {viewerReady ? 'Ready' : 'Click Ready'}
+            </Button>
+          )}
+          <span className="quiz-ready-setup-card__status">{readySetupStatus}</span>
+        </div>
+      </section>
+    ) : null}
     </>
   );
 }
