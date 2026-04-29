@@ -13233,18 +13233,23 @@ function ProductionApp() {
     const countdownKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${stage}:${Boolean(ready.jay)}:${Boolean(ready.kim)}:${game?.quizWagerAgreement?.status || ''}:${game?.quizWagerAgreement?.amount ?? ''}:${game?.quizWagerAgreement?.wheelResultAmount ?? ''}`;
     if (!isQuizGame || game?.currentRound || stage === 'countdown' || !ready.jay || !ready.kim || !isQuizWagerAgreementLocked(game)) {
       if (quizSetupCountdownRef.current === countdownKey) quizSetupCountdownRef.current = '';
-      return;
+      return undefined;
     }
-    if (quizSetupCountdownRef.current === countdownKey || isBusy) return;
-    quizSetupCountdownRef.current = countdownKey;
-    startQuizSetupCountdown()
-      .catch((error) => {
-        debugRoom('quizSetupCountdownFailed', { gameId: game?.id || '', message: error?.message || String(error) });
-        setNotice(error?.message || 'Could not start the Quick Fire countdown.');
-      })
-      .finally(() => {
-        quizSetupCountdownRef.current = '';
-      });
+    const attemptCountdownStart = () => {
+      if (quizSetupCountdownRef.current === countdownKey) return;
+      quizSetupCountdownRef.current = countdownKey;
+      startQuizSetupCountdown()
+        .catch((error) => {
+          debugRoom('quizSetupCountdownFailed', { gameId: game?.id || '', message: error?.message || String(error) });
+          setNotice(error?.message || 'Could not start the Quick Fire countdown.');
+        })
+        .finally(() => {
+          quizSetupCountdownRef.current = '';
+        });
+    };
+    attemptCountdownStart();
+    const interval = window.setInterval(attemptCountdownStart, 250);
+    return () => window.clearInterval(interval);
   }, [
     game?.id,
     game?.gameMode,
@@ -13255,7 +13260,6 @@ function ProductionApp() {
     game?.quizWagerAgreement?.status,
     game?.quizWagerAgreement?.amount,
     game?.quizWagerAgreement?.wheelResultAmount,
-    isBusy,
   ]);
 
   useEffect(() => {
