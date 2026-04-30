@@ -1881,6 +1881,7 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
   const incomingRound = incomingGame.currentRound || {};
   const currentIdentity = stableRoundIdentityKey(currentRound);
   const incomingIdentity = stableRoundIdentityKey(incomingRound);
+  const isQuizLiveRound = (incomingGame?.gameMode || currentGame?.gameMode || 'standard') === 'quiz';
   if (!incomingIdentity) {
     return {
       ...incomingGame,
@@ -1888,7 +1889,8 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     };
   }
   const sameByIdentity = Boolean(currentIdentity && incomingIdentity && currentIdentity === incomingIdentity);
-  const sameByNumber = Boolean(currentRound.number && incomingRound.number && Number(currentRound.number) === Number(incomingRound.number));
+  const sameByNumber = !isQuizLiveRound
+    && Boolean(currentRound.number && incomingRound.number && Number(currentRound.number) === Number(incomingRound.number));
   const sameByPrompt =
     normalizeText(currentRound.question || '')
     && normalizeText(currentRound.question || '') === normalizeText(incomingRound.question || '')
@@ -13781,7 +13783,14 @@ function ProductionApp() {
     const agreement = normalizeQuizWagerAgreement(game || {});
     const spinEndsAtMs = Date.parse(agreement.wheelSpinEndsAt || '');
     const finalizeKey = `${game?.id || ''}:${agreement.wheelSpinEndsAt || ''}:${agreement.wheelResultIndex ?? ''}`;
-    if (!isQuizGame || game?.currentRound || agreement.status === 'agreed' || agreement.status === 'wheel_locked' || !Number.isFinite(spinEndsAtMs)) {
+    if (
+      !isQuizGame
+      || inferredRole !== 'host'
+      || game?.currentRound
+      || agreement.status === 'agreed'
+      || agreement.status === 'wheel_locked'
+      || !Number.isFinite(spinEndsAtMs)
+    ) {
       if (quizWheelFinalizeRef.current === finalizeKey) quizWheelFinalizeRef.current = '';
       return undefined;
     }
@@ -13806,13 +13815,15 @@ function ProductionApp() {
     game?.quizWagerAgreement?.status,
     game?.quizWagerAgreement?.wheelSpinEndsAt,
     game?.quizWagerAgreement?.wheelResultIndex,
+    inferredRole,
     isCurrentLocalTestGame,
   ]);
   const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
+    const quizRoundKey = sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question';
     return {
-      id: makeId('round'),
+      id: isQuizGame ? `round-quiz-${nextRoundNumber}-${quizRoundKey}` : makeId('round'),
       number: nextRoundNumber,
       questionId: nextQuestionItem.id,
       question: nextQuestionItem.question,
@@ -14790,10 +14801,7 @@ function ProductionApp() {
       throw new Error('No quiz questions are available.');
     }
     const nextRoundNumber = Math.max(Number(sourceGame.roundsPlayed || 0) + 1, 1);
-    const nextRound = {
-      ...buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame: true, startOpen: true }),
-      id: `round-quiz-${nextRoundNumber}-${sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question'}`,
-    };
+    const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame: true, startOpen: true });
     await setDoc(gameRef, {
       ...(promotedAgreement
         ? {
@@ -14830,7 +14838,15 @@ function ProductionApp() {
     const ready = readyState?.ready || {};
     const stage = normalizeText(readyState?.stage || 'opening') || 'opening';
     const countdownKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${stage}:${Boolean(ready.jay)}:${Boolean(ready.kim)}:${game?.quizWagerAgreement?.status || ''}:${game?.quizWagerAgreement?.amount ?? ''}:${game?.quizWagerAgreement?.wheelResultAmount ?? ''}`;
-    if (!isQuizGame || game?.currentRound || stage === 'countdown' || !ready.jay || !ready.kim || !isQuizWagerEffectivelyLocked(game)) {
+    if (
+      !isQuizGame
+      || inferredRole !== 'host'
+      || game?.currentRound
+      || stage === 'countdown'
+      || !ready.jay
+      || !ready.kim
+      || !isQuizWagerEffectivelyLocked(game)
+    ) {
       if (quizSetupCountdownRef.current === countdownKey) quizSetupCountdownRef.current = '';
       return undefined;
     }
@@ -14867,6 +14883,7 @@ function ProductionApp() {
     game?.quizWagerAgreement?.status,
     game?.quizWagerAgreement?.amount,
     game?.quizWagerAgreement?.wheelResultAmount,
+    inferredRole,
   ]);
 
   useEffect(() => {
@@ -14876,7 +14893,7 @@ function ProductionApp() {
     const stage = normalizeText(readyState?.stage || 'opening') || 'opening';
     const endsAt = readyState?.countdownEndsAt || '';
     const setupKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${stage}:${endsAt}:${Boolean(ready.jay)}:${Boolean(ready.kim)}:${game?.quizWagerAgreement?.status || ''}:${game?.quizWagerAgreement?.amount ?? ''}:${game?.quizWagerAgreement?.wheelResultAmount ?? ''}`;
-    if (!isQuizGame || game?.currentRound || stage !== 'countdown') {
+    if (!isQuizGame || inferredRole !== 'host' || game?.currentRound || stage !== 'countdown') {
       if (quizSetupLaunchRef.current === setupKey) quizSetupLaunchRef.current = '';
       return;
     }
@@ -14922,6 +14939,7 @@ function ProductionApp() {
     game?.quizWagerAgreement?.status,
     game?.quizWagerAgreement?.amount,
     game?.quizWagerAgreement?.wheelResultAmount,
+    inferredRole,
     isBusy,
     rounds.length,
   ]);
@@ -14931,7 +14949,14 @@ function ProductionApp() {
     const roundKey = stableRoundIdentityKey(game?.currentRound || {});
     const ready = game?.currentRound?.nextReady || {};
     const advanceKey = `${game?.id || ''}:${roundKey}:${Boolean(ready.jay)}:${Boolean(ready.kim)}`;
-    if (!isQuizGame || !game?.currentRound || game.currentRound.status !== 'reveal' || !ready.jay || !ready.kim) {
+    if (
+      !isQuizGame
+      || inferredRole !== 'host'
+      || !game?.currentRound
+      || game.currentRound.status !== 'reveal'
+      || !ready.jay
+      || !ready.kim
+    ) {
       if (quizAdvanceRef.current === advanceKey) quizAdvanceRef.current = '';
       return;
     }
@@ -14950,13 +14975,14 @@ function ProductionApp() {
     game?.currentRound?.number,
     game?.currentRound?.nextReady?.jay,
     game?.currentRound?.nextReady?.kim,
+    inferredRole,
     isBusy,
   ]);
 
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
     const currentRoundKey = stableRoundIdentityKey(game?.currentRound || {});
-    if (!isQuizGame || !game?.currentRound || game.currentRound.status !== 'open') {
+    if (!isQuizGame || inferredRole !== 'host' || !game?.currentRound || game.currentRound.status !== 'open') {
       quizTimeoutRevealRef.current = '';
       return;
     }
@@ -15008,6 +15034,7 @@ function ProductionApp() {
     game?.currentRound?.questionId,
     game?.currentRound?.number,
     game?.currentRound?.quizTimerEndsAt,
+    inferredRole,
     isCurrentLocalTestGame,
   ]);
 
