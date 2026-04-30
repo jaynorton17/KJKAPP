@@ -114,10 +114,7 @@ const buildGameInviteId = (targetGameId = '', invitedForUserId = '') =>
   targetGameId && invitedForUserId ? `game-invite-${targetGameId}-${invitedForUserId}` : '';
 const QUIZ_TIMER_SECONDS = 10;
 const QUIZ_WHEEL_SLOT_COUNT = 20;
-const QUIZ_WHEEL_MIN_PERCENT = 0.05;
-const QUIZ_WHEEL_PERCENT_STEP = 0.05;
-const QUIZ_WHEEL_MAX_PERCENT = 1;
-const QUIZ_WHEEL_SLOT_ORDER = [8, 17, 2, 14, 19, 5, 11, 0, 16, 7, 13, 3, 18, 9, 15, 1, 12, 6, 10, 4];
+const QUIZ_WHEEL_MAX_AMOUNT = 2500;
 const QUIZ_WHEEL_COUNTDOWN_MS = 5000;
 const QUIZ_WHEEL_SPIN_MS = 5000;
 const QUIZ_SETUP_COUNTDOWN_MS = 3000;
@@ -188,23 +185,23 @@ const parseQuizWagerAmountInput = (value) => {
   return { valid: true, code: '', amount: parsedAmount };
 };
 const sanitizeQuizWagerAmount = (value) => Math.max(0, Number.parseInt(String(value ?? ''), 10) || 0);
-const capQuizWheelStake = (baseAmount = 0, stakeAmount = 0) => {
-  const safeBase = Math.max(0, Math.floor(Number(baseAmount || 0)));
+const capQuizWheelStake = (baseAmount = QUIZ_WHEEL_MAX_AMOUNT, stakeAmount = 0) => {
+  const safeBase = Math.max(1, Math.floor(Number(baseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
   const safeStake = Math.max(0, Math.floor(Number(stakeAmount || 0)));
-  return Math.min(safeStake, Math.floor(safeBase * QUIZ_WHEEL_MAX_PERCENT));
+  return Math.min(safeStake, safeBase);
 };
 const capQuizWagerAmount = (value = 0, capAmount = 0) => {
   const safeCap = Math.max(0, Math.floor(Number(capAmount || 0)));
   const safeValue = sanitizeQuizWagerAmount(value);
   return Math.min(safeValue, safeCap);
 };
-const buildQuizWheelSlots = (baseAmount = 0) => {
-  const safeBase = Math.max(0, Math.floor(Number(baseAmount || 0)));
-  const orderedSlots = Array.from({ length: QUIZ_WHEEL_SLOT_COUNT }, (_, index) => {
-    const percent = QUIZ_WHEEL_MIN_PERCENT + (index * QUIZ_WHEEL_PERCENT_STEP);
-    return capQuizWheelStake(safeBase, Math.floor(safeBase * percent));
-  });
-  return QUIZ_WHEEL_SLOT_ORDER.map((slotIndex) => orderedSlots[slotIndex] ?? 0);
+const buildQuizWheelSlots = (baseAmount = QUIZ_WHEEL_MAX_AMOUNT) => {
+  const safeBase = Math.max(QUIZ_WHEEL_SLOT_COUNT, Math.floor(Number(baseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
+  const slots = new Set();
+  while (slots.size < QUIZ_WHEEL_SLOT_COUNT) {
+    slots.add(1 + Math.floor(Math.random() * safeBase));
+  }
+  return [...slots];
 };
 const shuffleQuizWheelSlots = (slots = []) => {
   const shuffled = [...slots];
@@ -272,7 +269,7 @@ const normalizeQuizWagerAgreement = (game = {}) => {
     },
     wheelBaseAmount,
     wheelSlots: Array.isArray(agreement.wheelSlots)
-      ? agreement.wheelSlots.map((slot) => capQuizWheelStake(wheelBaseAmount, slot))
+      ? agreement.wheelSlots.map((slot) => capQuizWheelStake(QUIZ_WHEEL_MAX_AMOUNT, slot))
       : [],
     wheelResultIndex: Number.isFinite(Number(agreement.wheelResultIndex)) ? Number(agreement.wheelResultIndex) : null,
     wheelResultAmount: Number.isFinite(Number(agreement.wheelResultAmount)) ? Math.max(0, Number(agreement.wheelResultAmount)) : null,
@@ -3579,7 +3576,7 @@ function SeatFlag({ seat, className = '' }) {
 function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false, disabled = false }) {
   const [nowMs, setNowMs] = useState(Date.now());
   const normalized = normalizeQuizWagerAgreement({ quizWagerAgreement: agreement });
-  const effectiveBaseAmount = normalized.wheelBaseAmount || Math.max(0, Math.floor(Number(baseAmount || 0)));
+  const effectiveBaseAmount = normalized.wheelBaseAmount || QUIZ_WHEEL_MAX_AMOUNT;
   const slots = normalized.wheelSlots.length ? normalized.wheelSlots : buildQuizWheelSlots(effectiveBaseAmount);
   const resultIndex = Math.max(0, Math.min(Math.max(0, slots.length - 1), Number(normalized.wheelResultIndex || 0)));
   const storedWheelResultAmount = Number(normalized.wheelResultAmount);
@@ -3589,7 +3586,9 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
     : Number.isFinite(storedAgreementAmount) && (storedAgreementAmount > 0 || !normalized.lockedByWheel)
       ? storedAgreementAmount
       : slots[resultIndex] || 0;
-  const resultAmount = effectiveBaseAmount > 0 ? capQuizWheelStake(effectiveBaseAmount, rawResultAmount) : rawResultAmount;
+  const resultAmount = capQuizWheelStake(effectiveBaseAmount, rawResultAmount);
+  const slotPreviewMin = slots.length ? Math.min(...slots) : 0;
+  const slotPreviewMax = slots.length ? Math.max(...slots) : 0;
   const phase = getQuizWheelPhase(normalized, nowMs);
   const displayPhase = normalized.status === 'wheel_locked' ? 'locked' : phase;
   const spinStartMs = Date.parse(normalized.wheelSpinStartedAt || '');
@@ -3673,7 +3672,7 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
         </div>
         <div className="quiz-wheel-result">
           <span>{displayPhase === 'countdown' ? 'Wheel starts in' : displayPhase === 'spinning' ? 'Spinning for 5 seconds' : displayPhase === 'locked' || displayPhase === 'landing' ? 'Final shared wager' : 'Wheel slots'}</span>
-          <strong>{displayPhase === 'countdown' ? countdownSeconds : displayPhase === 'spinning' ? '...' : displayPhase === 'locked' || displayPhase === 'landing' ? formatScore(resultAmount) : `${formatScore(slots[0])} to ${formatScore(slots[slots.length - 1])}`}</strong>
+          <strong>{displayPhase === 'countdown' ? countdownSeconds : displayPhase === 'spinning' ? '...' : displayPhase === 'locked' || displayPhase === 'landing' ? formatScore(resultAmount) : `${formatScore(slotPreviewMin)} to ${formatScore(slotPreviewMax)}`}</strong>
         </div>
       </div>
     </div>
@@ -4039,7 +4038,7 @@ function QuizSetupStagePanel({
                       <Button
                         className="primary-button compact"
                         onClick={onAcceptQuizWager}
-                        disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelBaseAmount <= 0}
+                        disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive}
                       >
                         Accept &amp; Spin
                       </Button>
@@ -4058,7 +4057,7 @@ function QuizSetupStagePanel({
                         setOptimisticWheelRequesterId(currentUserId || 'pending-wheel-request');
                         onSetQuizWheelOptIn?.(true);
                       }}
-                      disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelPending || wheelBaseAmount <= 0 || viewerWheelOptedIn}
+                      disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelPending || viewerWheelOptedIn}
                     >
                       {effectiveWheelPendingFromViewer ? `Waiting for ${oppositeLabel}` : 'Spin the Wheel'}
                     </Button>
@@ -9405,20 +9404,18 @@ function ProductionApp() {
     const quizWagers = gameDoc.quizWagers || { jay: 0, kim: 0 };
     const rawJayWager = Math.max(0, Number(quizWagers.jay || 0));
     const rawKimWager = Math.max(0, Number(quizWagers.kim || 0));
-    const settlementWagerCap = !gameDoc.lifetimePointsApplied
-      ? Math.min(Math.max(0, Math.floor(Number(jayCurrent || 0))), Math.max(0, Math.floor(Number(kimCurrent || 0))))
-      : Math.max(rawJayWager, rawKimWager);
-    const jayWager = isQuizGame ? capQuizWagerAmount(rawJayWager, settlementWagerCap) : rawJayWager;
-    const kimWager = isQuizGame ? capQuizWagerAmount(rawKimWager, settlementWagerCap) : rawKimWager;
+    const jayWager = isQuizGame ? Math.max(0, Math.floor(rawJayWager)) : rawJayWager;
+    const kimWager = isQuizGame ? Math.max(0, Math.floor(rawKimWager)) : rawKimWager;
+    const sharedQuizWager = isQuizGame ? Math.max(jayWager, kimWager) : 0;
     let wagerPenaltyShiftJay = 0;
     let wagerPenaltyShiftKim = 0;
     if (isQuizGame && nextQuizWinner !== 'tie') {
       if (nextQuizWinner === 'jay') {
-        wagerPenaltyShiftJay = -jayWager;
-        wagerPenaltyShiftKim = kimWager;
+        wagerPenaltyShiftJay = 0;
+        wagerPenaltyShiftKim = sharedQuizWager;
       } else {
-        wagerPenaltyShiftJay = jayWager;
-        wagerPenaltyShiftKim = -kimWager;
+        wagerPenaltyShiftJay = sharedQuizWager;
+        wagerPenaltyShiftKim = 0;
       }
     }
 
@@ -11123,12 +11120,11 @@ function ProductionApp() {
         if (agreement.status === 'wheel_pending') {
           if (!agreement.wheelRequestedBySeat) throw new Error('No wheel request is waiting for agreement.');
           if (agreement.wheelRequestedBySeat === seat && !isCurrentLocalTestGame) throw new Error('The other player must agree to spin the wheel.');
-          const baseAmount = Math.max(0, Math.floor(Number(agreement.wheelBaseAmount || 0)));
-          if (baseAmount <= 0) throw new Error('Both players need penalty points before the wheel can set a wager.');
+          const baseAmount = Math.max(1, Math.floor(Number(agreement.wheelBaseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
           const slots = agreement.wheelSlots.length ? agreement.wheelSlots : shuffleQuizWheelSlots(buildQuizWheelSlots(baseAmount));
           const now = Date.now();
           const wheelResultIndex = Math.floor(Math.random() * Math.max(1, slots.length));
-          const wheelResultAmount = capQuizWagerAmount(slots[wheelResultIndex] || 0, baseAmount);
+          const wheelResultAmount = capQuizWheelStake(baseAmount, slots[wheelResultIndex] || 0);
           return {
             notice: 'Wheel request accepted. Shared countdown started.',
             patch: {
@@ -11342,9 +11338,7 @@ function ProductionApp() {
       });
       if (!seat) throw new Error('Could not determine your player seat.');
       if (!game?.seats?.jay || !game?.seats?.kim) throw new Error('Both players must join before using the wager wheel.');
-      const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
-      const baseAmount = isCurrentLocalTestGame && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
-      if (baseAmount <= 0) throw new Error('Both players need penalty points before the wheel can set a wager.');
+      const baseAmount = QUIZ_WHEEL_MAX_AMOUNT;
       const previousAgreement = game?.quizWagerAgreement || defaultQuizWagerAgreement();
       const previousReadyState = game?.quizReadyState || defaultQuizReadyState('opening');
       const buildAgreement = (source = {}) => {
@@ -11444,17 +11438,15 @@ function ProductionApp() {
     if (agreement.status !== 'wheel_countdown' || !Number.isFinite(Date.parse(agreement.wheelSpinEndsAt || ''))) return;
     if (Date.now() < Date.parse(agreement.wheelSpinEndsAt || '')) return;
 
-    const fallbackBaseAmount = getQuizWheelBaseAmount(playerAccounts);
-    const effectiveBaseAmount = Math.max(0, Math.floor(Number(agreement.wheelBaseAmount || fallbackBaseAmount || 0)));
+    const fallbackBaseAmount = QUIZ_WHEEL_MAX_AMOUNT;
+    const effectiveBaseAmount = Math.max(1, Math.floor(Number(agreement.wheelBaseAmount || fallbackBaseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
     const slots = agreement.wheelSlots.length ? agreement.wheelSlots : buildQuizWheelSlots(effectiveBaseAmount);
     const resultIndex = Math.max(0, Math.min(Math.max(0, slots.length - 1), Number(agreement.wheelResultIndex ?? 0)));
     const storedResultAmount = Number(agreement.wheelResultAmount);
     const rawResultAmount = Number.isFinite(storedResultAmount) && storedResultAmount > 0
       ? storedResultAmount
       : Number(slots[resultIndex] || 0);
-    const wagerValue = effectiveBaseAmount > 0
-      ? capQuizWagerAmount(rawResultAmount, effectiveBaseAmount)
-      : sanitizeQuizWagerAmount(rawResultAmount);
+    const wagerValue = capQuizWheelStake(effectiveBaseAmount, rawResultAmount);
     if (!Number.isFinite(wagerValue) || wagerValue < 0) return;
 
     const nextAgreement = {
@@ -11508,16 +11500,14 @@ function ProductionApp() {
         const data = snap.data() || {};
         const liveAgreement = normalizeQuizWagerAgreement(data);
         if (liveAgreement.status !== 'wheel_countdown') return;
-        const liveBaseAmount = Math.max(0, Math.floor(Number(liveAgreement.wheelBaseAmount || fallbackBaseAmount || 0)));
+        const liveBaseAmount = Math.max(1, Math.floor(Number(liveAgreement.wheelBaseAmount || fallbackBaseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
         const liveSlots = liveAgreement.wheelSlots.length ? liveAgreement.wheelSlots : buildQuizWheelSlots(liveBaseAmount);
         const liveIndex = Math.max(0, Math.min(Math.max(0, liveSlots.length - 1), Number(liveAgreement.wheelResultIndex ?? resultIndex)));
         const liveStoredResultAmount = Number(liveAgreement.wheelResultAmount);
         const liveRawResultAmount = Number.isFinite(liveStoredResultAmount) && liveStoredResultAmount > 0
           ? liveStoredResultAmount
           : Number(liveSlots[liveIndex] || 0);
-        const liveWagerValue = liveBaseAmount > 0
-          ? capQuizWagerAmount(liveRawResultAmount, liveBaseAmount)
-          : sanitizeQuizWagerAmount(liveRawResultAmount);
+        const liveWagerValue = capQuizWheelStake(liveBaseAmount, liveRawResultAmount);
         const liveReadyState = mergeQuizReadyStateSnapshot(data.quizReadyState || null, defaultQuizReadyState('ready'));
         transaction.update(gameRef, {
           quizWagers: { jay: liveWagerValue, kim: liveWagerValue },
