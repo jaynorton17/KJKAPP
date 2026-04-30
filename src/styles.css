@@ -4159,6 +4159,224 @@ button:disabled {
   resize: vertical;
 }
 
+.mobile-chat-fab,
+.mobile-host-tab {
+  display: none;
+}
+
+.mobile-chat-fab {
+  position: fixed;
+  right: clamp(14px, 4vw, 22px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  z-index: 1180;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgba(86, 182, 255, 0.96), rgba(33, 95, 217, 0.96)),
+    rgba(8, 12, 24, 0.96);
+  color: #f6fbff;
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.34);
+}
+
+.mobile-chat-fab.has-unread {
+  border-color: rgba(255, 98, 98, 0.82);
+  animation: mobile-chat-fab-pulse 1.35s ease-in-out infinite;
+}
+
+.mobile-chat-fab__icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+}
+
+.mobile-chat-fab__icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.mobile-chat-fab__label {
+  font-size: 0.82rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mobile-chat-fab__badge {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(80, 8, 8, 0.5);
+  background: linear-gradient(135deg, #ff5166, #ff8c3a);
+  color: #25070a;
+  font-size: 0.7rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+@keyframes mobile-chat-fab-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 18px 38px rgba(0, 0, 0, 0.34),
+      0 0 0 0 rgba(255, 83, 110, 0.34);
+  }
+
+  50% {
+    box-shadow:
+      0 18px 38px rgba(0, 0, 0, 0.34),
+      0 0 0 8px rgba(255, 83, 110, 0.08);
+  }
+}
+
+.mobile-chat-sheet-backdrop,
+.mobile-host-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1190;
+  background: rgba(5, 8, 16, 0.54);
+}
+
+.mobile-chat-sheet-backdrop {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+}
+
+.mobile-chat-sheet {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(100%, 480px);
+  max-height: min(78svh, 680px);
+  padding: 14px;
+  border-radius: 24px 24px 18px 18px;
+}
+
+.mobile-chat-sheet__head,
+.mobile-host-drawer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-chat-sheet__head > div,
+.mobile-host-drawer__head > div {
+  min-width: 0;
+}
+
+.mobile-chat-sheet .chat-panel.compact-chat {
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.mobile-chat-sheet .chat-log {
+  height: 100%;
+  max-height: none;
+  padding-right: 0;
+}
+
+.mobile-chat-sheet .chat-compose textarea {
+  max-height: min(26svh, 220px);
+  resize: none;
+}
+
+.mobile-host-tab {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1170;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  min-height: 132px;
+  padding: 10px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-left: 0;
+  border-radius: 0 16px 16px 0;
+  background:
+    linear-gradient(180deg, rgba(255, 209, 102, 0.96), rgba(204, 114, 35, 0.96)),
+    rgba(8, 12, 24, 0.96);
+  color: #2d1204;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.28);
+}
+
+.mobile-host-tab__label {
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+.mobile-host-drawer-backdrop {
+  z-index: 1185;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.mobile-host-drawer {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(86vw, 360px);
+  height: 100%;
+  padding: 14px 12px 18px;
+  border-radius: 0 22px 22px 0;
+  overflow: hidden;
+}
+
+.mobile-host-drawer__body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.mobile-host-drawer__details {
+  display: grid;
+  gap: 10px;
+}
+
+.mobile-host-drawer__details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  list-style: none;
+  cursor: pointer;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mobile-host-drawer__details summary::-webkit-details-marker {
+  display: none;
+}
+
 .live-round-panel {
   width: 100%;
   padding: 12px;
@@ -11268,13 +11486,22 @@ select:focus-visible {
     min-width: 132px;
   }
 
+  .mobile-chat-fab,
+  .mobile-host-tab {
+    display: inline-flex;
+  }
+
   .mobile-game-shell {
     width: min(100%, 560px);
     margin-inline: auto;
     display: grid;
     gap: 10px;
     align-content: start;
-    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 96px);
+  }
+
+  .lobby-dashboard {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 96px);
   }
 
   .mobile-board-panel,
@@ -11362,6 +11589,12 @@ select:focus-visible {
     gap: 6px;
   }
 
+  .mobile-board-panel .question-note-actions {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+  }
+
   .mobile-board-panel .room-active-header {
     display: grid;
     gap: 8px;
@@ -11435,6 +11668,16 @@ select:focus-visible {
     overflow: visible;
   }
 
+  .mobile-board-panel .room-answer-entry > .live-round-grid--embedded {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .mobile-board-panel .room-answer-entry > .live-round-actions--embedded {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
   .mobile-board-panel .room-answer-entry--quiz {
     gap: 8px;
   }
@@ -11475,6 +11718,14 @@ select:focus-visible {
     padding-block: 8px 0;
   }
 
+  .mobile-board-panel .quiz-choice-zone--chat .quiz-choice-zone__content--chat {
+    display: none;
+  }
+
+  .mobile-board-panel .quiz-choice-zone__choice-stack {
+    width: 100%;
+  }
+
   .mobile-board-panel .quiz-wager-mode-tabs .dashboard-pill {
     flex: 1 1 150px;
     min-width: 0;
@@ -11509,11 +11760,11 @@ select:focus-visible {
   }
 
   .mobile-board-panel .quiz-wager-mode-panel {
-    min-height: clamp(500px, 68svh, 620px);
+    min-height: auto;
   }
 
   .mobile-board-panel .quiz-wager-mode-body {
-    min-height: 520px;
+    min-height: auto;
   }
 
   .mobile-board-panel .quiz-ready-inline {
@@ -11635,11 +11886,7 @@ select:focus-visible {
   }
 
   .mobile-board-panel .quiz-reveal-chat-card {
-    padding: 9px;
-  }
-
-  .mobile-board-panel .quiz-reveal-chat-card .chat-log {
-    max-height: 132px;
+    display: none;
   }
 
   .mobile-board-panel .scoreboard-vs {

@@ -73,6 +73,71 @@
 /* Small viewport fallback remains single column */
 @media (max-width: 900px) {
   .quiz-choice-grid { grid-template-columns: 1fr !important; gap: 12px !important; }
+
+  .mobile-board-panel .quiz-choice-grid {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  .mobile-board-panel .quiz-choice-zone--chat {
+    order: -1;
+    min-width: 0 !important;
+  }
+
+  .mobile-board-panel .quiz-choice-zone--chat .quiz-choice-zone__intro {
+    padding-bottom: 0 !important;
+  }
+
+  .mobile-board-panel .quiz-choice-zone--chat .quiz-choice-zone__content--chat {
+    display: none !important;
+  }
+
+  .mobile-board-panel .quiz-choice-zone__choice-stack {
+    width: 100% !important;
+  }
+
+  .mobile-board-panel .quiz-choice-zone__content--manual,
+  .mobile-board-panel .quiz-choice-zone__content--wheel {
+    padding: 4px 0 0 !important;
+  }
+
+  .mobile-board-panel .quiz-choice-wheel-card {
+    min-height: auto !important;
+    padding: 12px !important;
+    grid-template-rows: auto auto !important;
+  }
+
+  .mobile-board-panel .quiz-choice-wheel-card .quiz-wheel-stage {
+    --quiz-wheel-size: min(280px, 72vw) !important;
+    --quiz-wheel-slot-offset: calc(var(--quiz-wheel-size) * -0.39) !important;
+    width: min(100%, 300px) !important;
+    height: auto !important;
+    margin-bottom: 0 !important;
+  }
+
+  .mobile-board-panel .quiz-negotiation-focus-card,
+  .mobile-board-panel .quiz-wager-amount-card {
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+  .mobile-board-panel .quiz-negotiation-focus-card {
+    min-height: 0 !important;
+    padding: 16px 12px !important;
+  }
+
+  .mobile-board-panel .quiz-negotiation-focus-body > strong {
+    font-size: clamp(2.4rem, 14vw, 3.9rem) !important;
+  }
+
+  .mobile-board-panel .quiz-wheel-action-stack {
+    justify-content: stretch !important;
+  }
+
+  .mobile-board-panel .quiz-wheel-action-stack .primary-button,
+  .mobile-board-panel .quiz-wheel-action-stack .ghost-button {
+    width: 100% !important;
+  }
 }
 
 .quiz-choice-zone {

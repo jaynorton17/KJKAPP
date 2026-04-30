@@ -1192,6 +1192,188 @@ function useMediaQuery(query) {
   return matches;
 }
 
+function useChatUnreadCount(messages, isOpen, currentUserId = '', resetKey = '') {
+  const [unreadCount, setUnreadCount] = useState(0);
+  const lastObservedMessageIdRef = useRef('');
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    lastObservedMessageIdRef.current = '';
+    initializedRef.current = false;
+    setUnreadCount(0);
+  }, [resetKey]);
+
+  useEffect(() => {
+    const lastMessageId = messages.at(-1)?.id || '';
+
+    if (isOpen) {
+      lastObservedMessageIdRef.current = lastMessageId;
+      initializedRef.current = true;
+      setUnreadCount(0);
+      return;
+    }
+
+    if (!initializedRef.current) {
+      lastObservedMessageIdRef.current = lastMessageId;
+      initializedRef.current = true;
+      return;
+    }
+
+    if (!lastMessageId || lastMessageId === lastObservedMessageIdRef.current) return;
+
+    const previousMessageId = lastObservedMessageIdRef.current;
+    const previousMessageIndex = previousMessageId
+      ? messages.findIndex((message) => message.id === previousMessageId)
+      : -1;
+    const newMessages = previousMessageIndex >= 0 ? messages.slice(previousMessageIndex + 1) : messages;
+    const incomingCount = newMessages.filter((message) => String(message?.uid || '') !== String(currentUserId || '')).length;
+
+    if (incomingCount > 0) {
+      setUnreadCount((current) => current + incomingCount);
+    }
+
+    lastObservedMessageIdRef.current = lastMessageId;
+  }, [currentUserId, isOpen, messages]);
+
+  return unreadCount;
+}
+
+function MobileChatLauncher({
+  title = 'Chat',
+  isOpen,
+  onOpen,
+  onClose,
+  unreadCount = 0,
+  messages,
+  draft,
+  onDraftChange,
+  onSend,
+  isBusy,
+  seat,
+  displayName,
+}) {
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose?.();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  const unreadLabel = unreadCount > 9 ? '9+' : String(unreadCount);
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`mobile-chat-fab ${isOpen ? 'is-open' : ''} ${unreadCount > 0 ? 'has-unread' : ''}`}
+        onClick={isOpen ? onClose : onOpen}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        aria-label={unreadCount > 0 ? `${title}. ${unreadCount} unread messages.` : title}
+      >
+        <span className="mobile-chat-fab__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+            <path
+              d="M5 6.5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H11l-4.8 3.4c-.5.3-1.2 0-1.2-.6V17.5H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+        <span className="mobile-chat-fab__label">Chat</span>
+        {unreadCount > 0 ? <span className="mobile-chat-fab__badge">{unreadLabel}</span> : null}
+      </button>
+
+      {isOpen ? (
+        <div className="mobile-chat-sheet-backdrop" role="presentation" onClick={onClose}>
+          <section
+            className="panel mobile-chat-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mobile-chat-sheet__head">
+              <div>
+                <p className="eyebrow">Mobile Chat</p>
+                <h2>{title}</h2>
+              </div>
+              <Button className="ghost-button compact" onClick={onClose}>
+                Close
+              </Button>
+            </div>
+            <ChatPanel
+              compact
+              messages={messages}
+              draft={draft}
+              onDraftChange={onDraftChange}
+              onSend={onSend}
+              isBusy={isBusy}
+              seat={seat}
+              displayName={displayName}
+            />
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function MobileHostDrawer({ isOpen, onOpen, onClose, children }) {
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose?.();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`mobile-host-tab ${isOpen ? 'is-open' : ''}`}
+        onClick={isOpen ? onClose : onOpen}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        aria-label="Host controls"
+      >
+        <span className="mobile-host-tab__label">Host</span>
+      </button>
+
+      {isOpen ? (
+        <div className="mobile-host-drawer-backdrop" role="presentation" onClick={onClose}>
+          <aside
+            className="panel mobile-host-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Host controls"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mobile-host-drawer__head">
+              <div>
+                <p className="eyebrow">Host Panel</p>
+                <h2>Run The Game</h2>
+              </div>
+              <Button className="ghost-button compact" onClick={onClose}>
+                Close
+              </Button>
+            </div>
+            <div className="mobile-host-drawer__body">
+              {children}
+            </div>
+          </aside>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function AuthScreen({
   mode,
   form,
@@ -1448,6 +1630,7 @@ function LobbyScreen({
   const [profileNameDraft, setProfileNameDraft] = useState(() => normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   const [editingNoteId, setEditingNoteId] = useState('');
   const [editingNoteDraft, setEditingNoteDraft] = useState('');
+  const [mobileLobbyChatOpen, setMobileLobbyChatOpen] = useState(false);
   const dashboardMenuRef = useRef(null);
   const isMobileDashboardNav = useMediaQuery('(max-width: 900px)');
   const pendingInviteCount = useMemo(() => {
@@ -1467,6 +1650,13 @@ function LobbyScreen({
     jay: String(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0)),
     kim: String(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0)),
   }), [playerAccounts?.jay?.lifetimePenaltyPoints, playerAccounts?.kim?.lifetimePenaltyPoints]);
+  const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
+  const lobbyChatUnreadCount = useChatUnreadCount(
+    lobbyChatMessages,
+    mobileLobbyChatOpen,
+    user?.uid || '',
+    `${activeTab}:${user?.uid || ''}`,
+  );
 
   const toggleFilterValue = (value, values, setter) => {
     setter(values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value]);
@@ -1902,6 +2092,11 @@ function LobbyScreen({
     setProfileNameDraft(normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   }, [profile?.displayName, user?.displayName, user?.email]);
 
+  useEffect(() => {
+    if (isMobileDashboardNav && activeTab === 'gameLobby') return;
+    setMobileLobbyChatOpen(false);
+  }, [activeTab, isMobileDashboardNav]);
+
 	  return (
 	    <main className="app production-app">
 	      <header className="top-bar top-bar--shell">
@@ -2206,17 +2401,19 @@ function LobbyScreen({
 	              </section>
             
 
-                <section className="panel lobby-panel lobby-panel--lobby lobby-chat-card">
-                  <ChatPanel
-                    compact
-                    messages={lobbyChatMessages}
-                    draft={lobbyChatDraft}
-                    onDraftChange={setLobbyChatDraft}
-                    onSend={sendLobbyChat}
-                    isBusy={isLobbyChatSending}
-                    displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
-                  />
-                </section>
+                {!isMobileDashboardNav ? (
+                  <section className="panel lobby-panel lobby-panel--lobby lobby-chat-card">
+                    <ChatPanel
+                      compact
+                      messages={lobbyChatMessages}
+                      draft={lobbyChatDraft}
+                      onDraftChange={setLobbyChatDraft}
+                      onSend={sendLobbyChat}
+                      isBusy={isLobbyChatSending}
+                      displayName={lobbyChatDisplayName}
+                    />
+                  </section>
+                ) : null}
 </div>
 
           </section>
@@ -3138,6 +3335,22 @@ function LobbyScreen({
             </div>
           </div>
         </section>
+      ) : null}
+
+      {isMobileDashboardNav && activeTab === 'gameLobby' ? (
+        <MobileChatLauncher
+          title="Lobby Chat"
+          isOpen={mobileLobbyChatOpen}
+          onOpen={() => setMobileLobbyChatOpen(true)}
+          onClose={() => setMobileLobbyChatOpen(false)}
+          unreadCount={lobbyChatUnreadCount}
+          messages={lobbyChatMessages}
+          draft={lobbyChatDraft}
+          onDraftChange={setLobbyChatDraft}
+          onSend={sendLobbyChat}
+          isBusy={isLobbyChatSending}
+          displayName={lobbyChatDisplayName}
+        />
       ) : null}
 
       <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
@@ -7254,6 +7467,15 @@ function GameRoomView({
   const [quizSidebarOpen, setQuizSidebarOpen] = useState(false);
   const [noteModalRound, setNoteModalRound] = useState(null);
   const [questionNoteDraft, setQuestionNoteDraft] = useState('');
+  const [mobileRoomChatOpen, setMobileRoomChatOpen] = useState(false);
+  const [mobileHostDrawerOpen, setMobileHostDrawerOpen] = useState(false);
+  const roomChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
+  const roomChatUnreadCount = useChatUnreadCount(
+    chatMessages,
+    mobileRoomChatOpen,
+    user?.uid || '',
+    `${game?.id || ''}:${resolvedViewerSeat}`,
+  );
   const currentFeedbackValue = useMemo(() => {
     const qKey = normalizeText(currentRound?.questionId || '') || sanitizeNoteKey(currentRound?.question || '');
     if (!qKey || !user?.uid || !game?.id) return '';
@@ -7306,6 +7528,17 @@ function GameRoomView({
       if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
     };
   }, [isMobile]);
+
+  useEffect(() => {
+    if (isMobile && !gameEnded) return;
+    setMobileRoomChatOpen(false);
+    setMobileHostDrawerOpen(false);
+  }, [gameEnded, isMobile]);
+
+  useEffect(() => {
+    if (role === 'host' && !gameEnded) return;
+    setMobileHostDrawerOpen(false);
+  }, [gameEnded, role]);
 
   const closeRoomMenu = () => {
     roomMenuRef.current?.removeAttribute('open');
@@ -7408,6 +7641,28 @@ function GameRoomView({
       // Ignore storage failures.
     }
     onLeaveGame();
+  };
+
+  const renderMobileHostDrawerContent = () => {
+    if (role !== 'host' || gameEnded) return null;
+
+    return (
+      <>
+        {renderMobileHostControls()}
+        <details className="panel mobile-host-drawer__details">
+          <summary>Question Bank</summary>
+          <QuestionBankMini
+            questions={bankQuestions}
+            draft={bankDraft}
+            setDraft={setBankDraft}
+            onAddQuestion={onAddQuestion}
+            onSyncSheet={onSyncSheet}
+            onImportSheet={onImportSheet}
+            syncNotice={syncNotice}
+          />
+        </details>
+      </>
+    );
   };
 
   const renderMobileHostControls = () => {
@@ -7601,7 +7856,7 @@ function GameRoomView({
                   onChatDraftChange={setChatDraft}
                   onSendChat={onSendChat}
                   chatSeat={seat}
-                  chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+                  chatDisplayName={roomChatDisplayName}
 	                  isBusy={isBusy}
 	                />
 	              ) : showQuizSetupPanel ? (
@@ -7614,7 +7869,7 @@ function GameRoomView({
                     chatDraft={chatDraft}
                     onChatDraftChange={setChatDraft}
                     onSendChat={onSendChat}
-                    chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+                    chatDisplayName={roomChatDisplayName}
                     quizWagerDraft={quizWagerDraft}
                     setQuizWagerDraft={setQuizWagerDraft}
                     onSaveQuizWager={onSaveQuizWager}
@@ -7650,24 +7905,6 @@ function GameRoomView({
               </section>
             ) : null}
 
-            {renderMobileHostControls()}
-
-            {!isQuizGame ? (
-            <details className="panel mobile-collapsible mobile-collapsible--chat">
-              <summary>Chat</summary>
-              <ChatPanel
-                compact
-                messages={chatMessages}
-                draft={chatDraft}
-                onDraftChange={setChatDraft}
-                onSend={onSendChat}
-                isBusy={isBusy}
-                seat={seat}
-                displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
-              />
-            </details>
-            ) : null}
-
             <details className="panel mobile-collapsible mobile-collapsible--analytics">
               <summary>Live Stats</summary>
               <MobileAnalyticsSummary
@@ -7677,23 +7914,39 @@ function GameRoomView({
                 embedded
               />
             </details>
-
-            {role === 'host' ? (
-              <details className="panel mobile-collapsible">
-                <summary>Host tools</summary>
-                <QuestionBankMini
-                  questions={bankQuestions}
-                  draft={bankDraft}
-                  setDraft={setBankDraft}
-                  onAddQuestion={onAddQuestion}
-                  onSyncSheet={onSyncSheet}
-                  onImportSheet={onImportSheet}
-                  syncNotice={syncNotice}
-                />
-              </details>
-            ) : null}
           </section>
         )}
+        {!gameEnded ? (
+          <MobileChatLauncher
+            title={isQuizGame ? 'Game Chat' : 'Room Chat'}
+            isOpen={mobileRoomChatOpen}
+            onOpen={() => {
+              setMobileHostDrawerOpen(false);
+              setMobileRoomChatOpen(true);
+            }}
+            onClose={() => setMobileRoomChatOpen(false)}
+            unreadCount={roomChatUnreadCount}
+            messages={chatMessages}
+            draft={chatDraft}
+            onDraftChange={setChatDraft}
+            onSend={onSendChat}
+            isBusy={isBusy}
+            seat={resolvedViewerSeat}
+            displayName={roomChatDisplayName}
+          />
+        ) : null}
+        {role === 'host' && !gameEnded ? (
+          <MobileHostDrawer
+            isOpen={mobileHostDrawerOpen}
+            onOpen={() => {
+              setMobileRoomChatOpen(false);
+              setMobileHostDrawerOpen(true);
+            }}
+            onClose={() => setMobileHostDrawerOpen(false)}
+          >
+            {renderMobileHostDrawerContent()}
+          </MobileHostDrawer>
+        ) : null}
         {questionNoteModalNode}
         {roomWheelRequestModal}
         {notice ? <div className="toast">{notice}</div> : null}
@@ -7907,7 +8160,7 @@ function GameRoomView({
               onChatDraftChange={setChatDraft}
               onSendChat={onSendChat}
               chatSeat={seat}
-              chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+              chatDisplayName={roomChatDisplayName}
 	              isBusy={isBusy}
 	            />
 	          ) : showQuizSetupPanel ? (
@@ -7920,7 +8173,7 @@ function GameRoomView({
               chatDraft={chatDraft}
               onChatDraftChange={setChatDraft}
               onSendChat={onSendChat}
-              chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+              chatDisplayName={roomChatDisplayName}
               quizWagerDraft={quizWagerDraft}
               setQuizWagerDraft={setQuizWagerDraft}
               onSaveQuizWager={onSaveQuizWager}
@@ -7955,7 +8208,7 @@ function GameRoomView({
             onSend={onSendChat}
             isBusy={isBusy}
             seat={seat}
-            displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+            displayName={roomChatDisplayName}
           />
         </section>
         ) : null}
