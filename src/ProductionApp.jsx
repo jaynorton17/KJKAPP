@@ -119,6 +119,8 @@ const QUIZ_WHEEL_COUNTDOWN_MS = 5000;
 const QUIZ_WHEEL_SPIN_MS = 5000;
 const QUIZ_SETUP_COUNTDOWN_MS = 3000;
 const QUIZ_REVEAL_FLASH_MS = 3000;
+const AI_CHAT_MESSAGE_LIMIT = 160;
+const AI_EVIDENCE_PREVIEW_LIMIT = 4;
 const normalizeQuizAnswerText = (value = '') =>
   normalizeText(value)
     .toLowerCase()
@@ -650,6 +652,448 @@ const buildDiaryThemeOptions = (roundAnalytics = null) => {
     : [];
   const fromDefaults = DEFAULT_CATEGORIES.map((category) => normalizeText(category.name)).filter(Boolean);
   return [...new Set([...fromAnalytics, ...fromDefaults])];
+};
+
+const truncateAiText = (value = '', maxLength = 120) => {
+  const text = normalizeText(value);
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 3)).trim()}...` : text;
+};
+
+const tokenizeAiSearchText = (value = '') =>
+  normalizeText(value)
+    .toLowerCase()
+    .replace(/[’']/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1);
+
+const formatAiList = (items = []) => {
+  const cleaned = [...new Set((items || []).map((item) => normalizeText(item)).filter(Boolean))];
+  if (!cleaned.length) return '';
+  if (cleaned.length === 1) return cleaned[0];
+  if (cleaned.length === 2) return `${cleaned[0]} and ${cleaned[1]}`;
+  return `${cleaned.slice(0, -1).join(', ')}, and ${cleaned.at(-1)}`;
+};
+
+const incrementAiCategoryCount = (bucket, category = '') => {
+  const key = normalizeText(category) || 'Uncategorised';
+  bucket.set(key, Number(bucket.get(key) || 0) + 1);
+};
+
+const createAiSeatStats = () => ({
+  standardAnswers: 0,
+  quizAnswers: 0,
+  quizCorrect: 0,
+  quizIncorrect: 0,
+  quizPoints: 0,
+  liked: 0,
+  disliked: 0,
+  diaryEntries: 0,
+  privateNotes: 0,
+  evidenceCount: 0,
+  answeredCategoryCounts: new Map(),
+  likedCategoryCounts: new Map(),
+  dislikedCategoryCounts: new Map(),
+});
+
+const finalizeAiCategoryCounts = (bucket = new Map()) =>
+  [...bucket.entries()]
+    .map(([label, count]) => ({ label, count: Number(count || 0) }))
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+
+const finalizeAiSeatStats = (stats = createAiSeatStats()) => {
+  const quizAnswers = Number(stats.quizAnswers || 0);
+  const quizCorrect = Number(stats.quizCorrect || 0);
+  return {
+    standardAnswers: Number(stats.standardAnswers || 0),
+    quizAnswers,
+    quizCorrect,
+    quizIncorrect: Number(stats.quizIncorrect || 0),
+    quizPoints: Number(stats.quizPoints || 0),
+    liked: Number(stats.liked || 0),
+    disliked: Number(stats.disliked || 0),
+    diaryEntries: Number(stats.diaryEntries || 0),
+    privateNotes: Number(stats.privateNotes || 0),
+    evidenceCount: Number(stats.evidenceCount || 0),
+    quizAccuracy: quizAnswers ? Math.round((quizCorrect / quizAnswers) * 100) : 0,
+    topAnsweredCategories: finalizeAiCategoryCounts(stats.answeredCategoryCounts).slice(0, 4),
+    topLikedCategories: finalizeAiCategoryCounts(stats.likedCategoryCounts).slice(0, 4),
+    topDislikedCategories: finalizeAiCategoryCounts(stats.dislikedCategoryCounts).slice(0, 4),
+  };
+};
+
+const buildAiEvidenceSnapshot = ({
+  previousGames = [],
+  questionFeedback = [],
+  quizAnswers = [],
+  diaryEntries = [],
+  questionNotes = [],
+  viewerSeat = 'jay',
+} = {}) => {
+  const statsBySeat = {
+    jay: createAiSeatStats(),
+    kim: createAiSeatStats(),
+  };
+  const pairStats = {
+    completedStandardGames: 0,
+    completedQuizGames: 0,
+    bothLiked: 0,
+    splitOpinions: 0,
+    sharedFavouriteQuestions: [],
+  };
+  const sourceCounts = {
+    gameAnswers: 0,
+    feedback: 0,
+    quizAnswers: 0,
+    diaryEntries: 0,
+    privateNotes: 0,
+  };
+  const feedbackByQuestion = new Map();
+  const items = [];
+
+  const pushItem = (item) => {
+    if (!item?.summary) return;
+    const normalizedSeat = item.seat === 'kim' ? 'kim' : item.seat === 'jay' ? 'jay' : '';
+    const searchText = [
+      item.title,
+      item.summary,
+      item.question,
+      item.answer,
+      item.category,
+      item.roundType,
+      item.searchText,
+    ].filter(Boolean).join(' ');
+    items.push({
+      ...item,
+      seat: normalizedSeat,
+      createdAtMs: Number(item.createdAtMs || 0),
+      searchTokens: tokenizeAiSearchText(searchText),
+    });
+    if (normalizedSeat) statsBySeat[normalizedSeat].evidenceCount += 1;
+  };
+
+  (previousGames || []).forEach((game) => {
+    const gameMode = (game?.gameMode || 'standard') === 'quiz' ? 'quiz' : 'standard';
+    if (gameMode === 'quiz') pairStats.completedQuizGames += 1;
+    else pairStats.completedStandardGames += 1;
+    if (gameMode !== 'standard') return;
+    (game?.rounds || []).forEach((round, index) => {
+      const question = normalizeText(round?.question || '');
+      const category = normalizeText(round?.category || '');
+      const roundType = normalizeText(round?.roundType || '');
+      const roundLabel = round?.number ? `Round ${round.number}` : `Round ${index + 1}`;
+      const createdAtMs = getRecordTime(round?.updatedAt || round?.submittedAt || game?.endedAt || game?.createdAt || 0);
+      seats.forEach((seat) => {
+        const ownAnswer = normalizeText(round?.answers?.[seat]?.ownAnswer || '');
+        if (!ownAnswer) return;
+        statsBySeat[seat].standardAnswers += 1;
+        incrementAiCategoryCount(statsBySeat[seat].answeredCategoryCounts, category);
+        sourceCounts.gameAnswers += 1;
+        pushItem({
+          id: `game-answer-${game?.id || 'game'}-${round?.id || round?.number || index + 1}-${seat}`,
+          kind: 'game-answer',
+          seat,
+          title: `${PLAYER_LABEL[seat]} answered a saved game question`,
+          summary: `${PLAYER_LABEL[seat]} answered "${truncateAiText(ownAnswer, 88)}" to "${truncateAiText(question || 'Saved question', 96)}".`,
+          question,
+          answer: ownAnswer,
+          category,
+          roundType,
+          sourceLabel: `${game?.name || game?.joinCode || 'Game'} · ${roundLabel}`,
+          createdAtMs,
+          searchText: `${PLAYER_LABEL[seat]} ${question} ${ownAnswer} ${category} ${roundType}`,
+        });
+      });
+    });
+  });
+
+  (questionFeedback || []).forEach((entry) => {
+    const seat = seatFromPlayerRef(entry?.userSeat || entry?.userId) || '';
+    const feedbackValue = entry?.feedbackValue === 'disliked' ? 'disliked' : entry?.feedbackValue === 'liked' ? 'liked' : '';
+    if (!seat || !feedbackValue) return;
+    const questionText = normalizeText(entry?.questionText || entry?.questionId || 'Question');
+    const questionKey = normalizeText(entry?.questionId || entry?.questionText || entry?.id);
+    const category = normalizeText(entry?.category || '');
+    const roundType = normalizeText(entry?.roundType || '');
+    const createdAtMs = getRecordTime(entry?.updatedAt || entry?.createdAt || 0);
+    statsBySeat[seat][feedbackValue] += 1;
+    incrementAiCategoryCount(
+      feedbackValue === 'liked' ? statsBySeat[seat].likedCategoryCounts : statsBySeat[seat].dislikedCategoryCounts,
+      category,
+    );
+    sourceCounts.feedback += 1;
+    if (questionKey) {
+      const current = feedbackByQuestion.get(questionKey) || {
+        questionText,
+        feedbackBySeat: {},
+      };
+      current.feedbackBySeat[seat] = feedbackValue;
+      feedbackByQuestion.set(questionKey, current);
+    }
+    pushItem({
+      id: `feedback-${entry?.id || questionKey || `${seat}-${createdAtMs}`}`,
+      kind: 'question-feedback',
+      seat,
+      title: `${PLAYER_LABEL[seat]} ${feedbackValue} this question`,
+      summary: `${PLAYER_LABEL[seat]} ${feedbackValue} "${truncateAiText(questionText, 118)}".`,
+      question: questionText,
+      category,
+      roundType,
+      sourceLabel: 'Question feedback',
+      createdAtMs,
+      searchText: `${PLAYER_LABEL[seat]} ${feedbackValue} ${questionText} ${category} ${roundType}`,
+    });
+  });
+
+  [...feedbackByQuestion.values()].forEach((row) => {
+    const jayFeedback = row?.feedbackBySeat?.jay || '';
+    const kimFeedback = row?.feedbackBySeat?.kim || '';
+    if (jayFeedback === 'liked' && kimFeedback === 'liked') {
+      pairStats.bothLiked += 1;
+      if (row.questionText) pairStats.sharedFavouriteQuestions.push(row.questionText);
+    } else if ((jayFeedback === 'liked' && kimFeedback === 'disliked') || (jayFeedback === 'disliked' && kimFeedback === 'liked')) {
+      pairStats.splitOpinions += 1;
+    }
+  });
+
+  (quizAnswers || []).forEach((entry) => {
+    const seat = seatFromPlayerRef(entry?.playerSeat || entry?.playerId) || '';
+    if (!seat) return;
+    const questionText = normalizeText(entry?.questionText || entry?.questionId || 'Quiz question');
+    const playerAnswer = normalizeText(entry?.playerAnswer || '');
+    const category = normalizeText(entry?.category || '');
+    const roundType = normalizeText(entry?.questionType || entry?.roundType || '');
+    const wasCorrect = Boolean(entry?.finalResult === 'correct' || entry?.wasCorrect);
+    const pointsAwarded = Math.max(0, Number(entry?.pointsAwarded || 0));
+    const createdAtMs = getRecordTime(entry?.updatedAt || entry?.createdAt || 0);
+    statsBySeat[seat].quizAnswers += 1;
+    if (wasCorrect) statsBySeat[seat].quizCorrect += 1;
+    else statsBySeat[seat].quizIncorrect += 1;
+    statsBySeat[seat].quizPoints += pointsAwarded;
+    incrementAiCategoryCount(statsBySeat[seat].answeredCategoryCounts, category);
+    sourceCounts.quizAnswers += 1;
+    pushItem({
+      id: `quiz-answer-${entry?.id || `${seat}-${createdAtMs}`}`,
+      kind: 'quiz-answer',
+      seat,
+      title: `${PLAYER_LABEL[seat]} ${wasCorrect ? 'got a quiz question right' : 'missed a quiz question'}`,
+      summary: `${PLAYER_LABEL[seat]} answered "${truncateAiText(playerAnswer || 'No answer', 88)}" for "${truncateAiText(questionText, 102)}" and was ${wasCorrect ? 'correct' : 'incorrect'}.`,
+      question: questionText,
+      answer: playerAnswer,
+      category,
+      roundType,
+      sourceLabel: 'Quick Fire Quiz',
+      createdAtMs,
+      searchText: `${PLAYER_LABEL[seat]} ${questionText} ${playerAnswer} ${category} ${roundType} ${wasCorrect ? 'correct' : 'incorrect'}`,
+    });
+  });
+
+  (diaryEntries || []).forEach((entry) => {
+    const seat = seatFromPlayerRef(entry?.ownerPlayerId || entry?.receiverPlayerId || entry?.requestedByPlayerId) || '';
+    const question = normalizeText(entry?.question || entry?.chapterTitle || '');
+    const answer = normalizeText(entry?.answer || '');
+    const story = normalizeText(entry?.story || '');
+    const categoryText = Array.isArray(entry?.relatedCategories) ? entry.relatedCategories.filter(Boolean).join(' ') : '';
+    const createdAtMs = getRecordTime(entry?.updatedAt || entry?.answeredAt || entry?.createdAt || 0);
+    const primaryText = answer || story || question;
+    if (!primaryText) return;
+    if (seat) statsBySeat[seat].diaryEntries += 1;
+    sourceCounts.diaryEntries += 1;
+    pushItem({
+      id: `diary-${entry?.id || createdAtMs}`,
+      kind: 'diary-entry',
+      seat,
+      title: `${seat ? PLAYER_LABEL[seat] : 'Player'} diary / AMA entry`,
+      summary: `${seat ? PLAYER_LABEL[seat] : 'A player'} diary entry: "${truncateAiText(primaryText, 126)}".`,
+      question,
+      answer: answer || story || question,
+      category: categoryText,
+      roundType: isAmaDiaryEntry(entry) ? 'ama' : 'diary',
+      sourceLabel: isAmaDiaryEntry(entry) ? 'AMA diary' : 'Diary entry',
+      createdAtMs,
+      searchText: `${question} ${answer} ${story} ${categoryText}`,
+    });
+  });
+
+  (questionNotes || []).forEach((entry) => {
+    const noteText = normalizeText(entry?.noteText || '');
+    const questionText = normalizeText(entry?.questionText || entry?.questionId || 'Question');
+    if (!noteText) return;
+    statsBySeat[viewerSeat === 'kim' ? 'kim' : 'jay'].privateNotes += 1;
+    sourceCounts.privateNotes += 1;
+    pushItem({
+      id: `private-note-${entry?.id || questionText}`,
+      kind: 'private-note',
+      seat: viewerSeat === 'kim' ? 'kim' : 'jay',
+      title: 'Private note',
+      summary: `Private note on "${truncateAiText(questionText, 92)}": "${truncateAiText(noteText, 118)}".`,
+      question: questionText,
+      answer: noteText,
+      category: normalizeText(entry?.category || ''),
+      roundType: normalizeText(entry?.roundType || 'note'),
+      sourceLabel: 'Private flagged note',
+      createdAtMs: getRecordTime(entry?.updatedAt || entry?.createdAt || 0),
+      searchText: `${questionText} ${noteText} ${entry?.category || ''}`,
+    });
+  });
+
+  return {
+    totalEvidence: items.length,
+    sourceCounts,
+    pair: {
+      ...pairStats,
+      sharedFavouriteQuestions: pairStats.sharedFavouriteQuestions.slice(0, 6),
+    },
+    bySeat: {
+      jay: finalizeAiSeatStats(statsBySeat.jay),
+      kim: finalizeAiSeatStats(statsBySeat.kim),
+    },
+    items: [...items].sort((left, right) => right.createdAtMs - left.createdAtMs),
+  };
+};
+
+const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
+  const normalizedPrompt = normalizeText(prompt).toLowerCase();
+  const promptTokens = [...new Set(tokenizeAiSearchText(prompt))];
+  const mentionsJay = /\bjay\b/.test(normalizedPrompt);
+  const mentionsKim = /\bkim\b/.test(normalizedPrompt);
+  const asksAboutRelationship = /\bwe\b|\bus\b|\bour\b|both of us|the two of us|together|relationship|compatib|match/.test(normalizedPrompt);
+  const asksAboutQuiz = /quiz|quick fire|trivia|correct|wrong|accuracy|fast|timer|knowledge/.test(normalizedPrompt);
+  const asksAboutPreference = /like|likes|liked|love|prefer|favo[u]?rite|into|enjoy|dislike|hate|turn on|turn-off|turn off/.test(normalizedPrompt);
+  const asksAboutDiary = /diary|ama|story|context|remember|why|because|chapter/.test(normalizedPrompt);
+  const asksAboutNotes = /note|flagged|private note/.test(normalizedPrompt);
+  const asksForSummary = /what is|what's|tell me about|profile|summar|describe|who is/.test(normalizedPrompt);
+  const focusSeats = mentionsJay && mentionsKim
+    ? ['jay', 'kim']
+    : mentionsJay
+      ? ['jay']
+      : mentionsKim
+        ? ['kim']
+        : asksAboutRelationship
+          ? ['jay', 'kim']
+          : [viewerSeat === 'kim' ? 'kim' : 'jay'];
+  return {
+    normalizedPrompt,
+    promptTokens,
+    mentionsJay,
+    mentionsKim,
+    asksAboutRelationship,
+    asksAboutQuiz,
+    asksAboutPreference,
+    asksAboutDiary,
+    asksAboutNotes,
+    asksForSummary,
+    focusSeats,
+  };
+};
+
+const scoreAiEvidenceItem = (item = {}, intent = {}) => {
+  let score = 0;
+  const itemTokenSet = new Set(item.searchTokens || []);
+  (intent.promptTokens || []).forEach((token) => {
+    if (!itemTokenSet.has(token)) return;
+    score += token.length >= 5 ? 4 : 2;
+  });
+  if (intent.focusSeats?.includes(item.seat)) score += 4;
+  if (intent.asksAboutPreference && item.kind === 'question-feedback') score += 8;
+  if (intent.asksAboutQuiz && item.kind === 'quiz-answer') score += 8;
+  if (intent.asksAboutDiary && item.kind === 'diary-entry') score += 8;
+  if (intent.asksAboutNotes && item.kind === 'private-note') score += 9;
+  if (!intent.asksAboutQuiz && item.kind === 'game-answer') score += 2;
+  if (intent.asksAboutRelationship && item.kind === 'question-feedback') score += 2;
+  if (item.kind === 'private-note') score += 1;
+  const ageMs = Math.max(0, Date.now() - Number(item.createdAtMs || 0));
+  if (ageMs < 1000 * 60 * 60 * 24 * 30) score += 1;
+  return score;
+};
+
+const pickFallbackAiEvidence = (snapshot = {}, intent = {}, viewerSeat = 'jay') => {
+  const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
+  const candidateKinds = intent.asksAboutNotes
+    ? ['private-note']
+    : intent.asksAboutDiary
+      ? ['diary-entry', 'game-answer']
+      : intent.asksAboutQuiz
+        ? ['quiz-answer', 'game-answer']
+        : intent.asksAboutPreference
+          ? ['question-feedback', 'game-answer', 'diary-entry']
+          : ['game-answer', 'question-feedback', 'diary-entry', 'quiz-answer'];
+  const candidates = (snapshot.items || []).filter(
+    (item) =>
+      candidateKinds.includes(item.kind)
+      && (focusSeats.includes(item.seat) || (!item.seat && intent.asksAboutRelationship)),
+  );
+  return candidates.slice(0, AI_EVIDENCE_PREVIEW_LIMIT);
+};
+
+const formatAiEvidenceBullet = (item = {}) => {
+  const sourceLabel = item.sourceLabel ? ` (${item.sourceLabel})` : '';
+  return `${truncateAiText(item.summary || item.title || 'Saved evidence', 150)}${sourceLabel}`;
+};
+
+const buildEvidenceBasedAiReply = ({
+  prompt = '',
+  viewerSeat = 'jay',
+  evidenceSnapshot = {},
+} = {}) => {
+  const cleanPrompt = normalizeText(prompt);
+  const intent = buildAiIntentProfile(cleanPrompt, viewerSeat);
+  const scoredEvidence = (evidenceSnapshot.items || [])
+    .map((item) => ({ ...item, score: scoreAiEvidenceItem(item, intent) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || right.createdAtMs - left.createdAtMs);
+  const selectedEvidence = scoredEvidence.length
+    ? scoredEvidence.slice(0, AI_EVIDENCE_PREVIEW_LIMIT)
+    : pickFallbackAiEvidence(evidenceSnapshot, intent, viewerSeat);
+  const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
+  const primarySeat = focusSeats.length === 1 ? focusSeats[0] : '';
+  const primaryStats = primarySeat ? evidenceSnapshot.bySeat?.[primarySeat] : null;
+  const pairStats = evidenceSnapshot.pair || {};
+
+  let answer = '';
+  if (!selectedEvidence.length && !evidenceSnapshot.totalEvidence) {
+    answer = "I don't have enough saved evidence yet. Play more rounds, use likes/dislikes, or add diary entries first.";
+  } else if (intent.asksAboutQuiz && primarySeat && primaryStats) {
+    answer = `${PLAYER_LABEL[primarySeat]} has ${primaryStats.quizAccuracy}% quiz accuracy across ${primaryStats.quizAnswers} saved quick-fire answers, with ${formatScore(primaryStats.quizPoints)} total quiz points recorded.`;
+  } else if (intent.asksAboutPreference && primarySeat && primaryStats) {
+    const topLiked = formatAiList(primaryStats.topLikedCategories.map((row) => row.label).slice(0, 3));
+    const answeredThemes = formatAiList(primaryStats.topAnsweredCategories.map((row) => row.label).slice(0, 3));
+    if (topLiked) {
+      answer = `${PLAYER_LABEL[primarySeat]} seems most positive around ${topLiked}, based on saved likes/dislikes and answer history.`;
+    } else if (answeredThemes) {
+      answer = `I don't have many direct likes/dislikes for ${PLAYER_LABEL[primarySeat]} yet, but the strongest saved themes are ${answeredThemes}.`;
+    } else {
+      answer = `I have some saved evidence for ${PLAYER_LABEL[primarySeat]}, but not enough direct preference signals to be confident.`;
+    }
+  } else if (intent.asksAboutRelationship || focusSeats.length === 2) {
+    const sharedLikes = Number(pairStats.bothLiked || 0);
+    const splitOpinions = Number(pairStats.splitOpinions || 0);
+    const sharedQuestions = formatAiList((pairStats.sharedFavouriteQuestions || []).slice(0, 3));
+    answer = `Across your saved history, I can see ${sharedLikes} shared liked questions and ${splitOpinions} split-opinion questions.${sharedQuestions ? ` Shared favourites include ${sharedQuestions}.` : ''}`;
+  } else if (primarySeat && primaryStats && (intent.asksForSummary || !intent.promptTokens.length)) {
+    const topThemes = formatAiList(primaryStats.topAnsweredCategories.map((row) => row.label).slice(0, 3));
+    answer = `${PLAYER_LABEL[primarySeat]} has ${primaryStats.standardAnswers} saved standard-game answers, ${primaryStats.quizAnswers} quiz answers, ${primaryStats.diaryEntries} diary entries, and ${primaryStats.liked} liked-question signals on record.${topThemes ? ` The strongest saved themes are ${topThemes}.` : ''}`;
+  } else if (selectedEvidence.length) {
+    const focusLabel = primarySeat ? PLAYER_LABEL[primarySeat] : 'your saved history';
+    answer = `I found ${selectedEvidence.length} relevant pieces of saved evidence for ${focusLabel} tied to "${truncateAiText(cleanPrompt, 72)}".`;
+  } else {
+    answer = "I can answer from saved evidence only, and I don't have a strong enough match for that question yet.";
+  }
+
+  const confidence = selectedEvidence.length >= 3 ? 'High' : selectedEvidence.length === 2 ? 'Medium' : selectedEvidence.length === 1 ? 'Low' : 'Low';
+  const evidenceLines = selectedEvidence.map((item) => `• ${formatAiEvidenceBullet(item)}`);
+  return {
+    confidence,
+    selectedEvidence,
+    text: [
+      answer,
+      `Confidence: ${confidence}. I am only using saved evidence and will not guess beyond it.`,
+      selectedEvidence.length ? 'Evidence used:' : '',
+      ...evidenceLines,
+    ].filter(Boolean).join('\n'),
+  };
 };
 
 const formatDate = (value) => {
@@ -1519,6 +1963,159 @@ function AuthScreen({
   );
 }
 
+function AiAssistantPanel({
+  user,
+  profile,
+  currentPlayerSeat,
+  aiEvidenceSnapshot,
+  aiChatMessages,
+  aiChatDraft,
+  setAiChatDraft,
+  sendAiChat,
+  isAiChatSending,
+}) {
+  const viewerSeat = currentPlayerSeat || inferSeatFromUser(user, profile) || 'jay';
+  const otherSeat = oppositeSeatOf(viewerSeat);
+  const viewerLabel = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[viewerSeat] || 'Player';
+  const selfStats = aiEvidenceSnapshot?.bySeat?.[viewerSeat] || finalizeAiSeatStats();
+  const otherStats = aiEvidenceSnapshot?.bySeat?.[otherSeat] || finalizeAiSeatStats();
+  const pairStats = aiEvidenceSnapshot?.pair || {};
+  const sourceCounts = aiEvidenceSnapshot?.sourceCounts || {};
+  const sharedFavourites = (pairStats.sharedFavouriteQuestions || []).slice(0, 3);
+
+  const renderSeatSummaryRow = (seat, stats) => (
+    <article className="mini-list-row ai-profile-row" key={`ai-profile-${seat}`}>
+      <strong>{PLAYER_LABEL[seat]} profile</strong>
+      <span>
+        {stats.standardAnswers} standard answers · {stats.quizAnswers} quiz answers · {stats.diaryEntries} diary entries
+      </span>
+      <small>
+        {stats.liked} liked · {stats.disliked} disliked · {stats.quizAccuracy}% quiz accuracy
+      </small>
+      <small>
+        {stats.topLikedCategories.length
+          ? `Top liked themes: ${formatAiList(stats.topLikedCategories.map((row) => row.label).slice(0, 3))}`
+          : stats.topAnsweredCategories.length
+            ? `Most answered themes: ${formatAiList(stats.topAnsweredCategories.map((row) => row.label).slice(0, 3))}`
+            : 'Not enough category evidence yet.'}
+      </small>
+    </article>
+  );
+
+  return (
+    <section className="ai-page-shell">
+      <section className="panel lobby-panel lobby-panel--ai ai-overview-card">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">AI</p>
+            <h2>Private Evidence Chat</h2>
+          </div>
+          <span className="status-pill">Private to {viewerLabel}</span>
+        </div>
+        <p className="panel-copy">
+          Ask about Jay, Kim, or your relationship. This assistant only answers from saved evidence and will say when the evidence is thin.
+        </p>
+
+        <div className="question-bank-status-grid ai-evidence-grid">
+          <article className="stat-tile">
+            <small>Total Evidence</small>
+            <strong>{aiEvidenceSnapshot?.totalEvidence || 0}</strong>
+            <span>saved signals the assistant can cite</span>
+          </article>
+          <article className="stat-tile">
+            <small>Shared Likes</small>
+            <strong>{pairStats.bothLiked || 0}</strong>
+            <span>questions both players liked</span>
+          </article>
+          <article className="stat-tile">
+            <small>Split Opinions</small>
+            <strong>{pairStats.splitOpinions || 0}</strong>
+            <span>questions one liked and one disliked</span>
+          </article>
+          <article className="stat-tile">
+            <small>Private Notes</small>
+            <strong>{selfStats.privateNotes || 0}</strong>
+            <span>only visible in your assistant</span>
+          </article>
+        </div>
+
+        <div className="summary-columns ai-summary-columns">
+          <section className="summary-column">
+            <div className="mini-heading">
+              <div>
+                <span>Player Profiles</span>
+                <h3>Saved patterns</h3>
+              </div>
+            </div>
+            <div className="mini-list">
+              {renderSeatSummaryRow(viewerSeat, selfStats)}
+              {renderSeatSummaryRow(otherSeat, otherStats)}
+            </div>
+          </section>
+
+          <section className="summary-column">
+            <div className="mini-heading">
+              <div>
+                <span>Evidence Mix</span>
+                <h3>What the AI can use</h3>
+              </div>
+            </div>
+            <div className="mini-list">
+              <article className="mini-list-row ai-profile-row">
+                <strong>Source coverage</strong>
+                <span>
+                  {sourceCounts.gameAnswers || 0} game answers · {sourceCounts.quizAnswers || 0} quiz answers · {sourceCounts.feedback || 0} likes/dislikes
+                </span>
+                <small>
+                  {sourceCounts.diaryEntries || 0} diary entries · {sourceCounts.privateNotes || 0} private notes
+                </small>
+              </article>
+              <article className="mini-list-row ai-profile-row">
+                <strong>Relationship signals</strong>
+                <span>
+                  {pairStats.completedStandardGames || 0} standard games · {pairStats.completedQuizGames || 0} quiz sessions
+                </span>
+                <small>
+                  {sharedFavourites.length
+                    ? `Shared favourites: ${formatAiList(sharedFavourites)}`
+                    : 'Shared favourites will appear here as you both like more questions.'}
+                </small>
+              </article>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section className="panel lobby-panel lobby-panel--ai ai-chat-card chat-column chat-column--locked">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Private Chat</p>
+            <h2>Ask The AI</h2>
+          </div>
+          <span className="status-pill">Evidence only</span>
+        </div>
+        <div className="ai-chat-note">
+          <strong>How it answers</strong>
+          <span>Saved game answers, quiz results, likes/dislikes, diary entries, and your private notes. No bluffing beyond the evidence.</span>
+        </div>
+        <ChatPanel
+          compact
+          messages={aiChatMessages}
+          draft={aiChatDraft}
+          onDraftChange={setAiChatDraft}
+          onSend={sendAiChat}
+          isBusy={isAiChatSending}
+          seat={viewerSeat}
+          displayName={viewerLabel}
+          emptyCopy="No private AI chat yet. Ask about Jay, Kim, or something you have both answered before."
+          placeholderText="Ask about Jay, Kim, or your saved relationship history"
+          sendLabel="Ask AI"
+        />
+      </section>
+    </section>
+  );
+}
+
 function LobbyScreen({
   user,
   profile,
@@ -1529,6 +2126,12 @@ function LobbyScreen({
   onSaveDisplayName,
   onUpdateQuestionNote,
   onDeleteQuestionNote,
+  aiEvidenceSnapshot,
+  aiChatMessages,
+  aiChatDraft,
+  isAiChatSending,
+  setAiChatDraft,
+  sendAiChat,
   playerAccounts,
   editingModeEnabled,
   onToggleEditingMode,
@@ -1640,6 +2243,7 @@ function LobbyScreen({
   const dashboardPills = [
     { id: 'gameLobby', label: 'Game Lobby', tone: 'lobby', icon: 'home' },
     { id: 'activity', label: 'Activity', tone: 'activity', icon: 'activity' },
+    { id: 'ai', label: 'AI', tone: 'ai', icon: 'spark' },
     { id: 'analytics', label: 'Analytics', tone: 'analytics', icon: 'graph' },
     { id: 'diary', label: 'Diary', tone: 'diary', icon: 'book' },
     { id: 'forfeitStore', label: 'Forfeit Store', tone: 'store', icon: 'gift' },
@@ -1820,6 +2424,13 @@ function LobbyScreen({
               strokeLinejoin="round"
             />
             <path d="M7 8h7M7 11h6M7 14h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        );
+      case 'spark':
+        return (
+          <svg {...sharedProps}>
+            <path d="m12 4 1.7 4.3L18 10l-4.3 1.7L12 16l-1.7-4.3L6 10l4.3-1.7L12 4Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+            <path d="m18.5 4 .7 1.8L21 6.5l-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8ZM6 16.5l.9 2.2L9 19.5l-2.1.8L6 22.5l-.9-2.2L3 19.5l2.1-.8.9-2.2Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
           </svg>
         );
       default:
@@ -2658,6 +3269,22 @@ function LobbyScreen({
                 </div>
               ) : null}
             </section>
+          </section>
+        ) : null}
+
+        {activeTab === 'ai' ? (
+          <section className="lobby-tab-panel" aria-label="AI" id="dashboard-ai">
+            <AiAssistantPanel
+              user={user}
+              profile={profile}
+              currentPlayerSeat={currentPlayerSeat}
+              aiEvidenceSnapshot={aiEvidenceSnapshot}
+              aiChatMessages={aiChatMessages}
+              aiChatDraft={aiChatDraft}
+              setAiChatDraft={setAiChatDraft}
+              sendAiChat={sendAiChat}
+              isAiChatSending={isAiChatSending}
+            />
           </section>
         ) : null}
 
@@ -4927,7 +5554,19 @@ function RevealPopup({ currentRound }) {
   );
 }
 
-function ChatPanel({ messages, draft, onDraftChange, onSend, isBusy, seat, displayName, compact = false }) {
+function ChatPanel({
+  messages,
+  draft,
+  onDraftChange,
+  onSend,
+  isBusy,
+  seat,
+  displayName,
+  compact = false,
+  emptyCopy = 'No chat yet. Send a message to the other player here.',
+  placeholderText = '',
+  sendLabel = 'Send',
+}) {
   const chatLogRef = useRef(null);
   const composerInputRef = useRef(null);
   const chatScrollStateRef = useRef({
@@ -5035,7 +5674,7 @@ function ChatPanel({ messages, draft, onDraftChange, onSend, isBusy, seat, displ
             </article>
           ))
           ) : (
-            <p className="empty-copy">No chat yet. Send a message to the other player here.</p>
+            <p className="empty-copy">{emptyCopy}</p>
           )}
       </div>
 
@@ -5050,14 +5689,14 @@ function ChatPanel({ messages, draft, onDraftChange, onSend, isBusy, seat, displ
           ref={composerInputRef}
           value={draft}
           onChange={(event) => onDraftChange(event.target.value)}
-          placeholder={`Message as ${displayName || 'player'}`}
+          placeholder={placeholderText || `Message as ${displayName || 'player'}`}
           maxLength={240}
           rows={2}
           enterKeyHint="send"
           onKeyDown={handleChatSubmitKeyDown}
         />
         <Button type="submit" className="primary-button compact" disabled={isBusy || !draft.trim()}>
-          Send
+          {sendLabel}
         </Button>
       </form>
     </>
@@ -8290,6 +8929,9 @@ function ProductionApp() {
   const [chatDraft, setChatDraft] = useState(defaultChatDraft);
   const [lobbyChatMessages, setLobbyChatMessages] = useState([]);
   const [lobbyChatDraft, setLobbyChatDraft] = useState(defaultChatDraft);
+  const [aiChatMessages, setAiChatMessages] = useState([]);
+  const [aiChatDraft, setAiChatDraft] = useState(defaultChatDraft);
+  const [isAiChatSending, setIsAiChatSending] = useState(false);
   const [lobbyGameName, setLobbyGameName] = useState('');
   const isMobileDashboard = useMediaQuery('(max-width: 900px)');
   const leavePendingGameRef = useRef('');
@@ -8728,6 +9370,24 @@ function ProductionApp() {
   }, [user?.uid, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
+    if (!firestore || !user?.uid || hasOpenRoomSession) {
+      setAiChatMessages([]);
+      return undefined;
+    }
+    const aiChatRef = query(
+      collection(firestore, 'users', user.uid, 'aiChatMessages'),
+      orderBy('createdAtMs', 'asc'),
+      limit(AI_CHAT_MESSAGE_LIMIT),
+    );
+    const unsubscribe = onSnapshot(
+      aiChatRef,
+      (snapshot) => setAiChatMessages(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
+      (error) => debugRoom('aiChatSnapshotError', { message: error?.message || String(error) }),
+    );
+    return unsubscribe;
+  }, [user?.uid, firestore, hasOpenRoomSession]);
+
+  useEffect(() => {
     if (!firestore || !user) {
       setQuestionFeedback([]);
       return undefined;
@@ -8909,6 +9569,18 @@ function ProductionApp() {
   const inferredSeat = currentSeat;
   const shouldBypassMobileAutoResumeRoom = Boolean(isMobileDashboard && autoResumedGameIdRef.current);
   const dashboardSeat = inferSeatFromUser(user, profile);
+  const aiEvidenceSnapshot = useMemo(
+    () =>
+      buildAiEvidenceSnapshot({
+        previousGames,
+        questionFeedback,
+        quizAnswers: visibleQuizAnswers,
+        diaryEntries,
+        questionNotes,
+        viewerSeat: dashboardSeat || 'jay',
+      }),
+    [dashboardSeat, diaryEntries, previousGames, questionFeedback, questionNotes, visibleQuizAnswers],
+  );
   const currentPlayerStoreId = dashboardSeat ? playerIdForSeat(dashboardSeat) : user?.uid || '';
   const currentPlayerIdentityTokens = useMemo(
     () =>
@@ -13969,6 +14641,70 @@ function ProductionApp() {
     }
   };
 
+  const sendAiChat = async (textOverride = '') => {
+    const text = String(textOverride || aiChatDraft || '').trim();
+    if (!text || isAiChatSending) return null;
+    if (!firestore || !user?.uid) {
+      setNotice('You must be signed in to use the AI page.');
+      return null;
+    }
+
+    const viewerSeat = dashboardSeat || inferSeatFromUser(user, profile) || 'jay';
+    const displayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[viewerSeat] || 'Player';
+    const reply = buildEvidenceBasedAiReply({
+      prompt: text,
+      viewerSeat,
+      evidenceSnapshot: aiEvidenceSnapshot,
+    });
+    const userMessageRef = doc(collection(firestore, 'users', user.uid, 'aiChatMessages'));
+    const assistantMessageRef = doc(collection(firestore, 'users', user.uid, 'aiChatMessages'));
+    const startedAtMs = Date.now();
+    const batch = writeBatch(firestore);
+    batch.set(userMessageRef, {
+      role: 'user',
+      seat: viewerSeat,
+      uid: user.uid,
+      displayName,
+      text,
+      createdAt: new Date(startedAtMs).toISOString(),
+      createdAtMs: startedAtMs,
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(assistantMessageRef, {
+      role: 'assistant',
+      seat: 'ai',
+      uid: 'kjk-ai',
+      displayName: 'KJK AI',
+      text: reply.text,
+      confidence: String(reply.confidence || '').toLowerCase(),
+      prompt: text,
+      evidence: (reply.selectedEvidence || []).map((item) => ({
+        id: item.id || '',
+        kind: item.kind || '',
+        seat: item.seat || '',
+        summary: item.summary || '',
+        sourceLabel: item.sourceLabel || '',
+      })),
+      createdAt: new Date(startedAtMs + 1).toISOString(),
+      createdAtMs: startedAtMs + 1,
+      updatedAt: serverTimestamp(),
+    });
+
+    setIsAiChatSending(true);
+    setAiChatDraft('');
+
+    try {
+      await batch.commit();
+      return assistantMessageRef.id;
+    } catch (error) {
+      setAiChatDraft((current) => current || text);
+      setNotice(String(error?.message || 'Could not send AI chat message.'));
+      return null;
+    } finally {
+      setIsAiChatSending(false);
+    }
+  };
+
   useEffect(() => {
     if (!firestore) return undefined;
     const currentDashboardTab = (typeof window !== 'undefined' && window.localStorage)
@@ -14207,6 +14943,12 @@ function ProductionApp() {
 	        questionNotes={questionNotes}
 	        questionFeedback={questionFeedback}
 	        quizAnswers={visibleQuizAnswers}
+        aiEvidenceSnapshot={aiEvidenceSnapshot}
+        aiChatMessages={aiChatMessages}
+        aiChatDraft={aiChatDraft}
+        isAiChatSending={isAiChatSending}
+        setAiChatDraft={setAiChatDraft}
+        sendAiChat={sendAiChat}
         onSaveDisplayName={saveDisplayNameProfile}
         onUpdateQuestionNote={updatePrivateQuestionNote}
         onDeleteQuestionNote={deletePrivateQuestionNote}
