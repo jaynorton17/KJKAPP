@@ -10234,6 +10234,8 @@ select:focus-visible {
 .top-bar--shell .dashboard-pill-nav {
   grid-area: nav;
   width: 100%;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
   margin: 0;
   padding: 0;
   border: 0;
@@ -10245,7 +10247,16 @@ select:focus-visible {
 }
 
 .top-bar--shell .dashboard-pill-nav .dashboard-pill {
-  min-height: 42px;
+  min-height: 40px;
+  height: 40px;
+  gap: 6px;
+  padding-inline: 12px;
+  font-size: 0.68rem;
+}
+
+.top-bar--shell .dashboard-pill-nav .dashboard-pill-icon {
+  width: 18px;
+  height: 18px;
 }
 
 .settings-menu summary {
