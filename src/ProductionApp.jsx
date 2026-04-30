@@ -9569,18 +9569,6 @@ function ProductionApp() {
   const inferredSeat = currentSeat;
   const shouldBypassMobileAutoResumeRoom = Boolean(isMobileDashboard && autoResumedGameIdRef.current);
   const dashboardSeat = inferSeatFromUser(user, profile);
-  const aiEvidenceSnapshot = useMemo(
-    () =>
-      buildAiEvidenceSnapshot({
-        previousGames,
-        questionFeedback,
-        quizAnswers: visibleQuizAnswers,
-        diaryEntries,
-        questionNotes,
-        viewerSeat: dashboardSeat || 'jay',
-      }),
-    [dashboardSeat, diaryEntries, previousGames, questionFeedback, questionNotes, visibleQuizAnswers],
-  );
   const currentPlayerStoreId = dashboardSeat ? playerIdForSeat(dashboardSeat) : user?.uid || '';
   const currentPlayerIdentityTokens = useMemo(
     () =>
@@ -9731,6 +9719,18 @@ function ProductionApp() {
         return !quizSessionId || knownQuizSessionIds.has(quizSessionId);
       }),
     [quizAnswers, knownQuizSessionIds],
+  );
+  const aiEvidenceSnapshot = useMemo(
+    () =>
+      buildAiEvidenceSnapshot({
+        previousGames,
+        questionFeedback,
+        quizAnswers: visibleQuizAnswers,
+        diaryEntries,
+        questionNotes,
+        viewerSeat: dashboardSeat || 'jay',
+      }),
+    [dashboardSeat, diaryEntries, previousGames, questionFeedback, questionNotes, visibleQuizAnswers],
   );
   const completedGameAuditRef = useRef(new Set());
   const selectedGameSummary = gameLibrary.find((entry) => entry.id === selectedGameId) || null;
