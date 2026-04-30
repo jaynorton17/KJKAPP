@@ -181,11 +181,15 @@ button:disabled {
 .game-lobby-grid {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 320px;
   align-items: stretch;
+  min-height: 0;
 }
 
 .lobby-chat-card {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   width: 320px;
+  min-height: 0;
 }
 
 @media (max-width: 900px) {
@@ -218,6 +222,7 @@ button:disabled {
 
 .game-lobby-grid > .lobby-panel {
   height: 100%;
+  min-height: 0;
 }
 
 .create-game-card::after,
@@ -4070,7 +4075,11 @@ button:disabled {
 }
 
 .chat-panel.compact-chat {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  height: 100%;
+  min-height: 0;
 }
 
 .room-panel {
@@ -4079,6 +4088,7 @@ button:disabled {
 
 .chat-log {
   display: grid;
+  flex: 1 1 auto;
   gap: 8px;
   max-height: 210px;
   min-height: 0;
@@ -4148,6 +4158,7 @@ button:disabled {
 
 .chat-compose {
   display: grid;
+  flex-shrink: 0;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: end;
@@ -4157,6 +4168,30 @@ button:disabled {
   min-height: 48px;
   max-height: 140px;
   resize: vertical;
+}
+
+.lobby-chat-card {
+  overflow: visible;
+}
+
+.lobby-chat-card .chat-panel.compact-chat {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.lobby-chat-card .chat-log {
+  max-height: none;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.lobby-chat-card .chat-compose {
+  flex-shrink: 0;
+}
+
+.lobby-chat-card .chat-compose textarea {
+  resize: none;
 }
 
 .mobile-chat-fab,
