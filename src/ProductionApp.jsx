@@ -1,4 +1,5 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
@@ -2178,9 +2179,17 @@ function MobileChatLauncher({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    document.body.classList.toggle('mobile-chat-sheet-open', Boolean(isOpen));
+    return () => {
+      document.body.classList.remove('mobile-chat-sheet-open');
+    };
+  }, [isOpen]);
+
   const unreadLabel = unreadCount > 9 ? '9+' : String(unreadCount);
 
-  return (
+  const launcherNode = (
     <>
       <button
         type="button"
@@ -2200,6 +2209,7 @@ function MobileChatLauncher({
               strokeLinejoin="round"
             />
           </svg>
+          {unreadCount > 0 ? <span className="mobile-chat-fab__dot" /> : null}
         </span>
         <span className="mobile-chat-fab__label">Chat</span>
         {unreadCount > 0 ? <span className="mobile-chat-fab__badge">{unreadLabel}</span> : null}
@@ -2238,6 +2248,9 @@ function MobileChatLauncher({
       ) : null}
     </>
   );
+
+  if (typeof document === 'undefined') return launcherNode;
+  return createPortal(launcherNode, document.body);
 }
 
 function MobileHostDrawer({ isOpen, onOpen, onClose, children }) {
@@ -3070,7 +3083,7 @@ function LobbyScreen({
   }, [activeTab, isMobileDashboardNav]);
 
 	  return (
-	    <main className="app production-app">
+	    <main className={`app production-app ${isMobileDashboardNav ? 'mobile-app' : ''}`}>
 	      <header className="top-bar top-bar--shell">
         {!isMobileDashboardNav ? (
           <div className="top-bar-left">

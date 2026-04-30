@@ -25,6 +25,10 @@ body {
   overflow-x: hidden;
 }
 
+body.mobile-chat-sheet-open {
+  overflow: hidden;
+}
+
 button,
 input,
 textarea,
@@ -4270,12 +4274,13 @@ button:disabled {
 
 .mobile-chat-fab {
   position: fixed;
-  right: clamp(14px, 4vw, 22px);
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
   bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
-  z-index: 1180;
+  z-index: 1260;
   align-items: center;
   gap: 8px;
   min-height: 56px;
+  max-width: calc(100vw - 24px);
   padding: 0 18px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 999px;
@@ -4292,6 +4297,7 @@ button:disabled {
 }
 
 .mobile-chat-fab__icon {
+  position: relative;
   display: inline-flex;
   width: 18px;
   height: 18px;
@@ -4307,6 +4313,17 @@ button:disabled {
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.mobile-chat-fab__dot {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #ff5166;
+  box-shadow: 0 0 0 2px rgba(9, 16, 30, 0.92), 0 0 10px rgba(255, 81, 102, 0.7);
 }
 
 .mobile-chat-fab__badge {
@@ -4347,25 +4364,35 @@ button:disabled {
 .mobile-host-drawer-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1190;
+  z-index: 1270;
   background: rgba(5, 8, 16, 0.54);
 }
 
 .mobile-chat-sheet-backdrop {
   display: flex;
   align-items: flex-end;
-  justify-content: center;
-  padding: 16px;
+  justify-content: flex-end;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding:
+    12px
+    12px
+    calc(env(safe-area-inset-bottom, 0px) + 16px)
+    12px;
 }
 
 .mobile-chat-sheet {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
-  width: min(100%, 480px);
-  max-height: min(78svh, 680px);
-  padding: 14px;
+  width: calc(100vw - 24px);
+  max-width: calc(100vw - 24px);
+  min-width: 0;
+  max-height: min(70dvh, 680px);
+  margin: 0;
+  padding: 14px 12px 12px;
   border-radius: 24px 24px 18px 18px;
+  overflow: hidden;
 }
 
 .mobile-chat-sheet__head,
@@ -4382,24 +4409,44 @@ button:disabled {
 }
 
 .mobile-chat-sheet .chat-panel.compact-chat {
+  display: grid;
   min-height: 0;
   height: 100%;
+  width: 100%;
+  min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
   grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .mobile-chat-sheet .chat-log {
   height: 100%;
   max-height: none;
+  min-width: 0;
   padding-right: 0;
 }
 
+.mobile-chat-sheet .chat-compose {
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
 .mobile-chat-sheet .chat-compose textarea {
+  width: 100%;
+  min-width: 0;
   max-height: min(26svh, 220px);
   resize: none;
+}
+
+.mobile-chat-sheet .chat-compose button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
 }
 
 .mobile-host-tab {
@@ -11599,6 +11646,22 @@ select:focus-visible {
     width: auto;
     flex: 0 0 auto;
     min-width: 132px;
+  }
+
+  .mobile-app .lobby-dashboard,
+  .mobile-app .lobby-tab-panel,
+  .mobile-app .game-lobby-grid,
+  .mobile-app .game-lobby-grid > .lobby-panel,
+  .mobile-app .lobby-panel,
+  .mobile-app .dashboard-subnav-shell,
+  .mobile-app .lobby-chat-card,
+  .mobile-app .lobby-chat-card .chat-panel.compact-chat,
+  .mobile-app .lobby-chat-card .chat-log,
+  .mobile-app .lobby-chat-card .chat-compose,
+  .mobile-app .lobby-chat-card .chat-compose textarea {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
   }
 
   .mobile-chat-fab,
