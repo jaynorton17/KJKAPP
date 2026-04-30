@@ -490,6 +490,13 @@ const getQuizSharedWagerAmount = (game = {}) => {
   if (agreement.status === 'wheel_countdown' && Number.isFinite(resultIndex) && Array.isArray(agreement.wheelSlots) && agreement.wheelSlots.length) {
     return Math.max(0, Number(agreement.wheelSlots[Math.max(0, Math.min(agreement.wheelSlots.length - 1, resultIndex))] || 0));
   }
+  if (agreement.status === 'agreed' || agreement.status === 'wheel_locked' || agreement.status === 'wheel_countdown') {
+    const jayWager = Number(game?.quizWagers?.jay);
+    const kimWager = Number(game?.quizWagers?.kim);
+    if (Number.isFinite(jayWager) && Number.isFinite(kimWager) && jayWager === kimWager) {
+      return Math.max(0, jayWager);
+    }
+  }
   return null;
 };
 const isQuizWagerAgreementLocked = (game = {}) => {
@@ -513,14 +520,16 @@ const isQuizWagerEffectivelyLocked = (game = {}, nowMs = Date.now()) => {
   if (agreement.status !== 'wheel_countdown') return false;
   const spinEndsAtMs = Date.parse(agreement.wheelSpinEndsAt || '');
   if (!Number.isFinite(spinEndsAtMs) || nowMs < spinEndsAtMs) return false;
-  return Number.isFinite(Number(getQuizSharedWagerAmount(game)));
+  const sharedAmount = getQuizSharedWagerAmount(game);
+  return sharedAmount !== null && Number.isFinite(Number(sharedAmount));
 };
 const buildQuizWagerLockPatch = (gameData = {}, nowIso = new Date().toISOString()) => {
   if (isQuizWagerAgreementLocked(gameData)) return null;
   if (!isQuizWagerEffectivelyLocked(gameData)) return null;
   const agreement = normalizeQuizWagerAgreement(gameData);
-  const amount = Math.max(0, Number(getQuizSharedWagerAmount(gameData) || 0));
-  if (!Number.isFinite(amount)) return null;
+  const sharedAmount = getQuizSharedWagerAmount(gameData);
+  if (sharedAmount === null || !Number.isFinite(Number(sharedAmount))) return null;
+  const amount = Math.max(0, Number(sharedAmount));
   const wasWheelLock = agreement.status === 'wheel_countdown'
     || agreement.requestKind === 'wheel'
     || Boolean(agreement.lockedByWheel);
@@ -14571,73 +14580,66 @@ function ProductionApp() {
 
     const gameRef = makeGameRef();
     if (!gameRef || !firestore) return;
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const previousReadyState = readyState;
+    const previousAgreement = game?.quizWagerAgreement || null;
+    const previousQuizWagers = game?.quizWagers || {};
+    const liveLockSource = isQuizWagerEffectivelyLocked(game, nowMs)
+      ? game
+      : {
+          ...game,
+          quizWagerAgreement: game?.quizWagerAgreement || null,
+          quizWagers: game?.quizWagers || {},
+        };
+    const lockPatch = buildQuizWagerLockPatch(liveLockSource, nowIso);
+    if (!isQuizWagerAgreementLocked(game) && !isQuizWagerEffectivelyLocked(game, nowMs) && !lockPatch) {
+      return;
+    }
+    const nextReadyState = buildQuizSetupCountdownState(readyState, ready, nowMs);
     debugRoom('quizSetupCountdownAttempt', {
       gameId: game?.id || gameId || '',
       stage,
       ready,
       countdownEndsAt: readyState.countdownEndsAt || '',
     });
-    const transactionResult = await runTransaction(firestore, async (transaction) => {
-      const snap = await transaction.get(gameRef);
-      if (!snap.exists()) throw new Error('Room not found.');
-      const data = snap.data() || {};
-      if (data.currentRound) return { status: 'already-launched', currentRound: data.currentRound };
-      const nowMs = Date.now();
-      const nowIso = new Date(nowMs).toISOString();
-      const liveReadyState = normalizeQuizReadyState(data.quizReadyState || null, 'opening');
-      const liveReady = liveReadyState.ready || { jay: false, kim: false };
-      const mergedReady = {
-        jay: Boolean(liveReady.jay),
-        kim: Boolean(liveReady.kim),
-      };
-      if (!mergedReady.jay || !mergedReady.kim) {
-        return { status: 'waiting-for-both-ready', quizReadyState: liveReadyState };
-      }
-      const liveLockSource = isQuizWagerEffectivelyLocked(data)
-        ? data
-        : {
-            ...data,
-            quizWagerAgreement: game?.quizWagerAgreement || data.quizWagerAgreement || null,
-            quizWagers: game?.quizWagers || data.quizWagers || {},
-          };
-      const lockPatch = buildQuizWagerLockPatch(liveLockSource, nowIso);
-      if (!isQuizWagerAgreementLocked(data) && !isQuizWagerEffectivelyLocked(data) && !lockPatch) {
-        return { status: 'wager-not-locked', quizReadyState: liveReadyState };
-      }
-      const nextReadyState = buildQuizSetupCountdownState(liveReadyState, mergedReady, nowMs);
-      transaction.update(gameRef, {
+    setGame((current) => current && !current.currentRound
+      ? {
+          ...current,
+          ...(lockPatch || {}),
+          quizReadyState: nextReadyState,
+          updatedAt: new Date().toISOString(),
+        }
+      : current);
+    try {
+      await updateDoc(gameRef, {
         ...(lockPatch || {}),
         quizReadyState: nextReadyState,
         updatedAt: serverTimestamp(),
       });
-      return { status: 'countdown-started', quizReadyState: nextReadyState };
-    });
+    } catch (error) {
+      setGame((current) => current && !current.currentRound
+        ? {
+            ...current,
+            quizWagerAgreement: previousAgreement,
+            quizWagers: previousQuizWagers,
+            quizReadyState: previousReadyState,
+            updatedAt: new Date().toISOString(),
+          }
+        : current);
+      debugRoom('quizSetupCountdownFailed', {
+        gameId: game?.id || gameId || '',
+        message: error?.message || String(error),
+      });
+      throw error;
+    }
     debugRoom('quizSetupCountdownComplete', {
       gameId: game?.id || gameId || '',
-      status: transactionResult?.status || '',
-      stage: transactionResult?.quizReadyState?.stage || '',
-      ready: transactionResult?.quizReadyState?.ready || {},
-      countdownEndsAt: transactionResult?.quizReadyState?.countdownEndsAt || '',
+      status: 'countdown-started',
+      stage: nextReadyState.stage || '',
+      ready: nextReadyState.ready || {},
+      countdownEndsAt: nextReadyState.countdownEndsAt || '',
     });
-    if (transactionResult?.currentRound) {
-      setGame((current) => current && !current.currentRound
-        ? {
-            ...current,
-            currentRound: transactionResult.currentRound,
-            quizReadyState: null,
-            status: 'active',
-            updatedAt: new Date().toISOString(),
-          }
-        : current);
-    } else if (transactionResult?.quizReadyState) {
-      setGame((current) => current && !current.currentRound
-        ? {
-            ...current,
-            quizReadyState: transactionResult.quizReadyState,
-            updatedAt: new Date().toISOString(),
-          }
-        : current);
-    }
   };
 
   const launchQuizRoundFromSetup = async () => {
