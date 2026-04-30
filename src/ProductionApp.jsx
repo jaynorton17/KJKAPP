@@ -8930,6 +8930,7 @@ function ProductionApp() {
   const [lobbyChatMessages, setLobbyChatMessages] = useState([]);
   const [lobbyChatDraft, setLobbyChatDraft] = useState(defaultChatDraft);
   const [aiChatMessages, setAiChatMessages] = useState([]);
+  const [optimisticAiChatMessages, setOptimisticAiChatMessages] = useState([]);
   const [aiChatDraft, setAiChatDraft] = useState(defaultChatDraft);
   const [isAiChatSending, setIsAiChatSending] = useState(false);
   const [lobbyGameName, setLobbyGameName] = useState('');
@@ -9372,6 +9373,7 @@ function ProductionApp() {
   useEffect(() => {
     if (!firestore || !user?.uid || hasOpenRoomSession) {
       setAiChatMessages([]);
+      setOptimisticAiChatMessages([]);
       return undefined;
     }
     const aiChatRef = query(
@@ -9382,7 +9384,12 @@ function ProductionApp() {
     const unsubscribe = onSnapshot(
       aiChatRef,
       (snapshot) => setAiChatMessages(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
-      (error) => debugRoom('aiChatSnapshotError', { message: error?.message || String(error) }),
+      (error) => {
+        debugRoom('aiChatSnapshotError', { message: error?.message || String(error) });
+        if (String(error?.code || '').includes('permission-denied') || String(error?.message || '').toLowerCase().includes('insufficient permissions')) {
+          setNotice((current) => current || 'AI chat is showing local replies, but private AI history cannot sync until Firestore permissions are updated.');
+        }
+      },
     );
     return unsubscribe;
   }, [user?.uid, firestore, hasOpenRoomSession]);
@@ -9720,6 +9727,24 @@ function ProductionApp() {
       }),
     [quizAnswers, knownQuizSessionIds],
   );
+  const visibleAiChatMessages = useMemo(() => {
+    const merged = new Map();
+    [...(optimisticAiChatMessages || []), ...(aiChatMessages || [])].forEach((entry) => {
+      if (!entry?.id) return;
+      merged.set(entry.id, entry);
+    });
+    return [...merged.values()].sort(
+      (left, right) =>
+        Number(left?.createdAtMs || 0) - Number(right?.createdAtMs || 0)
+        || String(left?.createdAt || '').localeCompare(String(right?.createdAt || '')),
+    );
+  }, [aiChatMessages, optimisticAiChatMessages]);
+  useEffect(() => {
+    if (!aiChatMessages.length) return;
+    const syncedIds = new Set(aiChatMessages.map((entry) => entry?.id).filter(Boolean));
+    if (!syncedIds.size) return;
+    setOptimisticAiChatMessages((current) => current.filter((entry) => !syncedIds.has(entry?.id)));
+  }, [aiChatMessages]);
   const aiEvidenceSnapshot = useMemo(
     () =>
       buildAiEvidenceSnapshot({
@@ -14659,8 +14684,8 @@ function ProductionApp() {
     const userMessageRef = doc(collection(firestore, 'users', user.uid, 'aiChatMessages'));
     const assistantMessageRef = doc(collection(firestore, 'users', user.uid, 'aiChatMessages'));
     const startedAtMs = Date.now();
-    const batch = writeBatch(firestore);
-    batch.set(userMessageRef, {
+    const optimisticUserMessage = {
+      id: userMessageRef.id,
       role: 'user',
       seat: viewerSeat,
       uid: user.uid,
@@ -14668,9 +14693,9 @@ function ProductionApp() {
       text,
       createdAt: new Date(startedAtMs).toISOString(),
       createdAtMs: startedAtMs,
-      updatedAt: serverTimestamp(),
-    });
-    batch.set(assistantMessageRef, {
+    };
+    const optimisticAssistantMessage = {
+      id: assistantMessageRef.id,
       role: 'assistant',
       seat: 'ai',
       uid: 'kjk-ai',
@@ -14687,18 +14712,36 @@ function ProductionApp() {
       })),
       createdAt: new Date(startedAtMs + 1).toISOString(),
       createdAtMs: startedAtMs + 1,
+    };
+    const batch = writeBatch(firestore);
+    batch.set(userMessageRef, {
+      ...optimisticUserMessage,
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(assistantMessageRef, {
+      ...optimisticAssistantMessage,
       updatedAt: serverTimestamp(),
     });
 
     setIsAiChatSending(true);
     setAiChatDraft('');
+    setOptimisticAiChatMessages((current) => {
+      const merged = new Map(current.map((entry) => [entry.id, entry]));
+      merged.set(optimisticUserMessage.id, optimisticUserMessage);
+      merged.set(optimisticAssistantMessage.id, optimisticAssistantMessage);
+      return [...merged.values()].sort((left, right) => Number(left?.createdAtMs || 0) - Number(right?.createdAtMs || 0));
+    });
 
     try {
       await batch.commit();
       return assistantMessageRef.id;
     } catch (error) {
       setAiChatDraft((current) => current || text);
-      setNotice(String(error?.message || 'Could not send AI chat message.'));
+      if (String(error?.code || '').includes('permission-denied') || String(error?.message || '').toLowerCase().includes('insufficient permissions')) {
+        setNotice('AI reply shown locally, but private AI history could not be saved until Firestore permissions are updated.');
+      } else {
+        setNotice(String(error?.message || 'Could not send AI chat message.'));
+      }
       return null;
     } finally {
       setIsAiChatSending(false);
@@ -14944,7 +14987,7 @@ function ProductionApp() {
 	        questionFeedback={questionFeedback}
 	        quizAnswers={visibleQuizAnswers}
         aiEvidenceSnapshot={aiEvidenceSnapshot}
-        aiChatMessages={aiChatMessages}
+        aiChatMessages={visibleAiChatMessages}
         aiChatDraft={aiChatDraft}
         isAiChatSending={isAiChatSending}
         setAiChatDraft={setAiChatDraft}
