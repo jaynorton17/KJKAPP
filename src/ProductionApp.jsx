@@ -187,6 +187,7 @@ const AI_SEARCH_STOPWORDS = new Set([
   'your',
 ]);
 const AI_SEARCH_TOKEN_ALIASES = {
+  sec: ['sex', 'sexual', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky', 'fantasy', 'fantasies'],
   sex: ['sexual', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky'],
   sexual: ['sex', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky'],
   sexy: ['sex', 'sexual'],
@@ -194,9 +195,63 @@ const AI_SEARCH_TOKEN_ALIASES = {
   intimacy: ['intimate', 'sex', 'sexual'],
   kink: ['kinky', 'sexual', 'sex'],
   kinky: ['kink', 'sexual', 'sex'],
+  fantasy: ['fantasies', 'sexual', 'sex'],
+  fantasies: ['fantasy', 'sexual', 'sex'],
+  horny: ['sexual', 'sex'],
+  masturbating: ['sexual', 'sex'],
   romance: ['romantic'],
   romantic: ['romance'],
 };
+const AI_TOPIC_CATEGORY_HINTS = {
+  sexual: [
+    'sex',
+    'sec',
+    'sexual',
+    'sexy',
+    'intimate',
+    'intimacy',
+    'kink',
+    'kinky',
+    'fantasy',
+    'fantasies',
+    'turn on',
+    'turn-on',
+    'turn ons',
+    'turn-ons',
+    'masturbat',
+    'horny',
+    'bedroom',
+    'flirty',
+  ],
+};
+const AI_RECOMMENDATION_STOPWORDS = new Set([
+  'anniversary',
+  'best',
+  'birthday',
+  'buy',
+  'christmas',
+  'gift',
+  'gifts',
+  'get',
+  'getting',
+  'good',
+  'idea',
+  'ideas',
+  'present',
+  'presents',
+  'recommend',
+  'recommendation',
+  'recommendations',
+  'should',
+  'suggest',
+  'suggestion',
+  'suggestions',
+  'surprise',
+  'valentine',
+  'valentines',
+]);
+const AI_RECOMMENDATION_QUESTION_PATTERN = /favo[u]?rite|love|enjoy|ideal|dream|wish|bucket list|relax|hobby|collect|style|wear|food|drink|music|film|movie|travel|holiday|trip|date|weekend|self care|pamper|shopping|turn on|fantasy|romantic/i;
+const AI_RECOMMENDATION_WEAK_ANSWER_PATTERN = /^(yes|no|maybe|true|false|n\/a|na|none|nothing|jay|kim|both|either|neither|idk|i do not know|i don't know|dont know)$/i;
 const DIRECT_AI_EVIDENCE_KINDS = new Set(['game-answer', 'diary-entry', 'private-note']);
 const INDIRECT_AI_EVIDENCE_KINDS = new Set(['question-feedback']);
 const normalizeQuizAnswerText = (value = '') =>
@@ -764,6 +819,21 @@ const tokenizeAiPromptCoreText = (value = '') =>
       .filter((token) => token !== 'jay' && token !== 'kim' && !AI_SEARCH_STOPWORDS.has(token)),
   )];
 
+const detectAiTopicCategories = (prompt = '') => {
+  const normalizedPrompt = normalizeText(prompt).toLowerCase();
+  return Object.entries(AI_TOPIC_CATEGORY_HINTS)
+    .filter(([, hints]) => (hints || []).some((hint) => normalizedPrompt.includes(hint)))
+    .map(([category]) => category);
+};
+
+const isAiRecommendationUsefulAnswer = (value = '') => {
+  const normalizedValue = normalizeText(value);
+  if (!normalizedValue) return false;
+  if (AI_RECOMMENDATION_WEAK_ANSWER_PATTERN.test(normalizedValue)) return false;
+  if (/^\d+$/.test(normalizedValue)) return false;
+  return normalizedValue.length >= 2;
+};
+
 const formatAiList = (items = []) => {
   const cleaned = [...new Set((items || []).map((item) => normalizeText(item)).filter(Boolean))];
   if (!cleaned.length) return '';
@@ -1055,7 +1125,7 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
   const normalizedPrompt = normalizeText(prompt).toLowerCase();
   const rawContentTokens = tokenizeAiPromptCoreText(prompt);
   const promptTokens = [...new Set(tokenizeAiSearchText(prompt))];
-  const contentTokens = promptTokens.filter((token) => token !== 'jay' && token !== 'kim');
+  const matchedTopicCategories = detectAiTopicCategories(prompt);
   const mentionsJay = /\bjay\b/.test(normalizedPrompt);
   const mentionsKim = /\bkim\b/.test(normalizedPrompt);
   const asksAboutRelationship = /\bwe\b|\bus\b|\bour\b|both of us|the two of us|together|relationship|compatib|match/.test(normalizedPrompt);
@@ -1065,6 +1135,15 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
   const asksAboutNotes = /note|flagged|private note/.test(normalizedPrompt);
   const asksAboutDirectAnswers = /what has|what did|said about|say about|answered|answer about|what does|what do/.test(normalizedPrompt);
   const asksForSummary = /what is|what's|tell me about|profile|summar|describe|who is/.test(normalizedPrompt);
+  const asksForGiftRecommendation = /birthday|gift|present|anniversary|christmas|valentine|surprise|what should i get|what should i buy|what would be a good/.test(normalizedPrompt);
+  const asksForRecommendation = asksForGiftRecommendation || /recommend|suggest|idea for|good idea|best idea|should i get|should i buy/.test(normalizedPrompt);
+  const contentTokens = promptTokens.filter((token) => token !== 'jay' && token !== 'kim');
+  const matchContentTokens = asksForRecommendation
+    ? contentTokens.filter((token) => !AI_RECOMMENDATION_STOPWORDS.has(token))
+    : contentTokens;
+  const matchPromptTokens = asksForRecommendation
+    ? promptTokens.filter((token) => token === 'jay' || token === 'kim' || !AI_RECOMMENDATION_STOPWORDS.has(token))
+    : promptTokens;
   const focusSeats = mentionsJay && mentionsKim
     ? ['jay', 'kim']
     : mentionsJay
@@ -1086,10 +1165,21 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
     asksAboutNotes,
     asksAboutDirectAnswers,
     asksForSummary,
+    asksForGiftRecommendation,
+    asksForRecommendation,
     rawContentTokens,
     contentTokens,
-    hasSpecificTopic: contentTokens.length > 0,
-    topicLabel: rawContentTokens.length ? rawContentTokens.join(' ') : 'that topic',
+    matchPromptTokens,
+    matchContentTokens,
+    matchedTopicCategories,
+    hasSpecificTopic: matchContentTokens.length > 0 || matchedTopicCategories.length > 0,
+    topicLabel: matchContentTokens.length
+      ? matchContentTokens.join(' ')
+      : matchedTopicCategories.length
+        ? matchedTopicCategories.join(' ')
+        : rawContentTokens.length
+          ? rawContentTokens.join(' ')
+          : 'that topic',
     focusSeats,
   };
 };
@@ -1217,6 +1307,78 @@ const buildAiSeatNarrative = ({
   return highlights.map((item) => buildAiItemDirectSentence(item, seat)).join(' ');
 };
 
+const pickAiSeatRecommendationEvidence = (items = [], seat = 'jay', intent = {}, limit = 3) => {
+  const seen = new Set();
+  return items
+    .filter((item) => item?.seat === seat && item.kind !== 'quiz-answer')
+    .map((item) => {
+      let recommendationScore = Number(item.score || 0);
+      const questionText = normalizeText(item.question || '');
+      const answerText = normalizeText(item.answer || '');
+      if (item.kind === 'private-note') recommendationScore += 18;
+      else if (item.kind === 'diary-entry') recommendationScore += 16;
+      else if (item.kind === 'game-answer') recommendationScore += 15;
+      else if (item.kind === 'question-feedback') recommendationScore += item.feedbackValue === 'liked' ? 9 : 2;
+      if (AI_RECOMMENDATION_QUESTION_PATTERN.test(questionText)) recommendationScore += 12;
+      if (isAiRecommendationUsefulAnswer(answerText)) recommendationScore += 10;
+      else if (item.kind !== 'question-feedback') recommendationScore -= 8;
+      if (item.category) recommendationScore += 4;
+      return { ...item, recommendationScore };
+    })
+    .sort(
+      (left, right) =>
+        Number(right.recommendationScore || 0) - Number(left.recommendationScore || 0)
+        || Number(right.createdAtMs || 0) - Number(left.createdAtMs || 0),
+    )
+    .filter((item) => {
+      const key = [item.kind || '', normalizeText(item.question || ''), normalizeText(item.answer || ''), normalizeText(item.category || '')].join('::');
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+};
+
+const buildAiSeatRecommendationFallbackSentence = (seat = 'jay', stats = null) => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  const topLikedThemes = formatAiList((stats?.topLikedCategories || []).map((row) => row.label).slice(0, 2));
+  const topAnsweredThemes = formatAiList((stats?.topAnsweredCategories || []).map((row) => row.label).slice(0, 2));
+  if (topLikedThemes) {
+    return `A safe present direction for ${playerLabel} would be something tied to ${topLikedThemes}. That is where the strongest positive signals show up in the saved answers.`;
+  }
+  if (topAnsweredThemes) {
+    return `A sensible present direction for ${playerLabel} would be something linked to ${topAnsweredThemes}, because those are the themes that come up most in the saved answers.`;
+  }
+  return `I do not have enough saved preference detail yet to suggest a confident present for ${playerLabel}.`;
+};
+
+const buildAiSeatRecommendationNarrative = ({
+  seat = 'jay',
+  scoredEvidence = [],
+  intent = {},
+  stats = null,
+} = {}) => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  const recommendationItems = pickAiSeatRecommendationEvidence(scoredEvidence, seat, intent, 3);
+  if (!recommendationItems.length) return buildAiSeatRecommendationFallbackSentence(seat, stats);
+  const [primaryItem, ...supportItems] = recommendationItems;
+  const primaryAnswer = normalizeText(primaryItem.answer || '');
+  const primaryCategory = normalizeText(primaryItem.category || '');
+  let opening = '';
+  if (isAiRecommendationUsefulAnswer(primaryAnswer)) {
+    opening = `Based on ${playerLabel}'s saved answers, a good ${intent.asksForGiftRecommendation ? 'gift' : 'idea'} would be something built around "${truncateAiText(primaryAnswer, 56)}"${primaryCategory ? ` in the ${primaryCategory} lane` : ''}.`;
+  } else if (primaryCategory) {
+    opening = `Based on ${playerLabel}'s saved history, a good ${intent.asksForGiftRecommendation ? 'gift' : 'idea'} would be something in the ${primaryCategory} lane.`;
+  } else {
+    opening = `Based on ${playerLabel}'s saved answers, I would lean toward something personal and clearly tied to the themes they keep coming back to.`;
+  }
+  const supportLead = primaryItem.kind === 'question-feedback'
+    ? `${playerLabel} ${primaryItem.feedbackValue === 'disliked' ? 'disliked' : 'liked'} the question "${truncateAiText(primaryItem.question || 'that question', 100)}".`
+    : buildAiItemDirectSentence(primaryItem, seat);
+  const supportLines = [supportLead, ...supportItems.map((item) => buildAiItemDirectSentence(item, seat))];
+  return `${opening} ${supportLines.map((line, index) => (index === 0 ? `Most relevant clue: ${line}` : `Also relevant: ${line}`)).join(' ')}`;
+};
+
 const buildAiDisplayedEvidence = ({
   scoredEvidence = [],
   focusSeats = [],
@@ -1247,16 +1409,21 @@ const buildAiDisplayedEvidence = ({
 const scoreAiEvidenceItem = (item = {}, intent = {}) => {
   let score = 0;
   const itemTokenSet = new Set(item.searchTokens || []);
-  const contentTokens = intent.contentTokens || [];
+  const contentTokens = intent.matchContentTokens || intent.contentTokens || [];
+  const promptTokens = intent.matchPromptTokens || intent.promptTokens || [];
+  const matchedTopicCategories = intent.matchedTopicCategories || [];
+  const normalizedItemCategory = normalizeText(item.category || '').toLowerCase();
+  const categoryTopicMatch = Boolean(normalizedItemCategory && matchedTopicCategories.includes(normalizedItemCategory));
   let contentMatches = 0;
-  (intent.promptTokens || []).forEach((token) => {
+  promptTokens.forEach((token) => {
     if (!itemTokenSet.has(token)) return;
     score += token.length >= 5 ? 4 : 2;
     if (contentTokens.includes(token)) contentMatches += 1;
   });
-  if (intent.hasSpecificTopic && !contentMatches) return 0;
+  if (intent.hasSpecificTopic && !contentMatches && !categoryTopicMatch) return 0;
   if (intent.focusSeats?.includes(item.seat)) score += 4;
   if (contentMatches) score += contentMatches * 6;
+  if (categoryTopicMatch) score += 18;
   if (intent.asksAboutPreference && item.kind === 'question-feedback') score += 8;
   if (intent.asksAboutQuiz && item.kind === 'quiz-answer') score += 8;
   if (intent.asksAboutDiary && item.kind === 'diary-entry') score += 8;
@@ -1276,7 +1443,9 @@ const scoreAiEvidenceItem = (item = {}, intent = {}) => {
 
 const pickFallbackAiEvidence = (snapshot = {}, intent = {}, viewerSeat = 'jay') => {
   const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
-  const candidateKinds = intent.asksAboutNotes
+  const candidateKinds = intent.asksForRecommendation
+    ? ['private-note', 'diary-entry', 'game-answer', 'question-feedback']
+    : intent.asksAboutNotes
     ? ['private-note']
     : intent.asksAboutDiary
       ? ['diary-entry', 'game-answer']
@@ -1314,7 +1483,9 @@ const buildEvidenceBasedAiReply = ({
   const primaryStats = primarySeat ? evidenceSnapshot.bySeat?.[primarySeat] : null;
   const pairStats = evidenceSnapshot.pair || {};
   const fallbackEvidence = pickFallbackAiEvidence(evidenceSnapshot, intent, viewerSeat);
-  const selectedEvidence = scoredEvidence.length
+  const selectedEvidence = intent.asksForRecommendation && primarySeat
+    ? pickAiSeatRecommendationEvidence(scoredEvidence.length ? scoredEvidence : fallbackEvidence, primarySeat, intent, AI_EVIDENCE_PREVIEW_LIMIT)
+    : scoredEvidence.length
     ? buildAiDisplayedEvidence({
         scoredEvidence,
         focusSeats,
@@ -1326,6 +1497,13 @@ const buildEvidenceBasedAiReply = ({
   let answer = '';
   if (!selectedEvidence.length && !evidenceSnapshot.totalEvidence) {
     answer = "I don't have enough saved evidence yet. Play more rounds, use likes/dislikes, or add diary entries first.";
+  } else if (primarySeat && intent.asksForRecommendation) {
+    answer = buildAiSeatRecommendationNarrative({
+      seat: primarySeat,
+      scoredEvidence: scoredEvidence.length ? scoredEvidence : fallbackEvidence,
+      intent,
+      stats: primaryStats,
+    });
   } else if (focusSeats.length === 2) {
     const seatBlocks = focusSeats.map((seat) => {
       const seatStats = evidenceSnapshot.bySeat?.[seat] || null;
@@ -1363,7 +1541,13 @@ const buildEvidenceBasedAiReply = ({
   }
 
   const hasDirectAnswerEvidence = selectedEvidence.some((item) => DIRECT_AI_EVIDENCE_KINDS.has(item.kind));
-  const confidence = intent.asksAboutDirectAnswers
+  const confidence = intent.asksForRecommendation
+    ? selectedEvidence.some((item) => DIRECT_AI_EVIDENCE_KINDS.has(item.kind))
+      ? (selectedEvidence.length >= 2 ? 'High' : 'Medium')
+      : selectedEvidence.length
+        ? 'Medium'
+        : 'Low'
+    : intent.asksAboutDirectAnswers
     ? hasDirectAnswerEvidence
       ? (selectedEvidence.length >= 2 ? 'High' : 'Medium')
       : 'Low'
