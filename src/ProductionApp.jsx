@@ -13245,67 +13245,85 @@ function ProductionApp() {
 
     const gameRef = makeGameRef();
     if (!gameRef || !firestore) return;
-    await runTransaction(firestore, async (transaction) => {
-      const snap = await transaction.get(gameRef);
-      if (!snap.exists()) throw new Error('Room not found.');
-      const data = snap.data() || {};
-      if (data.currentRound) return;
-      const liveAgreement = normalizeQuizWagerAgreement(data);
-      const liveAgreementLocked = isQuizWagerAgreementLocked(data);
-      const canPromoteLocalLock = !liveAgreementLocked && isQuizWagerEffectivelyLocked(game);
-      const liveReadyState = data.quizReadyState || defaultQuizReadyState('opening');
-      const setupReady = liveReadyState.ready || { jay: false, kim: false };
-      const mergedReady = {
-        jay: Boolean(setupReady.jay || ready.jay),
-        kim: Boolean(setupReady.kim || ready.kim),
-      };
-      const liveStage = normalizeText(liveReadyState.stage || 'opening') || 'opening';
-      const liveCountdownEndsAtMs = Date.parse(liveReadyState.countdownEndsAt || '');
-      const liveCountdownReady = liveStage === 'countdown' && Number.isFinite(liveCountdownEndsAtMs) && Date.now() >= liveCountdownEndsAtMs;
-      if (!liveCountdownReady && !localCountdownReady) return;
-      if (!mergedReady.jay || !mergedReady.kim) return;
-      if (!liveAgreementLocked && !canPromoteLocalLock) return;
-      const promotedAgreement = canPromoteLocalLock
+    const snap = await getDoc(gameRef);
+    if (!snap.exists()) throw new Error('Room not found.');
+    const data = snap.data() || {};
+    if (data.currentRound) return;
+    const liveAgreement = normalizeQuizWagerAgreement(data);
+    const liveAgreementLocked = isQuizWagerAgreementLocked(data);
+    const canPromoteLocalLock = !liveAgreementLocked && isQuizWagerEffectivelyLocked(game);
+    const liveReadyState = data.quizReadyState || defaultQuizReadyState('opening');
+    const setupReady = liveReadyState.ready || { jay: false, kim: false };
+    const mergedReady = {
+      jay: Boolean(setupReady.jay || ready.jay),
+      kim: Boolean(setupReady.kim || ready.kim),
+    };
+    const liveStage = normalizeText(liveReadyState.stage || 'opening') || 'opening';
+    const liveCountdownEndsAtMs = Date.parse(liveReadyState.countdownEndsAt || '');
+    const liveCountdownReady = liveStage === 'countdown' && Number.isFinite(liveCountdownEndsAtMs) && Date.now() >= liveCountdownEndsAtMs;
+    if (!liveCountdownReady && !localCountdownReady) return;
+    if (!mergedReady.jay || !mergedReady.kim) return;
+    if (!liveAgreementLocked && !canPromoteLocalLock) return;
+    const promotedAgreement = canPromoteLocalLock
+      ? {
+          ...liveAgreement,
+          ...normalizeQuizWagerAgreement(game),
+          status: normalizeQuizWagerAgreement(game).status || 'wheel_locked',
+          requestKind: normalizeQuizWagerAgreement(game).requestKind || liveAgreement.requestKind || 'wheel',
+          amount: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
+          wheelResultAmount: Number(normalizeQuizWagerAgreement(game).wheelResultAmount || getQuizSharedWagerAmount(game) || 0),
+          proposalStatus: 'accepted',
+          lockedByWheel: Boolean(normalizeQuizWagerAgreement(game).lockedByWheel || liveAgreement.lockedByWheel || normalizeQuizWagerAgreement(game).status === 'wheel_locked'),
+          lockedAt: normalizeQuizWagerAgreement(game).lockedAt || new Date().toISOString(),
+        }
+      : null;
+    const sharedQueueIds = Array.isArray(data.questionQueueIds) && data.questionQueueIds.length
+      ? data.questionQueueIds
+      : Array.isArray(game.questionQueueIds)
+        ? game.questionQueueIds
+        : [];
+    const sourceGame = {
+      ...game,
+      ...data,
+      id: game.id,
+      questionQueueIds: sharedQueueIds,
+      quizWagerAgreement: promotedAgreement || data.quizWagerAgreement || game.quizWagerAgreement || null,
+      quizWagers: promotedAgreement
         ? {
-            ...liveAgreement,
-            ...normalizeQuizWagerAgreement(game),
-            status: normalizeQuizWagerAgreement(game).status || 'wheel_locked',
-            requestKind: normalizeQuizWagerAgreement(game).requestKind || liveAgreement.requestKind || 'wheel',
-            amount: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
-            wheelResultAmount: Number(normalizeQuizWagerAgreement(game).wheelResultAmount || getQuizSharedWagerAmount(game) || 0),
-            proposalStatus: 'accepted',
-            lockedByWheel: Boolean(normalizeQuizWagerAgreement(game).lockedByWheel || liveAgreement.lockedByWheel || normalizeQuizWagerAgreement(game).status === 'wheel_locked'),
-            lockedAt: normalizeQuizWagerAgreement(game).lockedAt || new Date().toISOString(),
+            jay: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
+            kim: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
           }
-        : null;
-      const sourceGame = { ...game, ...data, id: game.id };
-      const drawn = drawQuestion(sourceGame, rounds);
-      if (!drawn.question) {
-        transaction.update(gameRef, {
-          quizReadyState: defaultQuizReadyState('ready'),
-          updatedAt: serverTimestamp(),
-        });
-        throw new Error('No quiz questions are available.');
-      }
-      const nextRoundNumber = Math.max(Number(sourceGame.roundsPlayed || 0) + 1, 1);
-      const nextRound = buildRoundFromQuestion(drawn.question, nextRoundNumber, { isQuizGame: true, startOpen: true });
-      transaction.update(gameRef, {
-        ...(promotedAgreement
-          ? {
-              quizWagerAgreement: promotedAgreement,
-              quizWagers: {
-                jay: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
-                kim: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
-              },
-            }
-          : {}),
-        currentRound: nextRound,
-        quizReadyState: null,
-        questionQueueIds: drawn.remainingQueueIds,
-        status: 'active',
+        : (data.quizWagers || game.quizWagers || { jay: 0, kim: 0 }),
+    };
+    const drawn = drawQuestion(sourceGame, rounds);
+    if (!drawn.question) {
+      await setDoc(gameRef, {
+        quizReadyState: defaultQuizReadyState('ready'),
         updatedAt: serverTimestamp(),
-      });
-    });
+      }, { merge: true });
+      throw new Error('No quiz questions are available.');
+    }
+    const nextRoundNumber = Math.max(Number(sourceGame.roundsPlayed || 0) + 1, 1);
+    const nextRound = {
+      ...buildRoundFromQuestion(drawn.question, nextRoundNumber, { isQuizGame: true, startOpen: true }),
+      id: `round-quiz-${nextRoundNumber}-${sanitizeNoteKey(drawn.question.id || drawn.question.question || 'question') || 'question'}`,
+    };
+    await setDoc(gameRef, {
+      ...(promotedAgreement
+        ? {
+            quizWagerAgreement: promotedAgreement,
+            quizWagers: {
+              jay: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
+              kim: Math.max(0, Number(getQuizSharedWagerAmount(game) || 0)),
+            },
+          }
+        : {}),
+      currentRound: nextRound,
+      quizReadyState: null,
+      questionQueueIds: drawn.remainingQueueIds,
+      status: 'active',
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
   };
 
   useEffect(() => {
@@ -13356,6 +13374,7 @@ function ProductionApp() {
       if (quizSetupLaunchRef.current === setupKey) quizSetupLaunchRef.current = '';
       return;
     }
+    const endsAtMs = Date.parse(endsAt || '');
     const attemptLaunch = () => {
       if (quizSetupLaunchRef.current === setupKey || isBusy) return;
       quizSetupLaunchRef.current = setupKey;
@@ -13368,9 +13387,16 @@ function ProductionApp() {
           quizSetupLaunchRef.current = '';
         });
     };
-    attemptLaunch();
-    const interval = window.setInterval(attemptLaunch, 250);
-    return () => window.clearInterval(interval);
+    let retryInterval = 0;
+    const launchDelayMs = Number.isFinite(endsAtMs) ? Math.max(0, endsAtMs - Date.now() + 60) : 0;
+    const launchTimer = window.setTimeout(() => {
+      attemptLaunch();
+      retryInterval = window.setInterval(attemptLaunch, 1000);
+    }, launchDelayMs);
+    return () => {
+      window.clearTimeout(launchTimer);
+      if (retryInterval) window.clearInterval(retryInterval);
+    };
   }, [
     game?.id,
     game?.gameMode,
