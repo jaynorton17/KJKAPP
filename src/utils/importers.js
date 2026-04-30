@@ -2,6 +2,7 @@ import {
   createQuestionTemplate,
   findMatchingQuestion,
   matchesQuestionTemplate,
+  normalizeQuestionCategoryKey,
   normalizeQuestionKey,
   normalizeText,
 } from './game.js';
@@ -37,8 +38,14 @@ const GOOGLE_SHEET_TYPE_ALIASES = new Set([
   'mcq',
   'multiselect',
   'truefalse',
+  'trueorfalse',
+  'truefalsequestion',
+  'boolean',
+  'bool',
+  'tf',
   'binary',
   'yesno',
+  'yesorno',
   'text',
   'textanswer',
   'written',
@@ -119,6 +126,18 @@ const hasQuestionTemplateChanged = (existingQuestion, nextQuestion) => {
     });
 
   return comparable(existingQuestion) !== comparable(nextQuestion);
+};
+
+const findSheetQuestionMatch = (questions = [], candidateQuestion, { allowTypeMigration = false } = {}) => {
+  const exactMatch = findMatchingQuestion(questions, candidateQuestion);
+  if (exactMatch || !allowTypeMigration) return exactMatch;
+  const candidateCategoryKey = normalizeQuestionCategoryKey(candidateQuestion?.question, candidateQuestion?.category);
+  if (!candidateCategoryKey) return null;
+  return questions.find((question) => {
+    if ((question?.bankType || 'game') !== (candidateQuestion?.bankType || 'game')) return false;
+    if (normalizeQuestionCategoryKey(question?.question, question?.category) !== candidateCategoryKey) return false;
+    return Boolean(question?.importedFromGoogleSheet || question?.source === 'googleSheet' || question?.source === 'googleSheetQuiz');
+  }) || null;
 };
 
 export const parseGoogleSheetReference = (value) => {
@@ -368,7 +387,7 @@ export const parseGoogleSheetImport = ({
     }
     seenQuestions.push(question);
 
-    const existingMatch = findMatchingQuestion(existingQuestions, question);
+    const existingMatch = findSheetQuestionMatch(existingQuestions, question, { allowTypeMigration: overwriteExisting });
     if (!existingMatch) {
       imports.push(question);
       return {
@@ -440,7 +459,24 @@ export const parseGoogleSheetImport = ({
 
 const normalizeQuizQuestionType = (value) => {
   const normalized = normalizeHeader(value);
-  if (normalized === 'truefalse' || normalized === 'trueorfalse' || normalized === 'boolean') return 'trueFalse';
+  if (
+    [
+      'truefalse',
+      'trueorfalse',
+      'truefalsequestion',
+      'boolean',
+      'bool',
+      'tf',
+      'binary',
+      'yesno',
+      'yesorno',
+    ].includes(normalized)
+    || normalized.startsWith('truefalse')
+    || normalized.startsWith('trueorfalse')
+    || normalized.startsWith('boolean')
+  ) {
+    return 'trueFalse';
+  }
   if (normalized === 'multiplechoice' || normalized === 'multiple' || normalized === 'mcq') return 'multipleChoice';
   if (normalized === 'text' || normalized === 'written' || normalized === 'shortanswer') return 'text';
   return 'text';
@@ -515,7 +551,7 @@ export const parseGoogleSheetQuizImport = ({
     }
     seenQuestions.push(question);
 
-    const existingMatch = findMatchingQuestion(existingQuestions, question);
+    const existingMatch = findSheetQuestionMatch(existingQuestions, question, { allowTypeMigration: overwriteExisting });
     if (!existingMatch) {
       imports.push(question);
       return { index, question, errors, status: 'import' };

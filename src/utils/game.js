@@ -437,7 +437,26 @@ export const normalizeRoundType = (value) => {
   if (['favorite', 'favourite', 'favourites', 'favorites'].includes(raw)) return 'favourite';
   if (['petpeeve', 'petpeeves', 'peeve'].includes(raw)) return 'petPeeve';
   if (['preference', 'thisorthat', 'preferencethisorthat', 'choice'].includes(raw)) return 'preference';
-  if (['truefalse', 'trueorfalse', 'binary', 'yesno'].includes(raw)) return 'trueFalse';
+  if (
+    [
+      'truefalse',
+      'trueorfalse',
+      'truefalsequestion',
+      'trueorfalsequestion',
+      'binary',
+      'yesno',
+      'yesorno',
+      'boolean',
+      'bool',
+      'tf',
+      'tfquestion',
+    ].includes(raw)
+    || raw.startsWith('truefalse')
+    || raw.startsWith('trueorfalse')
+    || raw.startsWith('boolean')
+  ) {
+    return 'trueFalse';
+  }
   if (['sortintoorder', 'sorting', 'ordering', 'sequence', 'sequenceordering', 'sortorder', 'matchpair', 'matchthepair', 'matching'].includes(raw)) {
     return 'sortIntoOrder';
   }
