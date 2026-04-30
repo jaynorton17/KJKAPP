@@ -10273,7 +10273,12 @@ function ProductionApp() {
     if (!bankQuestionIds.size) return new Set(playedIds);
     return new Set(playedIds.filter((questionId) => bankQuestionIds.has(questionId)));
   }, [trackedGameEntries, bankQuestionIds]);
-  const usedQuestionCount = playedStandardQuestionIds.size;
+  const displayUsedStandardQuestionIds = useMemo(() => {
+    const next = new Set(playedStandardQuestionIds);
+    replayEligibleQuestionIds.forEach((questionId) => next.delete(questionId));
+    return next;
+  }, [playedStandardQuestionIds, replayEligibleQuestionIds]);
+  const usedQuestionCount = displayUsedStandardQuestionIds.size;
   const remainingQuestionCount = Math.max(0, bankCount - usedQuestionCount);
   const trackedUsedQuizQuestionIds = useMemo(() => {
     const trackedIds = mergeUniqueIds(
@@ -10310,7 +10315,7 @@ function ProductionApp() {
     () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds]),
     [playedStandardQuestionIds, playedQuizQuestionIds],
   );
-  const unusedQuestionCount = Math.max(0, bankCount - playedStandardQuestionIds.size);
+  const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
     () => persistedPreviousGames.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
     [persistedPreviousGames],
