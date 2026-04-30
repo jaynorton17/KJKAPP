@@ -836,6 +836,7 @@ const buildAiEvidenceSnapshot = ({
       id: `feedback-${entry?.id || questionKey || `${seat}-${createdAtMs}`}`,
       kind: 'question-feedback',
       seat,
+      feedbackValue,
       title: `${PLAYER_LABEL[seat]} ${feedbackValue} this question`,
       summary: `${PLAYER_LABEL[seat]} ${feedbackValue} "${truncateAiText(questionText, 118)}".`,
       question: questionText,
@@ -878,6 +879,7 @@ const buildAiEvidenceSnapshot = ({
       id: `quiz-answer-${entry?.id || `${seat}-${createdAtMs}`}`,
       kind: 'quiz-answer',
       seat,
+      wasCorrect,
       title: `${PLAYER_LABEL[seat]} ${wasCorrect ? 'got a quiz question right' : 'missed a quiz question'}`,
       summary: `${PLAYER_LABEL[seat]} answered "${truncateAiText(playerAnswer || 'No answer', 88)}" for "${truncateAiText(questionText, 102)}" and was ${wasCorrect ? 'correct' : 'incorrect'}.`,
       question: questionText,
@@ -989,6 +991,111 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
   };
 };
 
+const getAiItemKindPriority = (item = {}, intent = {}) => {
+  if (intent.asksAboutNotes) {
+    if (item.kind === 'private-note') return 16;
+    if (item.kind === 'diary-entry') return 10;
+  }
+  if (intent.asksAboutDiary) {
+    if (item.kind === 'diary-entry') return 15;
+    if (item.kind === 'private-note') return 11;
+    if (item.kind === 'game-answer') return 9;
+  }
+  if (intent.asksAboutQuiz) {
+    if (item.kind === 'quiz-answer') return 15;
+    if (item.kind === 'game-answer') return 7;
+  }
+  if (intent.asksAboutPreference) {
+    if (item.kind === 'private-note') return 14;
+    if (item.kind === 'diary-entry') return 12;
+    if (item.kind === 'game-answer') return 11;
+    if (item.kind === 'question-feedback') return 10;
+  }
+  if (item.kind === 'private-note') return 13;
+  if (item.kind === 'diary-entry') return 12;
+  if (item.kind === 'game-answer') return 11;
+  if (item.kind === 'question-feedback') return 7;
+  if (item.kind === 'quiz-answer') return 6;
+  return 0;
+};
+
+const pickAiSeatHighlights = (items = [], seat = 'jay', intent = {}, limit = 2) => {
+  const seen = new Set();
+  return items
+    .filter((item) => item?.seat === seat)
+    .sort(
+      (left, right) =>
+        (getAiItemKindPriority(right, intent) + Number(right.score || 0)) - (getAiItemKindPriority(left, intent) + Number(left.score || 0))
+        || Number(right.createdAtMs || 0) - Number(left.createdAtMs || 0),
+    )
+    .filter((item) => {
+      const key = [
+        item.kind || '',
+        normalizeText(item.question || ''),
+        normalizeText(item.answer || ''),
+        item.feedbackValue || '',
+      ].join('::');
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+};
+
+const buildAiItemDirectSentence = (item = {}, seat = 'jay') => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  switch (item.kind) {
+    case 'game-answer':
+      return item.answer
+        ? `${playerLabel} answered "${truncateAiText(item.answer, 118)}"${item.question ? ` when asked "${truncateAiText(item.question, 94)}"` : ''}.`
+        : `${playerLabel} has a saved answer tied to "${truncateAiText(item.question || 'that question', 94)}".`;
+    case 'diary-entry':
+      return item.answer
+        ? `${playerLabel} wrote "${truncateAiText(item.answer, 118)}"${item.question ? ` in "${truncateAiText(item.question, 94)}"` : ''}.`
+        : `${playerLabel} has a diary entry related to "${truncateAiText(item.question || 'that topic', 94)}".`;
+    case 'private-note':
+      return item.answer
+        ? `A private note for ${playerLabel} says "${truncateAiText(item.answer, 118)}"${item.question ? ` about "${truncateAiText(item.question, 94)}"` : ''}.`
+        : `There is a private note for ${playerLabel} tied to "${truncateAiText(item.question || 'that topic', 94)}".`;
+    case 'question-feedback':
+      return `${playerLabel} ${item.feedbackValue === 'disliked' ? 'disliked' : 'liked'} the question "${truncateAiText(item.question || 'that question', 108)}".`;
+    case 'quiz-answer':
+      return item.answer
+        ? `${playerLabel} answered "${truncateAiText(item.answer, 96)}" for "${truncateAiText(item.question || 'that quiz question', 92)}" and was ${item.wasCorrect ? 'correct' : 'incorrect'}.`
+        : `${playerLabel} has a saved quiz result for "${truncateAiText(item.question || 'that quiz question', 92)}".`;
+    default:
+      return `${playerLabel} has saved evidence related to "${truncateAiText(item.question || item.summary || 'that topic', 108)}".`;
+  }
+};
+
+const buildAiSeatFallbackSentence = (seat = 'jay', stats = null, intent = {}) => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  if (!stats) return `${playerLabel} does not have enough saved evidence yet.`;
+  if (intent.asksAboutQuiz) {
+    return `${playerLabel} has ${stats.quizAccuracy}% quiz accuracy across ${stats.quizAnswers} saved quick-fire answers, with ${formatScore(stats.quizPoints)} total quiz points.`;
+  }
+  if (intent.asksAboutPreference) {
+    const likedThemes = formatAiList(stats.topLikedCategories.map((row) => row.label).slice(0, 3));
+    const answeredThemes = formatAiList(stats.topAnsweredCategories.map((row) => row.label).slice(0, 3));
+    if (likedThemes) return `${playerLabel} seems most positive around ${likedThemes}.`;
+    if (answeredThemes) return `${playerLabel}'s strongest saved themes are ${answeredThemes}.`;
+  }
+  const answeredThemes = formatAiList(stats.topAnsweredCategories.map((row) => row.label).slice(0, 3));
+  if (answeredThemes) return `${playerLabel}'s strongest saved themes are ${answeredThemes}.`;
+  return `${playerLabel} has some saved evidence, but not enough directly relevant detail for a stronger answer.`;
+};
+
+const buildAiSeatNarrative = ({
+  seat = 'jay',
+  scoredEvidence = [],
+  intent = {},
+  stats = null,
+} = {}) => {
+  const highlights = pickAiSeatHighlights(scoredEvidence, seat, intent, 2);
+  if (!highlights.length) return buildAiSeatFallbackSentence(seat, stats, intent);
+  return highlights.map((item) => buildAiItemDirectSentence(item, seat)).join(' ');
+};
+
 const scoreAiEvidenceItem = (item = {}, intent = {}) => {
   let score = 0;
   const itemTokenSet = new Set(item.searchTokens || []);
@@ -1040,14 +1147,15 @@ const buildEvidenceBasedAiReply = ({
 } = {}) => {
   const cleanPrompt = normalizeText(prompt);
   const intent = buildAiIntentProfile(cleanPrompt, viewerSeat);
+  const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
+  const selectedEvidenceLimit = focusSeats.length === 2 ? Math.max(AI_EVIDENCE_PREVIEW_LIMIT, 6) : AI_EVIDENCE_PREVIEW_LIMIT;
   const scoredEvidence = (evidenceSnapshot.items || [])
     .map((item) => ({ ...item, score: scoreAiEvidenceItem(item, intent) }))
     .filter((item) => item.score > 0)
     .sort((left, right) => right.score - left.score || right.createdAtMs - left.createdAtMs);
   const selectedEvidence = scoredEvidence.length
-    ? scoredEvidence.slice(0, AI_EVIDENCE_PREVIEW_LIMIT)
+    ? scoredEvidence.slice(0, selectedEvidenceLimit)
     : pickFallbackAiEvidence(evidenceSnapshot, intent, viewerSeat);
-  const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
   const primarySeat = focusSeats.length === 1 ? focusSeats[0] : '';
   const primaryStats = primarySeat ? evidenceSnapshot.bySeat?.[primarySeat] : null;
   const pairStats = evidenceSnapshot.pair || {};
@@ -1055,29 +1163,38 @@ const buildEvidenceBasedAiReply = ({
   let answer = '';
   if (!selectedEvidence.length && !evidenceSnapshot.totalEvidence) {
     answer = "I don't have enough saved evidence yet. Play more rounds, use likes/dislikes, or add diary entries first.";
-  } else if (intent.asksAboutQuiz && primarySeat && primaryStats) {
-    answer = `${PLAYER_LABEL[primarySeat]} has ${primaryStats.quizAccuracy}% quiz accuracy across ${primaryStats.quizAnswers} saved quick-fire answers, with ${formatScore(primaryStats.quizPoints)} total quiz points recorded.`;
-  } else if (intent.asksAboutPreference && primarySeat && primaryStats) {
-    const topLiked = formatAiList(primaryStats.topLikedCategories.map((row) => row.label).slice(0, 3));
-    const answeredThemes = formatAiList(primaryStats.topAnsweredCategories.map((row) => row.label).slice(0, 3));
-    if (topLiked) {
-      answer = `${PLAYER_LABEL[primarySeat]} seems most positive around ${topLiked}, based on saved likes/dislikes and answer history.`;
-    } else if (answeredThemes) {
-      answer = `I don't have many direct likes/dislikes for ${PLAYER_LABEL[primarySeat]} yet, but the strongest saved themes are ${answeredThemes}.`;
-    } else {
-      answer = `I have some saved evidence for ${PLAYER_LABEL[primarySeat]}, but not enough direct preference signals to be confident.`;
-    }
-  } else if (intent.asksAboutRelationship || focusSeats.length === 2) {
+  } else if (focusSeats.length === 2) {
+    const seatBlocks = focusSeats.map((seat) => {
+      const seatStats = evidenceSnapshot.bySeat?.[seat] || null;
+      const seatNarrative = buildAiSeatNarrative({
+        seat,
+        scoredEvidence,
+        intent,
+        stats: seatStats,
+      });
+      return `${PLAYER_LABEL[seat]}: ${seatNarrative}`;
+    });
     const sharedLikes = Number(pairStats.bothLiked || 0);
     const splitOpinions = Number(pairStats.splitOpinions || 0);
     const sharedQuestions = formatAiList((pairStats.sharedFavouriteQuestions || []).slice(0, 3));
-    answer = `Across your saved history, I can see ${sharedLikes} shared liked questions and ${splitOpinions} split-opinion questions.${sharedQuestions ? ` Shared favourites include ${sharedQuestions}.` : ''}`;
-  } else if (primarySeat && primaryStats && (intent.asksForSummary || !intent.promptTokens.length)) {
-    const topThemes = formatAiList(primaryStats.topAnsweredCategories.map((row) => row.label).slice(0, 3));
-    answer = `${PLAYER_LABEL[primarySeat]} has ${primaryStats.standardAnswers} saved standard-game answers, ${primaryStats.quizAnswers} quiz answers, ${primaryStats.diaryEntries} diary entries, and ${primaryStats.liked} liked-question signals on record.${topThemes ? ` The strongest saved themes are ${topThemes}.` : ''}`;
+    const relationshipLine = sharedLikes || splitOpinions || sharedQuestions
+      ? `Together: ${sharedLikes} shared liked questions and ${splitOpinions} split-opinion questions are on record.${sharedQuestions ? ` Shared favourites include ${sharedQuestions}.` : ''}`
+      : '';
+    answer = [...seatBlocks, relationshipLine].filter(Boolean).join('\n');
+  } else if (primarySeat) {
+    answer = buildAiSeatNarrative({
+      seat: primarySeat,
+      scoredEvidence,
+      intent,
+      stats: primaryStats,
+    });
+  } else if (intent.asksAboutRelationship) {
+    const sharedLikes = Number(pairStats.bothLiked || 0);
+    const splitOpinions = Number(pairStats.splitOpinions || 0);
+    const sharedQuestions = formatAiList((pairStats.sharedFavouriteQuestions || []).slice(0, 3));
+    answer = `Across your saved history, there are ${sharedLikes} shared liked questions and ${splitOpinions} split-opinion questions.${sharedQuestions ? ` Shared favourites include ${sharedQuestions}.` : ''}`;
   } else if (selectedEvidence.length) {
-    const focusLabel = primarySeat ? PLAYER_LABEL[primarySeat] : 'your saved history';
-    answer = `I found ${selectedEvidence.length} relevant pieces of saved evidence for ${focusLabel} tied to "${truncateAiText(cleanPrompt, 72)}".`;
+    answer = selectedEvidence.map((item) => buildAiItemDirectSentence(item, item.seat || viewerSeat)).join(' ');
   } else {
     answer = "I can answer from saved evidence only, and I don't have a strong enough match for that question yet.";
   }
