@@ -538,42 +538,20 @@ const buildQuizWagerLockPatch = (gameData = {}, nowIso = new Date().toISOString(
     },
   };
 };
+const formatWheelAmount = (value = 0) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return '0';
+  return new Intl.NumberFormat('en-GB', {
+    useGrouping: false,
+    maximumFractionDigits: 0,
+  }).format(Math.max(0, Math.round(numeric)));
+};
 const getQuizWagerAgreementRank = (agreement = {}) => {
   const normalized = normalizeQuizWagerAgreement({ quizWagerAgreement: agreement });
   if (normalized.status === 'agreed' || normalized.status === 'wheel_locked') return 3;
   if (normalized.status === 'wheel_countdown') return 2;
   if (normalized.status === 'proposal_pending' || normalized.status === 'wheel_pending') return 1;
   return 0;
-};
-const getQuizReadyStageRank = (stage = 'opening') => {
-  const normalizedStage = normalizeText(stage || 'opening') || 'opening';
-  if (normalizedStage === 'countdown') return 2;
-  if (normalizedStage === 'ready') return 1;
-  return 0;
-};
-const mergeQuizReadyStateSnapshot = (currentReadyState = null, incomingReadyState = null) => {
-  if (!currentReadyState && !incomingReadyState) return null;
-  const currentState = normalizeQuizReadyState(currentReadyState, 'opening');
-  const incomingState = normalizeQuizReadyState(incomingReadyState, 'opening');
-  const currentRank = getQuizReadyStageRank(currentState.stage);
-  const incomingRank = getQuizReadyStageRank(incomingState.stage);
-  const preferCurrent = currentRank > incomingRank;
-  const ready = {
-    jay: Boolean(currentState.ready?.jay || incomingState.ready?.jay),
-    kim: Boolean(currentState.ready?.kim || incomingState.ready?.kim),
-  };
-  return {
-    ...(preferCurrent ? incomingState : currentState),
-    ...(preferCurrent ? currentState : incomingState),
-    stage: preferCurrent ? currentState.stage : incomingState.stage,
-    ready,
-    countdownStartedAt: preferCurrent
-      ? (currentState.countdownStartedAt || incomingState.countdownStartedAt || '')
-      : (incomingState.countdownStartedAt || currentState.countdownStartedAt || ''),
-    countdownEndsAt: preferCurrent
-      ? (currentState.countdownEndsAt || incomingState.countdownEndsAt || '')
-      : (incomingState.countdownEndsAt || currentState.countdownEndsAt || ''),
-  };
 };
 const hasNextReadySeat = (round = null, seat = 'jay') => Boolean(round?.nextReady?.[seat === 'kim' ? 'kim' : 'jay']);
 const hasQuizSetupReadySeat = (game = null, seat = 'jay') => Boolean(game?.quizReadyState?.ready?.[seat === 'kim' ? 'kim' : 'jay']);
@@ -1951,7 +1929,6 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
       const currentAgreementRank = getQuizWagerAgreementRank(currentGame?.quizWagerAgreement || null);
       const incomingAgreementRank = getQuizWagerAgreementRank(incomingGame?.quizWagerAgreement || null);
       const preserveCurrentAgreement = currentAgreementRank > incomingAgreementRank;
-      const shouldClearSetupReadyState = Boolean(incomingGame?.currentRound && !currentGame?.currentRound);
       const mergedGame = {
         ...incomingGame,
         quizWagerAgreement: preserveCurrentAgreement
@@ -1960,9 +1937,9 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
         quizWagers: preserveCurrentAgreement
           ? (currentGame?.quizWagers || incomingGame?.quizWagers || {})
           : (incomingGame?.quizWagers || currentGame?.quizWagers || {}),
-        quizReadyState: shouldClearSetupReadyState
-          ? (incomingGame?.quizReadyState || null)
-          : mergeQuizReadyStateSnapshot(currentGame?.quizReadyState || null, incomingGame?.quizReadyState || null),
+        // Setup readiness is fully snapshot-driven; don't preserve optimistic
+        // local flags over the room document.
+        quizReadyState: incomingGame?.quizReadyState || null,
       };
       return areStableRoomSnapshotsEqual(currentGame, mergedGame)
         ? currentGame
@@ -4979,7 +4956,7 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
                 key={`quiz-wheel-slot-${index}`}
                 style={{ '--slot-angle': `${slotAngle}deg`, '--slot-label-angle': `${slotAngle + 90}deg` }}
               >
-                {formatScore(slotAmount)}
+                {formatWheelAmount(slotAmount)}
               </span>
             );
           })}
@@ -4988,14 +4965,14 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
             {displayPhase === 'countdown' ? (
               <strong>{countdownSeconds}</strong>
             ) : (
-              <strong>{displayPhase === 'landing' || displayPhase === 'locked' ? formatScore(resultAmount) : 'Spin'}</strong>
+              <strong>{displayPhase === 'landing' || displayPhase === 'locked' ? formatWheelAmount(resultAmount) : 'Spin'}</strong>
             )}
             <span>{displayPhase === 'countdown' ? 'Get ready' : displayPhase === 'landing' || displayPhase === 'locked' ? 'Wager locked' : 'Wager wheel'}</span>
           </div>
         </div>
         <div className="quiz-wheel-result">
           <span>{displayPhase === 'countdown' ? 'Wheel starts in' : displayPhase === 'spinning' ? 'Spinning for 5 seconds' : displayPhase === 'locked' || displayPhase === 'landing' ? 'Final shared wager' : 'Wheel slots'}</span>
-          <strong>{displayPhase === 'countdown' ? countdownSeconds : displayPhase === 'spinning' ? '...' : displayPhase === 'locked' || displayPhase === 'landing' ? formatScore(resultAmount) : `${formatScore(slotPreviewMin)} to ${formatScore(slotPreviewMax)}`}</strong>
+          <strong>{displayPhase === 'countdown' ? countdownSeconds : displayPhase === 'spinning' ? '...' : displayPhase === 'locked' || displayPhase === 'landing' ? formatWheelAmount(resultAmount) : `${formatWheelAmount(slotPreviewMin)} to ${formatWheelAmount(slotPreviewMax)}`}</strong>
         </div>
       </div>
     </div>
@@ -5155,13 +5132,16 @@ function QuizSetupStagePanel({
   const readySetupAmount = effectiveSharedWagerLocked
     ? (sharedWagerLocked ? Number(sharedWagerAmount || 0) : pendingWheelAmount)
     : Number(sharedWagerAmount || 0);
+  const readySetupAmountText = agreement.lockedByWheel || wheelResolved
+    ? formatWheelAmount(readySetupAmount || 0)
+    : formatScore(readySetupAmount || 0);
   const readySetupAmountLabel = agreement.lockedByWheel || wheelResolved ? 'Wheel landed on' : 'Shared wager';
   const readySetupEyebrow = agreement.lockedByWheel || wheelResolved ? 'Wheel spin complete' : 'Shared wager locked';
   const readySetupHeading = countdownActive
     ? `Quick Fire starts in ${Math.max(1, countdownSecondsLeft || 0)}`
     : 'Both players need to click Ready';
   const readySetupIntro = agreement.lockedByWheel || wheelResolved
-    ? `The wheel locked in ${formatScore(readySetupAmount || 0)}.`
+    ? `The wheel locked in ${readySetupAmountText}.`
     : `The shared wager is locked at ${formatScore(readySetupAmount || 0)}.`;
   const readySetupStatus = countdownActive
     ? 'Both players are ready. Launching question one now.'
@@ -5227,9 +5207,9 @@ function QuizSetupStagePanel({
                 <strong>{readySetupHeading}</strong>
                 <p>{readySetupIntro} Both players must click Ready before the 3 second countdown begins.</p>
               </div>
-              <div className="quiz-ready-setup-card__amount" aria-label={`${readySetupAmountLabel} ${formatScore(readySetupAmount || 0)}`}>
+              <div className="quiz-ready-setup-card__amount" aria-label={`${readySetupAmountLabel} ${readySetupAmountText}`}>
                 <span>{readySetupAmountLabel}</span>
-                <strong>{formatScore(readySetupAmount || 0)}</strong>
+                <strong>{readySetupAmountText}</strong>
               </div>
               <div className="quiz-ready-setup-card__seat-grid">
                 <article className={`quiz-ready-seat-card ${viewerReady ? 'is-ready' : ''}`}>
@@ -12605,6 +12585,7 @@ function ProductionApp() {
           return {
             notice: 'Wheel request accepted. Shared countdown started.',
             patch: {
+              quizWagers: { jay: wheelResultAmount, kim: wheelResultAmount },
               quizWagerAgreement: {
                 ...defaultQuizWagerAgreement(),
                 status: 'wheel_countdown',
@@ -12908,164 +12889,6 @@ function ProductionApp() {
       }
       setNotice(optIn ? 'Wheel request sent.' : 'Wheel choice cleared.');
     }, 'Could not update wager wheel choice.');
-
-  const finalizeQuizWheelWager = async () => {
-    if (!game?.id || (game?.gameMode || 'standard') !== 'quiz') return;
-    const agreement = normalizeQuizWagerAgreement(game);
-    if (agreement.status !== 'wheel_countdown' || !Number.isFinite(Date.parse(agreement.wheelSpinEndsAt || ''))) return;
-    if (Date.now() < Date.parse(agreement.wheelSpinEndsAt || '')) return;
-
-    const fallbackBaseAmount = QUIZ_WHEEL_MAX_AMOUNT;
-    const effectiveBaseAmount = Math.max(1, Math.floor(Number(agreement.wheelBaseAmount || fallbackBaseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
-    const slots = agreement.wheelSlots.length ? agreement.wheelSlots : buildQuizWheelSlots(effectiveBaseAmount);
-    const resultIndex = Math.max(0, Math.min(Math.max(0, slots.length - 1), Number(agreement.wheelResultIndex ?? 0)));
-    const storedResultAmount = Number(agreement.wheelResultAmount);
-    const rawResultAmount = Number.isFinite(storedResultAmount) && storedResultAmount > 0
-      ? storedResultAmount
-      : Number(slots[resultIndex] || 0);
-    const wagerValue = capQuizWheelStake(effectiveBaseAmount, rawResultAmount);
-    if (!Number.isFinite(wagerValue) || wagerValue < 0) return;
-
-    const nextAgreement = {
-      ...agreement,
-      status: 'wheel_locked',
-      requestKind: 'wheel',
-      amount: wagerValue,
-      wheelBaseAmount: effectiveBaseAmount,
-      wheelSlots: slots,
-      wheelResultIndex: resultIndex,
-      wheelResultAmount: wagerValue,
-      proposalStatus: 'accepted',
-      lockedByWheel: true,
-      lockedAt: new Date().toISOString(),
-    };
-    if (isCurrentLocalTestGame) {
-      setGame((current) =>
-        current
-          ? {
-              ...current,
-              quizWagers: { jay: wagerValue, kim: wagerValue },
-              quizWagerAgreement: nextAgreement,
-              quizReadyState: mergeQuizReadyStateSnapshot(current.quizReadyState || null, defaultQuizReadyState('ready')),
-              updatedAt: new Date().toISOString(),
-            }
-          : current,
-      );
-      setNotice(`Wager wheel landed on ${formatScore(wagerValue)}. Both players can ready up.`);
-      return;
-    }
-    if (!firestore) return;
-    const gameRef = doc(firestore, 'games', game.id);
-    const previousAgreement = game?.quizWagerAgreement || defaultQuizWagerAgreement();
-    const previousReadyState = game?.quizReadyState || defaultQuizReadyState('opening');
-    const previousQuizWagers = game?.quizWagers || { jay: 0, kim: 0 };
-    setGame((current) =>
-      current
-        ? {
-            ...current,
-            quizWagers: { jay: wagerValue, kim: wagerValue },
-            quizWagerAgreement: nextAgreement,
-            quizReadyState: mergeQuizReadyStateSnapshot(current.quizReadyState || null, defaultQuizReadyState('ready')),
-            updatedAt: new Date().toISOString(),
-          }
-        : current,
-    );
-    try {
-      debugRoom('quizWheelFinalizeWrite', {
-        gameId: game.id,
-        localWagerValue: wagerValue,
-        wheelSpinEndsAt: agreement.wheelSpinEndsAt || '',
-        wheelResultIndex: resultIndex,
-      });
-      const transactionResult = await runTransaction(firestore, async (transaction) => {
-        const snap = await transaction.get(gameRef);
-        if (!snap.exists()) return { status: 'missing-room' };
-        const data = snap.data() || {};
-        if (data.currentRound) return { status: 'already-launched', currentRound: data.currentRound };
-        const liveAgreement = normalizeQuizWagerAgreement(data);
-        if (isQuizWagerAgreementLocked(data)) {
-          return {
-            status: 'already-locked',
-            wagerValue: Number(getQuizSharedWagerAmount(data) || liveAgreement.amount || 0),
-          };
-        }
-        if (liveAgreement.status !== 'wheel_countdown') {
-          return { status: 'not-wheel-countdown', liveStatus: liveAgreement.status || '' };
-        }
-        const liveSpinEndsAtMs = Date.parse(liveAgreement.wheelSpinEndsAt || '');
-        if (!Number.isFinite(liveSpinEndsAtMs) || Date.now() < liveSpinEndsAtMs) {
-          return { status: 'wheel-still-running', liveStatus: liveAgreement.status || '' };
-        }
-        const liveBaseAmount = Math.max(1, Math.floor(Number(liveAgreement.wheelBaseAmount || fallbackBaseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
-        const liveSlots = liveAgreement.wheelSlots.length ? liveAgreement.wheelSlots : buildQuizWheelSlots(liveBaseAmount);
-        const liveIndex = Math.max(0, Math.min(Math.max(0, liveSlots.length - 1), Number(liveAgreement.wheelResultIndex ?? resultIndex)));
-        const liveStoredResultAmount = Number(liveAgreement.wheelResultAmount);
-        const liveRawResultAmount = Number.isFinite(liveStoredResultAmount) && liveStoredResultAmount > 0
-          ? liveStoredResultAmount
-          : Number(liveSlots[liveIndex] || 0);
-        const liveWagerValue = capQuizWheelStake(liveBaseAmount, liveRawResultAmount);
-        const liveReadyState = mergeQuizReadyStateSnapshot(data.quizReadyState || null, defaultQuizReadyState('ready'));
-        const liveNextAgreement = {
-          ...liveAgreement,
-          status: 'wheel_locked',
-          requestKind: 'wheel',
-          amount: liveWagerValue,
-          wheelBaseAmount: liveBaseAmount,
-          wheelSlots: liveSlots,
-          wheelResultIndex: liveIndex,
-          wheelResultAmount: liveWagerValue,
-          proposalStatus: 'accepted',
-          lockedByWheel: true,
-          lockedAt: new Date().toISOString(),
-        };
-        transaction.update(gameRef, {
-          quizWagers: { jay: liveWagerValue, kim: liveWagerValue },
-          quizWagerAgreement: liveNextAgreement,
-          quizReadyState: liveReadyState,
-          updatedAt: serverTimestamp(),
-        });
-        return {
-          status: 'locked',
-          wagerValue: liveWagerValue,
-          quizWagerAgreement: liveNextAgreement,
-          quizReadyState: liveReadyState,
-        };
-      });
-      debugRoom('quizWheelFinalizeWriteComplete', {
-        gameId: game.id,
-        status: transactionResult?.status || '',
-        liveStatus: transactionResult?.liveStatus || '',
-        wagerValue: transactionResult?.wagerValue ?? wagerValue,
-      });
-      if (transactionResult?.quizWagerAgreement) {
-        setGame((current) =>
-          current && !current.currentRound
-            ? {
-                ...current,
-                quizWagers: { jay: transactionResult.wagerValue, kim: transactionResult.wagerValue },
-                quizWagerAgreement: transactionResult.quizWagerAgreement,
-                quizReadyState: transactionResult.quizReadyState || mergeQuizReadyStateSnapshot(current.quizReadyState || null, defaultQuizReadyState('ready')),
-                updatedAt: new Date().toISOString(),
-              }
-            : current,
-        );
-      }
-    } catch (error) {
-      setGame((current) =>
-        current
-          ? {
-              ...current,
-              quizWagers: previousQuizWagers,
-              quizWagerAgreement: previousAgreement,
-              quizReadyState: previousReadyState,
-              updatedAt: new Date().toISOString(),
-            }
-          : current,
-      );
-      throw error;
-    }
-    setNotice(`Wager wheel landed on ${formatScore(wagerValue)}. Both players can ready up.`);
-  };
 
   const requestQuizOverride = async (requestedFinalResult = '') =>
     withBusy(async () => {
@@ -13916,69 +13739,7 @@ function ProductionApp() {
   const quizSetupCountdownRef = useRef('');
   const quizAdvanceRef = useRef('');
   const quizTimeoutRevealRef = useRef('');
-  const quizWheelFinalizeRef = useRef('');
   const standardRevealSettleRef = useRef('');
-  useEffect(() => {
-    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-    const agreement = normalizeQuizWagerAgreement(game || {});
-    const spinEndsAtMs = Date.parse(agreement.wheelSpinEndsAt || '');
-    const finalizeKey = `${game?.id || ''}:${agreement.wheelSpinEndsAt || ''}:${agreement.wheelResultIndex ?? ''}`;
-    if (
-      !isQuizGame
-      || game?.currentRound
-      || agreement.status === 'agreed'
-      || agreement.status === 'wheel_locked'
-      || !Number.isFinite(spinEndsAtMs)
-    ) {
-      if (quizWheelFinalizeRef.current === finalizeKey) quizWheelFinalizeRef.current = '';
-      return undefined;
-    }
-    const attemptFinalize = () => {
-      if (Date.now() < spinEndsAtMs) return;
-      if (quizWheelFinalizeRef.current === finalizeKey) return;
-      quizWheelFinalizeRef.current = finalizeKey;
-      debugRoom('quizWheelFinalizeAttempt', {
-        gameId: game?.id || gameId || '',
-        status: agreement.status || '',
-        wheelSpinEndsAt: agreement.wheelSpinEndsAt || '',
-        wheelResultIndex: agreement.wheelResultIndex ?? '',
-      });
-      finalizeQuizWheelWager()
-        .then(() => {
-          debugRoom('quizWheelFinalizeComplete', {
-            gameId: game?.id || gameId || '',
-            wheelSpinEndsAt: agreement.wheelSpinEndsAt || '',
-          });
-        })
-        .catch((error) => {
-          debugRoom('quizWheelFinalizeFailed', {
-            gameId: game?.id || gameId || '',
-            code: error?.code || '',
-            message: error?.message || String(error),
-          });
-          if (isFirestoreRateLimitedError(error)) {
-            setNotice('Firebase is rate-limiting the wheel result right now. You can still click Ready once the wheel lands.');
-            return;
-          }
-          setNotice(error?.message || 'Could not finalize the wager wheel result. You can still try clicking Ready.');
-        })
-        .finally(() => {
-          quizWheelFinalizeRef.current = '';
-        });
-    };
-    attemptFinalize();
-    if (Date.now() >= spinEndsAtMs) return undefined;
-    const interval = window.setInterval(attemptFinalize, 250);
-    return () => window.clearInterval(interval);
-  }, [
-    game?.id,
-    game?.gameMode,
-    game?.currentRound?.id,
-    game?.quizWagerAgreement?.status,
-    game?.quizWagerAgreement?.wheelSpinEndsAt,
-    game?.quizWagerAgreement?.wheelResultIndex,
-    isCurrentLocalTestGame,
-  ]);
   const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
@@ -14043,26 +13804,13 @@ function ProductionApp() {
 
         const gameRef = makeGameRef();
         if (!gameRef || !firestore) return null;
-        const previousReadyState = game?.quizReadyState || defaultQuizReadyState('ready');
-        const previousUpdatedAt = game?.updatedAt || '';
-        const optimisticNowMs = Date.now();
-        const optimisticReadyState = buildQuizSetupReadyStateForSeat(previousReadyState, seat, optimisticNowMs);
-        setGame((current) =>
-          current && !current.currentRound
-            ? {
-                ...current,
-                quizReadyState: buildQuizSetupReadyStateForSeat(current.quizReadyState || optimisticReadyState, seat, optimisticNowMs),
-                updatedAt: new Date(optimisticNowMs).toISOString(),
-              }
-            : current,
-        );
         debugRoom('quizSetupReadyWrite', {
           gameId: game?.id || gameId || '',
           userId: user?.uid || '',
           seat,
           requestedSeat,
-          previousStage: previousReadyState.stage || '',
-          previousReady: previousReadyState.ready || {},
+          previousStage: game?.quizReadyState?.stage || '',
+          previousReady: game?.quizReadyState?.ready || {},
         });
         try {
           const transactionResult = await runTransaction(firestore, async (transaction) => {
@@ -14144,22 +13892,6 @@ function ProductionApp() {
             code: error?.code || '',
             message: error?.message || String(error),
           });
-          const normalizedMessage = normalizeText(error?.code || error?.message || '');
-          if (
-            normalizedMessage.includes('permission')
-            || normalizedMessage.includes('notfound')
-            || normalizedMessage.includes('not found')
-          ) {
-            setGame((current) =>
-              current && !current.currentRound
-                ? {
-                    ...current,
-                    quizReadyState: previousReadyState,
-                    updatedAt: previousUpdatedAt,
-                  }
-                : current,
-            );
-          }
           throw error;
         }
         return true;
@@ -14846,18 +14578,6 @@ function ProductionApp() {
     const ready = readyState.ready || { jay: false, kim: false };
     const stage = normalizeText(readyState.stage || 'opening') || 'opening';
     if (stage === 'countdown' || !ready.jay || !ready.kim) return;
-    const optimisticNowMs = Date.now();
-    const optimisticCountdownState = buildQuizSetupCountdownState(readyState, ready, optimisticNowMs);
-
-    setGame((current) =>
-      current && !current.currentRound
-        ? {
-            ...current,
-            quizReadyState: buildQuizSetupCountdownState(current.quizReadyState || optimisticCountdownState, ready, optimisticNowMs),
-            updatedAt: new Date(optimisticNowMs).toISOString(),
-          }
-        : current,
-    );
 
     if (isCurrentLocalTestGame) {
       debugRoom('quizSetupCountdownLocal', { gameId: game?.id || '', ready });
