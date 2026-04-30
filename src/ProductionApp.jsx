@@ -4924,6 +4924,7 @@ function QuizSetupStagePanel({
   onSetQuizWheelOptIn,
   onMarkReady,
   isBusy,
+  chatIsBusy = false,
 }) {
   const [nowMs, setNowMs] = useState(Date.now());
   const [optimisticWheelRequesterId, setOptimisticWheelRequesterId] = useState('');
@@ -5270,7 +5271,7 @@ function QuizSetupStagePanel({
                     draft={chatDraft}
                     onDraftChange={onChatDraftChange}
                     onSend={onSendChat}
-                    isBusy={isBusy}
+                    isBusy={chatIsBusy}
                     seat={currentPlayer}
                     displayName={chatDisplayName}
                   />
@@ -5530,6 +5531,7 @@ function RoomActiveFrameBase({
   chatSeat = '',
   chatDisplayName = '',
   isBusy,
+  chatIsBusy = false,
 }) {
   const question = currentRound?.question || 'Question loaded';
   const questionDensity = getQuestionDensityClass(question);
@@ -5833,7 +5835,7 @@ function RoomActiveFrameBase({
                   draft={chatDraft}
                   onDraftChange={onChatDraftChange}
                   onSend={onSendChat}
-                  isBusy={isBusy}
+                  isBusy={chatIsBusy}
                   seat={chatSeat || currentPlayer}
                   displayName={chatDisplayName || viewerLabel}
                 />
@@ -5878,6 +5880,7 @@ const RoomActiveFrame = memo(RoomActiveFrameBase, (previous, next) => {
     && previous.currentFeedbackValue === next.currentFeedbackValue
     && previous.currentReplayRequested === next.currentReplayRequested
     && previous.isBusy === next.isBusy
+    && previous.chatIsBusy === next.chatIsBusy
     && previous.currentRound?.status === next.currentRound?.status
     && previous.currentRound?.question === next.currentRound?.question
     && previous.currentRound?.category === next.currentRound?.category
@@ -8355,6 +8358,7 @@ function GameRoomView({
   chatDraft,
   setChatDraft,
   onSendChat,
+  chatIsBusy = false,
   onReconnectLiveRoom,
   onSaveQuestionNote,
   onSaveQuestionFeedback,
@@ -8884,6 +8888,7 @@ function GameRoomView({
                   chatSeat={seat}
                   chatDisplayName={roomChatDisplayName}
 	                  isBusy={isBusy}
+                    chatIsBusy={chatIsBusy}
 	                />
 	              ) : showQuizSetupPanel ? (
 	                <QuizSetupStagePanel
@@ -8904,6 +8909,7 @@ function GameRoomView({
                     onSetQuizWheelOptIn={onSetQuizWheelOptIn}
                     onMarkReady={onMarkReady}
                     isBusy={isBusy}
+                    chatIsBusy={chatIsBusy}
                   />
 	              ) : (
                 <MainScoreboard16x9 rounds={rounds} selectedQuestion={currentQuestion} form={boardForm} editingRound={null} liveTotals={liveTotals} joinedSeats={game?.seats || {}} />
@@ -8956,7 +8962,7 @@ function GameRoomView({
             draft={chatDraft}
             onDraftChange={setChatDraft}
             onSend={onSendChat}
-            isBusy={isBusy}
+            isBusy={chatIsBusy}
             seat={resolvedViewerSeat}
             displayName={roomChatDisplayName}
           />
@@ -9188,6 +9194,7 @@ function GameRoomView({
               chatSeat={seat}
               chatDisplayName={roomChatDisplayName}
 	              isBusy={isBusy}
+              chatIsBusy={chatIsBusy}
 	            />
 	          ) : showQuizSetupPanel ? (
             <QuizSetupStagePanel
@@ -9208,6 +9215,7 @@ function GameRoomView({
               onSetQuizWheelOptIn={onSetQuizWheelOptIn}
               onMarkReady={onMarkReady}
               isBusy={isBusy}
+              chatIsBusy={chatIsBusy}
             />
 	          ) : (
             <MainScoreboard16x9 rounds={rounds} selectedQuestion={currentQuestion} form={boardForm} editingRound={null} liveTotals={liveTotals} joinedSeats={game?.seats || {}} />
@@ -9232,7 +9240,7 @@ function GameRoomView({
             draft={chatDraft}
             onDraftChange={setChatDraft}
             onSend={onSendChat}
-            isBusy={isBusy}
+            isBusy={chatIsBusy}
             seat={seat}
             displayName={roomChatDisplayName}
           />
@@ -9294,6 +9302,7 @@ function ProductionApp() {
   const [syncNotice, setSyncNotice] = useState('');
   const [isBusy, setIsBusy] = useState(false);
   const [isLobbyChatSending, setIsLobbyChatSending] = useState(false);
+  const [isRoomChatSending, setIsRoomChatSending] = useState(false);
   const [roomLoadState, setRoomLoadState] = useState({ status: 'idle', gameId: '', reason: '', message: '' });
   const [playerAccounts, setPlayerAccounts] = useState({
     jay: { uid: fixedPlayerUids.jay, displayName: 'Jay', lifetimePenaltyPoints: 0 },
@@ -9849,7 +9858,7 @@ function ProductionApp() {
     }
     const gameRef = doc(firestore, 'games', gameId);
     const roundsRef = query(collection(gameRef, 'rounds'), orderBy('number', 'asc'));
-    const chatRef = query(collection(gameRef, 'chatMessages'), orderBy('createdAt', 'asc'), limit(60));
+    const chatRef = query(collection(gameRef, 'chatMessages'), orderBy('createdAt', 'asc'));
     const unsubscribeGame = onSnapshot(gameRef, (snapshot) => {
       const snapshotData = snapshot.exists() ? snapshot.data() || {} : null;
       debugRoom('gameSnapshot', {
@@ -15002,30 +15011,35 @@ function ProductionApp() {
     isCurrentLocalTestGame,
   ]);
 
-  const sendChat = async (textOverride = '') =>
-    withBusy(async () => {
-      const text = String(textOverride || chatDraft || '').trim();
-      if (!text) return;
-      if (isCurrentLocalTestGame) {
-        const seat = seatForUid(game, user?.uid) || 'neutral';
-        setChatMessages((current) => [
-          ...current,
-          {
-            id: makeId('chat'),
-            text,
-            uid: user?.uid || '',
-            displayName: profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player',
-            seat,
-            role: roleForUid(game, user?.uid) || 'guest',
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-        setChatDraft('');
-        return;
-      }
-      if (!gameId || !user || !firestore) throw new Error('Open a room before chatting.');
-      const seat = seatForUid(game, user.uid) || 'neutral';
-      const messageRef = doc(collection(doc(firestore, 'games', gameId), 'chatMessages'));
+  const sendChat = async (textOverride = '') => {
+    const text = String(textOverride || chatDraft || '').trim();
+    if (!text || isRoomChatSending) return null;
+    if (isCurrentLocalTestGame) {
+      const localSeat = seatForUid(game, user?.uid) || 'neutral';
+      setChatMessages((current) => [
+        ...current,
+        {
+          id: makeId('chat'),
+          text,
+          uid: user?.uid || '',
+          displayName: profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player',
+          seat: localSeat,
+          role: roleForUid(game, user?.uid) || 'guest',
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      setChatDraft('');
+      return true;
+    }
+    if (!gameId || !user || !firestore) {
+      setNotice('Open a room before chatting.');
+      return null;
+    }
+    const seat = seatForUid(game, user.uid) || 'neutral';
+    const messageRef = doc(collection(doc(firestore, 'games', gameId), 'chatMessages'));
+    setIsRoomChatSending(true);
+    setChatDraft('');
+    try {
       await setDoc(messageRef, {
         text,
         uid: user.uid,
@@ -15034,8 +15048,15 @@ function ProductionApp() {
         role: roleForUid(game, user.uid) || 'guest',
         createdAt: new Date().toISOString(),
       });
-      setChatDraft('');
-    }, 'Could not send chat message.');
+      return messageRef.id;
+    } catch (error) {
+      setChatDraft((current) => current || text);
+      setNotice(String(error?.message || 'Could not send chat message.'));
+      return null;
+    } finally {
+      setIsRoomChatSending(false);
+    }
+  };
 
   const sendLobbyChat = async (textOverride = '') => {
     const text = String(textOverride || lobbyChatDraft || '').trim();
@@ -15534,6 +15555,7 @@ function ProductionApp() {
       chatDraft={chatDraft}
       setChatDraft={setChatDraft}
       onSendChat={sendChat}
+      chatIsBusy={isRoomChatSending}
       onReconnectLiveRoom={() => {
         setConnectionState((current) => ({ ...current, lastError: '' }));
         resetRoomLoadState();
