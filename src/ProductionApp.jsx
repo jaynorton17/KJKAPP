@@ -14920,7 +14920,8 @@ function ProductionApp() {
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
     const currentRoundKey = stableRoundIdentityKey(game?.currentRound || {});
-    if (!isQuizGame || !game?.currentRound || game.currentRound.status !== 'open') {
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    if (!isQuizGame || currentSeat !== coordinatorSeat || !game?.currentRound || game.currentRound.status !== 'open') {
       quizTimeoutRevealRef.current = '';
       return;
     }
@@ -14949,25 +14950,32 @@ function ProductionApp() {
       }
       const gameRef = makeGameRef();
       if (!gameRef || !firestore) return;
-      runTransaction(firestore, async (transaction) => {
-        const snap = await transaction.get(gameRef);
-        if (!snap.exists()) return;
-        const data = snap.data() || {};
-        const round = data.currentRound || null;
-        if (!round || round.status !== 'open') return;
-        if (stableRoundIdentityKey(round) !== currentRoundKey) return;
-        transaction.update(gameRef, {
-          'currentRound.status': 'reveal',
-          'currentRound.updatedAt': serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+      setGame((current) =>
+        current?.currentRound && stableRoundIdentityKey(current.currentRound) === currentRoundKey && current.currentRound.status === 'open'
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                status: 'reveal',
+                updatedAt: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      updateDoc(gameRef, {
+        'currentRound.status': 'reveal',
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
       }).catch(() => null);
     }, remainingMs + 10);
     return () => window.clearTimeout(timeout);
   }, [
+    currentSeat,
     firestore,
     game?.id,
     game?.gameMode,
+    game?.hostUid,
     game?.currentRound?.status,
     game?.currentRound?.questionId,
     game?.currentRound?.number,
