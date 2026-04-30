@@ -121,6 +121,82 @@ const QUIZ_SETUP_COUNTDOWN_MS = 3000;
 const QUIZ_REVEAL_FLASH_MS = 3000;
 const AI_CHAT_MESSAGE_LIMIT = 160;
 const AI_EVIDENCE_PREVIEW_LIMIT = 4;
+const AI_SEARCH_STOPWORDS = new Set([
+  'a',
+  'about',
+  'actually',
+  'all',
+  'am',
+  'an',
+  'and',
+  'any',
+  'are',
+  'as',
+  'at',
+  'be',
+  'been',
+  'both',
+  'by',
+  'did',
+  'do',
+  'does',
+  'for',
+  'from',
+  'get',
+  'give',
+  'has',
+  'have',
+  'how',
+  'i',
+  'in',
+  'into',
+  'is',
+  'it',
+  'its',
+  'just',
+  'me',
+  'my',
+  'of',
+  'on',
+  'or',
+  'our',
+  'say',
+  'said',
+  'says',
+  'she',
+  'tell',
+  'that',
+  'the',
+  'their',
+  'them',
+  'they',
+  'to',
+  'us',
+  'was',
+  'we',
+  'were',
+  'what',
+  'when',
+  'where',
+  'which',
+  'who',
+  'why',
+  'with',
+  'would',
+  'you',
+  'your',
+]);
+const AI_SEARCH_TOKEN_ALIASES = {
+  sex: ['sexual', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky'],
+  sexual: ['sex', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky'],
+  sexy: ['sex', 'sexual'],
+  intimate: ['intimacy', 'sex', 'sexual'],
+  intimacy: ['intimate', 'sex', 'sexual'],
+  kink: ['kinky', 'sexual', 'sex'],
+  kinky: ['kink', 'sexual', 'sex'],
+  romance: ['romantic'],
+  romantic: ['romance'],
+};
 const normalizeQuizAnswerText = (value = '') =>
   normalizeText(value)
     .toLowerCase()
@@ -661,13 +737,18 @@ const truncateAiText = (value = '', maxLength = 120) => {
 };
 
 const tokenizeAiSearchText = (value = '') =>
-  normalizeText(value)
-    .toLowerCase()
-    .replace(/[’']/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 1);
+  [...new Set(
+    normalizeText(value)
+      .toLowerCase()
+      .replace(/[’']/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1)
+      .filter((token) => token === 'jay' || token === 'kim' || !AI_SEARCH_STOPWORDS.has(token))
+      .flatMap((token) => [token, ...(AI_SEARCH_TOKEN_ALIASES[token] || [])])
+      .filter(Boolean),
+  )];
 
 const formatAiList = (items = []) => {
   const cleaned = [...new Set((items || []).map((item) => normalizeText(item)).filter(Boolean))];
@@ -959,6 +1040,7 @@ const buildAiEvidenceSnapshot = ({
 const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
   const normalizedPrompt = normalizeText(prompt).toLowerCase();
   const promptTokens = [...new Set(tokenizeAiSearchText(prompt))];
+  const contentTokens = promptTokens.filter((token) => token !== 'jay' && token !== 'kim');
   const mentionsJay = /\bjay\b/.test(normalizedPrompt);
   const mentionsKim = /\bkim\b/.test(normalizedPrompt);
   const asksAboutRelationship = /\bwe\b|\bus\b|\bour\b|both of us|the two of us|together|relationship|compatib|match/.test(normalizedPrompt);
@@ -966,6 +1048,7 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
   const asksAboutPreference = /like|likes|liked|love|prefer|favo[u]?rite|into|enjoy|dislike|hate|turn on|turn-off|turn off/.test(normalizedPrompt);
   const asksAboutDiary = /diary|ama|story|context|remember|why|because|chapter/.test(normalizedPrompt);
   const asksAboutNotes = /note|flagged|private note/.test(normalizedPrompt);
+  const asksAboutDirectAnswers = /what has|what did|said about|say about|answered|answer about|what does|what do/.test(normalizedPrompt);
   const asksForSummary = /what is|what's|tell me about|profile|summar|describe|who is/.test(normalizedPrompt);
   const focusSeats = mentionsJay && mentionsKim
     ? ['jay', 'kim']
@@ -986,7 +1069,10 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
     asksAboutPreference,
     asksAboutDiary,
     asksAboutNotes,
+    asksAboutDirectAnswers,
     asksForSummary,
+    contentTokens,
+    hasSpecificTopic: contentTokens.length > 0,
     focusSeats,
   };
 };
@@ -1099,15 +1185,25 @@ const buildAiSeatNarrative = ({
 const scoreAiEvidenceItem = (item = {}, intent = {}) => {
   let score = 0;
   const itemTokenSet = new Set(item.searchTokens || []);
+  const contentTokens = intent.contentTokens || [];
+  let contentMatches = 0;
   (intent.promptTokens || []).forEach((token) => {
     if (!itemTokenSet.has(token)) return;
     score += token.length >= 5 ? 4 : 2;
+    if (contentTokens.includes(token)) contentMatches += 1;
   });
+  if (intent.hasSpecificTopic && !contentMatches) return 0;
   if (intent.focusSeats?.includes(item.seat)) score += 4;
+  if (contentMatches) score += contentMatches * 6;
   if (intent.asksAboutPreference && item.kind === 'question-feedback') score += 8;
   if (intent.asksAboutQuiz && item.kind === 'quiz-answer') score += 8;
   if (intent.asksAboutDiary && item.kind === 'diary-entry') score += 8;
   if (intent.asksAboutNotes && item.kind === 'private-note') score += 9;
+  if (intent.asksAboutDirectAnswers) {
+    if (item.kind === 'game-answer' || item.kind === 'diary-entry' || item.kind === 'private-note') score += 10;
+    if (item.kind === 'question-feedback') score -= 6;
+    if (item.kind === 'quiz-answer' && !intent.asksAboutQuiz) score -= 8;
+  }
   if (!intent.asksAboutQuiz && item.kind === 'game-answer') score += 2;
   if (intent.asksAboutRelationship && item.kind === 'question-feedback') score += 2;
   if (item.kind === 'private-note') score += 1;
