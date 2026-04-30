@@ -197,6 +197,8 @@ const AI_SEARCH_TOKEN_ALIASES = {
   romance: ['romantic'],
   romantic: ['romance'],
 };
+const DIRECT_AI_EVIDENCE_KINDS = new Set(['game-answer', 'diary-entry', 'private-note']);
+const INDIRECT_AI_EVIDENCE_KINDS = new Set(['question-feedback']);
 const normalizeQuizAnswerText = (value = '') =>
   normalizeText(value)
     .toLowerCase()
@@ -750,6 +752,18 @@ const tokenizeAiSearchText = (value = '') =>
       .filter(Boolean),
   )];
 
+const tokenizeAiPromptCoreText = (value = '') =>
+  [...new Set(
+    normalizeText(value)
+      .toLowerCase()
+      .replace(/[’']/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1)
+      .filter((token) => token !== 'jay' && token !== 'kim' && !AI_SEARCH_STOPWORDS.has(token)),
+  )];
+
 const formatAiList = (items = []) => {
   const cleaned = [...new Set((items || []).map((item) => normalizeText(item)).filter(Boolean))];
   if (!cleaned.length) return '';
@@ -1039,6 +1053,7 @@ const buildAiEvidenceSnapshot = ({
 
 const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
   const normalizedPrompt = normalizeText(prompt).toLowerCase();
+  const rawContentTokens = tokenizeAiPromptCoreText(prompt);
   const promptTokens = [...new Set(tokenizeAiSearchText(prompt))];
   const contentTokens = promptTokens.filter((token) => token !== 'jay' && token !== 'kim');
   const mentionsJay = /\bjay\b/.test(normalizedPrompt);
@@ -1071,8 +1086,10 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
     asksAboutNotes,
     asksAboutDirectAnswers,
     asksForSummary,
+    rawContentTokens,
     contentTokens,
     hasSpecificTopic: contentTokens.length > 0,
+    topicLabel: rawContentTokens.length ? rawContentTokens.join(' ') : 'that topic',
     focusSeats,
   };
 };
@@ -1105,10 +1122,10 @@ const getAiItemKindPriority = (item = {}, intent = {}) => {
   return 0;
 };
 
-const pickAiSeatHighlights = (items = [], seat = 'jay', intent = {}, limit = 2) => {
+const pickAiSeatHighlights = (items = [], seat = 'jay', intent = {}, limit = 2, allowedKinds = null) => {
   const seen = new Set();
   return items
-    .filter((item) => item?.seat === seat)
+    .filter((item) => item?.seat === seat && (!allowedKinds || allowedKinds.has(item.kind)))
     .sort(
       (left, right) =>
         (getAiItemKindPriority(right, intent) + Number(right.score || 0)) - (getAiItemKindPriority(left, intent) + Number(left.score || 0))
@@ -1171,15 +1188,60 @@ const buildAiSeatFallbackSentence = (seat = 'jay', stats = null, intent = {}) =>
   return `${playerLabel} has some saved evidence, but not enough directly relevant detail for a stronger answer.`;
 };
 
+const buildAiSeatNoDirectEvidenceSentence = ({
+  seat = 'jay',
+  scoredEvidence = [],
+  intent = {},
+} = {}) => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  const support = pickAiSeatHighlights(scoredEvidence, seat, intent, 1, INDIRECT_AI_EVIDENCE_KINDS);
+  if (support.length) {
+    return `I don't have a saved direct answer from ${playerLabel} about ${intent.topicLabel || 'that topic'} yet. Closest saved signal: ${buildAiItemDirectSentence(support[0], seat)}`;
+  }
+  return `I don't have a saved direct answer from ${playerLabel} about ${intent.topicLabel || 'that topic'} yet.`;
+};
+
 const buildAiSeatNarrative = ({
   seat = 'jay',
   scoredEvidence = [],
   intent = {},
   stats = null,
 } = {}) => {
+  if (intent.asksAboutDirectAnswers) {
+    const directHighlights = pickAiSeatHighlights(scoredEvidence, seat, intent, 2, DIRECT_AI_EVIDENCE_KINDS);
+    if (directHighlights.length) return directHighlights.map((item) => buildAiItemDirectSentence(item, seat)).join(' ');
+    return buildAiSeatNoDirectEvidenceSentence({ seat, scoredEvidence, intent });
+  }
   const highlights = pickAiSeatHighlights(scoredEvidence, seat, intent, 2);
   if (!highlights.length) return buildAiSeatFallbackSentence(seat, stats, intent);
   return highlights.map((item) => buildAiItemDirectSentence(item, seat)).join(' ');
+};
+
+const buildAiDisplayedEvidence = ({
+  scoredEvidence = [],
+  focusSeats = [],
+  primarySeat = '',
+  intent = {},
+} = {}) => {
+  if (focusSeats.length === 2) {
+    return focusSeats.flatMap((seat) => {
+      const directKinds = intent.asksAboutDirectAnswers ? DIRECT_AI_EVIDENCE_KINDS : null;
+      const direct = pickAiSeatHighlights(scoredEvidence, seat, intent, 2, directKinds);
+      if (direct.length) return direct;
+      const fallbackKinds = intent.asksAboutDirectAnswers ? INDIRECT_AI_EVIDENCE_KINDS : null;
+      return pickAiSeatHighlights(scoredEvidence, seat, intent, 1, fallbackKinds);
+    });
+  }
+  if (primarySeat) {
+    const directKinds = intent.asksAboutDirectAnswers ? DIRECT_AI_EVIDENCE_KINDS : null;
+    const direct = pickAiSeatHighlights(scoredEvidence, primarySeat, intent, AI_EVIDENCE_PREVIEW_LIMIT, directKinds);
+    if (direct.length) return direct;
+    const fallbackKinds = intent.asksAboutDirectAnswers ? INDIRECT_AI_EVIDENCE_KINDS : null;
+    const fallback = pickAiSeatHighlights(scoredEvidence, primarySeat, intent, AI_EVIDENCE_PREVIEW_LIMIT, fallbackKinds);
+    if (fallback.length) return fallback;
+    return scoredEvidence.filter((item) => item?.seat === primarySeat).slice(0, AI_EVIDENCE_PREVIEW_LIMIT);
+  }
+  return scoredEvidence.slice(0, AI_EVIDENCE_PREVIEW_LIMIT);
 };
 
 const scoreAiEvidenceItem = (item = {}, intent = {}) => {
@@ -1244,17 +1306,22 @@ const buildEvidenceBasedAiReply = ({
   const cleanPrompt = normalizeText(prompt);
   const intent = buildAiIntentProfile(cleanPrompt, viewerSeat);
   const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
-  const selectedEvidenceLimit = focusSeats.length === 2 ? Math.max(AI_EVIDENCE_PREVIEW_LIMIT, 6) : AI_EVIDENCE_PREVIEW_LIMIT;
   const scoredEvidence = (evidenceSnapshot.items || [])
     .map((item) => ({ ...item, score: scoreAiEvidenceItem(item, intent) }))
     .filter((item) => item.score > 0)
     .sort((left, right) => right.score - left.score || right.createdAtMs - left.createdAtMs);
-  const selectedEvidence = scoredEvidence.length
-    ? scoredEvidence.slice(0, selectedEvidenceLimit)
-    : pickFallbackAiEvidence(evidenceSnapshot, intent, viewerSeat);
   const primarySeat = focusSeats.length === 1 ? focusSeats[0] : '';
   const primaryStats = primarySeat ? evidenceSnapshot.bySeat?.[primarySeat] : null;
   const pairStats = evidenceSnapshot.pair || {};
+  const fallbackEvidence = pickFallbackAiEvidence(evidenceSnapshot, intent, viewerSeat);
+  const selectedEvidence = scoredEvidence.length
+    ? buildAiDisplayedEvidence({
+        scoredEvidence,
+        focusSeats,
+        primarySeat,
+        intent,
+      })
+    : fallbackEvidence;
 
   let answer = '';
   if (!selectedEvidence.length && !evidenceSnapshot.totalEvidence) {
@@ -1295,7 +1362,16 @@ const buildEvidenceBasedAiReply = ({
     answer = "I can answer from saved evidence only, and I don't have a strong enough match for that question yet.";
   }
 
-  const confidence = selectedEvidence.length >= 3 ? 'High' : selectedEvidence.length === 2 ? 'Medium' : selectedEvidence.length === 1 ? 'Low' : 'Low';
+  const hasDirectAnswerEvidence = selectedEvidence.some((item) => DIRECT_AI_EVIDENCE_KINDS.has(item.kind));
+  const confidence = intent.asksAboutDirectAnswers
+    ? hasDirectAnswerEvidence
+      ? (selectedEvidence.length >= 2 ? 'High' : 'Medium')
+      : 'Low'
+    : selectedEvidence.length >= 3
+      ? 'High'
+      : selectedEvidence.length === 2
+        ? 'Medium'
+        : 'Low';
   const evidenceLines = selectedEvidence.map((item) => `• ${formatAiEvidenceBullet(item)}`);
   return {
     confidence,
