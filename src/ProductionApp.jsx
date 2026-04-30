@@ -3711,6 +3711,7 @@ function QuizSetupStagePanel({
   const pendingProposal = agreement.status === 'proposal_pending' && Number.isFinite(Number(agreement.proposedAmount));
   const proposalFromViewer = pendingProposal && agreement.proposedBySeat === currentPlayer;
   const incomingProposal = pendingProposal && agreement.proposedBySeat === otherPlayer;
+  const counterProposalAvailable = pendingProposal && !proposalFromViewer;
   const wheelPending = agreement.status === 'wheel_pending';
   const requestOwnedByViewer = Boolean(
     wheelPending
@@ -3732,6 +3733,8 @@ function QuizSetupStagePanel({
   const wheelPendingFromOther = wheelPending && !wheelPendingFromViewer;
   const wheelRequesterName = agreement.wheelRequestedByName || gameSeatDisplayName(game, agreement.wheelRequestedBySeat || otherPlayer, null) || 'The other player';
   const canActAsOtherPlayer = Boolean(game?.isLocalOnly);
+  const allowManualAccept = pendingProposal && (incomingProposal || canActAsOtherPlayer);
+  const allowManualReject = pendingProposal && (!proposalFromViewer || canActAsOtherPlayer);
   const proposalLabel = agreement.proposedBySeat ? gameSeatDisplayName(game, agreement.proposedBySeat, null) : 'Player';
   const bothPlayersJoined = Boolean(game?.seats?.jay && game?.seats?.kim);
   const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
@@ -3790,6 +3793,14 @@ function QuizSetupStagePanel({
   const wheelIsInactive = !isWheelMode;
   const manualIsLocked = manualIsInactive || wheelActive || wheelPending || sharedWagerLocked;
   const wheelIsLocked = wheelIsInactive || sharedWagerLocked;
+  const manualActionStackClassName = [
+    'button-row',
+    'live-round-actions',
+    'live-round-actions--embedded',
+    'quiz-wager-action-stack',
+    'quiz-choice-manual-actions',
+    allowManualReject ? '' : 'quiz-choice-manual-single',
+  ].filter(Boolean).join(' ');
   const wheelHelperText = launchPending
     ? `Shared wager locked at ${formatScore(sharedWagerAmount || 0)}. Starting Quick Fire...`
     : effectiveSharedWagerLocked && agreement.lockedByWheel
@@ -3967,11 +3978,28 @@ function QuizSetupStagePanel({
                     <strong>{formatScore(activeWagerDisplayAmount)}</strong>
                     <p>{negotiationStatusText}</p>
                   </div>
-                  <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-choice-manual-actions quiz-choice-manual-single">
-                    <Button className="ghost-button compact quiz-wager-propose-button" onClick={onManualPrimaryAction} disabled={isBusy || manualIsLocked || !bothPlayersJoined || sharedWagerLocked || wheelActive || proposalFromViewer}>
-                      {incomingProposal ? 'Reject and Propose New Wager' : proposalFromViewer ? `Waiting for ${oppositeLabel}` : 'Propose Wager'}
+                  <div className={manualActionStackClassName}>
+                    {allowManualReject ? (
+                      <Button
+                        className="ghost-button compact quiz-wager-reject-button"
+                        onClick={onRejectQuizWager}
+                        disabled={isBusy || manualIsLocked || !allowManualReject || sharedWagerLocked || wheelActive || wheelPending}
+                      >
+                        Reject
+                      </Button>
+                    ) : null}
+                    <Button
+                      className="ghost-button compact quiz-wager-propose-button"
+                      onClick={onManualPrimaryAction}
+                      disabled={isBusy || manualIsLocked || !bothPlayersJoined || sharedWagerLocked || wheelActive || proposalFromViewer}
+                    >
+                      {counterProposalAvailable ? 'Propose New Wager' : proposalFromViewer ? `Waiting for ${oppositeLabel}` : 'Propose Wager'}
                     </Button>
-                    <Button className="primary-button compact quiz-wager-accept-button" onClick={onAcceptQuizWager} disabled={isBusy || manualIsLocked || !pendingProposal || (!incomingProposal && !canActAsOtherPlayer) || sharedWagerLocked || wheelActive || wheelPending}>
+                    <Button
+                      className="primary-button compact quiz-wager-accept-button"
+                      onClick={onAcceptQuizWager}
+                      disabled={isBusy || manualIsLocked || !allowManualAccept || sharedWagerLocked || wheelActive || wheelPending}
+                    >
                       Accept
                     </Button>
                   </div>
