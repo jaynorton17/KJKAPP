@@ -2180,7 +2180,6 @@ function AiAssistantPanel({
   user,
   profile,
   currentPlayerSeat,
-  aiEvidenceSnapshot,
   aiChatMessages,
   aiChatDraft,
   setAiChatDraft,
@@ -2188,128 +2187,17 @@ function AiAssistantPanel({
   isAiChatSending,
 }) {
   const viewerSeat = currentPlayerSeat || inferSeatFromUser(user, profile) || 'jay';
-  const otherSeat = oppositeSeatOf(viewerSeat);
   const viewerLabel = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[viewerSeat] || 'Player';
-  const selfStats = aiEvidenceSnapshot?.bySeat?.[viewerSeat] || finalizeAiSeatStats();
-  const otherStats = aiEvidenceSnapshot?.bySeat?.[otherSeat] || finalizeAiSeatStats();
-  const pairStats = aiEvidenceSnapshot?.pair || {};
-  const sourceCounts = aiEvidenceSnapshot?.sourceCounts || {};
-  const sharedFavourites = (pairStats.sharedFavouriteQuestions || []).slice(0, 3);
-
-  const renderSeatSummaryRow = (seat, stats) => (
-    <article className="mini-list-row ai-profile-row" key={`ai-profile-${seat}`}>
-      <strong>{PLAYER_LABEL[seat]} profile</strong>
-      <span>
-        {stats.standardAnswers} standard answers · {stats.quizAnswers} quiz answers · {stats.diaryEntries} diary entries
-      </span>
-      <small>
-        {stats.liked} liked · {stats.disliked} disliked · {stats.quizAccuracy}% quiz accuracy
-      </small>
-      <small>
-        {stats.topLikedCategories.length
-          ? `Top liked themes: ${formatAiList(stats.topLikedCategories.map((row) => row.label).slice(0, 3))}`
-          : stats.topAnsweredCategories.length
-            ? `Most answered themes: ${formatAiList(stats.topAnsweredCategories.map((row) => row.label).slice(0, 3))}`
-            : 'Not enough category evidence yet.'}
-      </small>
-    </article>
-  );
 
   return (
     <section className="ai-page-shell">
-      <section className="panel lobby-panel lobby-panel--ai ai-overview-card">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">AI</p>
-            <h2>Private Evidence Chat</h2>
-          </div>
-          <span className="status-pill">Private to {viewerLabel}</span>
-        </div>
-        <p className="panel-copy">
-          Ask about Jay, Kim, or your relationship. This assistant only answers from saved evidence and will say when the evidence is thin.
-        </p>
-
-        <div className="question-bank-status-grid ai-evidence-grid">
-          <article className="stat-tile">
-            <small>Total Evidence</small>
-            <strong>{aiEvidenceSnapshot?.totalEvidence || 0}</strong>
-            <span>saved signals the assistant can cite</span>
-          </article>
-          <article className="stat-tile">
-            <small>Shared Likes</small>
-            <strong>{pairStats.bothLiked || 0}</strong>
-            <span>questions both players liked</span>
-          </article>
-          <article className="stat-tile">
-            <small>Split Opinions</small>
-            <strong>{pairStats.splitOpinions || 0}</strong>
-            <span>questions one liked and one disliked</span>
-          </article>
-          <article className="stat-tile">
-            <small>Private Notes</small>
-            <strong>{selfStats.privateNotes || 0}</strong>
-            <span>only visible in your assistant</span>
-          </article>
-        </div>
-
-        <div className="summary-columns ai-summary-columns">
-          <section className="summary-column">
-            <div className="mini-heading">
-              <div>
-                <span>Player Profiles</span>
-                <h3>Saved patterns</h3>
-              </div>
-            </div>
-            <div className="mini-list">
-              {renderSeatSummaryRow(viewerSeat, selfStats)}
-              {renderSeatSummaryRow(otherSeat, otherStats)}
-            </div>
-          </section>
-
-          <section className="summary-column">
-            <div className="mini-heading">
-              <div>
-                <span>Evidence Mix</span>
-                <h3>What the AI can use</h3>
-              </div>
-            </div>
-            <div className="mini-list">
-              <article className="mini-list-row ai-profile-row">
-                <strong>Source coverage</strong>
-                <span>
-                  {sourceCounts.gameAnswers || 0} game answers · {sourceCounts.quizAnswers || 0} quiz answers · {sourceCounts.feedback || 0} likes/dislikes
-                </span>
-                <small>
-                  {sourceCounts.diaryEntries || 0} diary entries · {sourceCounts.privateNotes || 0} private notes
-                </small>
-              </article>
-              <article className="mini-list-row ai-profile-row">
-                <strong>Relationship signals</strong>
-                <span>
-                  {pairStats.completedStandardGames || 0} standard games · {pairStats.completedQuizGames || 0} quiz sessions
-                </span>
-                <small>
-                  {sharedFavourites.length
-                    ? `Shared favourites: ${formatAiList(sharedFavourites)}`
-                    : 'Shared favourites will appear here as you both like more questions.'}
-                </small>
-              </article>
-            </div>
-          </section>
-        </div>
-      </section>
-
       <section className="panel lobby-panel lobby-panel--ai ai-chat-card chat-column chat-column--locked">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Private Chat</p>
+            <p className="eyebrow">AI</p>
             <h2>Ask The AI</h2>
           </div>
-          <span className="status-pill">Evidence only</span>
-        </div>
-        <div className="ai-chat-note">
-          <strong>How it answers</strong>
-          <span>Saved game answers, quiz results, likes/dislikes, diary entries, and your private notes. No bluffing beyond the evidence.</span>
+          <span className="status-pill">Private to {viewerLabel}</span>
         </div>
         <ChatPanel
           compact
@@ -3491,7 +3379,6 @@ function LobbyScreen({
               user={user}
               profile={profile}
               currentPlayerSeat={currentPlayerSeat}
-              aiEvidenceSnapshot={aiEvidenceSnapshot}
               aiChatMessages={aiChatMessages}
               aiChatDraft={aiChatDraft}
               setAiChatDraft={setAiChatDraft}
