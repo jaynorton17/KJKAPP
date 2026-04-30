@@ -9268,6 +9268,8 @@ function ProductionApp() {
     let nextQuizTotals = gameDoc.quizTotals || { jay: 0, kim: 0 };
     let nextQuizWinner = Number(nextQuizTotals.jay || 0) === Number(nextQuizTotals.kim || 0) ? 'tie' : Number(nextQuizTotals.jay || 0) > Number(nextQuizTotals.kim || 0) ? 'jay' : 'kim';
     let appliedLifetimePoints = false;
+    let nextJayLifetime = Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0);
+    let nextKimLifetime = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
     const pendingRound = gameDoc.currentRound || null;
     const effectivePendingRound = pendingRound
       ? {
@@ -9362,10 +9364,10 @@ function ProductionApp() {
       batch.set(archivedRoundRef, archivedRoundResult);
     }
     if (!gameDoc.lifetimePointsApplied) {
-      const nextJayLifetime = isQuizGame
+      nextJayLifetime = isQuizGame
         ? Math.max(0, Number(jayCurrent || 0) + wagerPenaltyShiftJay)
         : addScores(jayCurrent, Number(nextFinalScores.jay || 0));
-      const nextKimLifetime = isQuizGame
+      nextKimLifetime = isQuizGame
         ? Math.max(0, Number(kimCurrent || 0) + wagerPenaltyShiftKim)
         : addScores(kimCurrent, Number(nextFinalScores.kim || 0));
       batch.set(
@@ -9395,6 +9397,7 @@ function ProductionApp() {
       currentRound: null,
       endedAt: serverTimestamp(),
       endedBy: endedByUid,
+      totals: nextFinalScores,
       finalScores: nextFinalScores,
       winner: isQuizGame ? nextQuizWinner : nextWinner,
       quizTotals: nextQuizTotals,
@@ -9418,6 +9421,26 @@ function ProductionApp() {
       updatedAt: serverTimestamp(),
     }, { merge: true });
     await batch.commit();
+
+    if (appliedLifetimePoints) {
+      setPlayerAccounts((current) => ({
+        ...current,
+        jay: {
+          ...(current?.jay || {}),
+          uid: fixedPlayerUids.jay,
+          displayName: current?.jay?.displayName || 'Jay',
+          lifetimePenaltyPoints: nextJayLifetime,
+          updatedAt: new Date().toISOString(),
+        },
+        kim: {
+          ...(current?.kim || {}),
+          uid: fixedPlayerUids.kim,
+          displayName: current?.kim?.displayName || 'Kim',
+          lifetimePenaltyPoints: nextKimLifetime,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+    }
 
     const finalSnapshot = await getDoc(gameRef);
     const finalizedGameDoc = finalSnapshot.exists() ? { id: finalSnapshot.id, ...finalSnapshot.data() } : gameDoc;
