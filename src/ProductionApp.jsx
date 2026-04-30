@@ -13804,88 +13804,73 @@ function ProductionApp() {
 
         const gameRef = makeGameRef();
         if (!gameRef || !firestore) return null;
+        const nowMs = Date.now();
+        const nowIso = new Date(nowMs).toISOString();
+        const liveSeat = seatForUid(game, user?.uid) || seat;
+        if (!liveSeat) throw new Error('Could not determine your player seat.');
+        const previousReadyState = normalizeQuizReadyState(game?.quizReadyState || null, 'ready');
+        const optimisticReadyState = {
+          ...previousReadyState,
+          stage: previousReadyState.stage === 'countdown' ? 'countdown' : 'ready',
+          ready: {
+            ...(previousReadyState.ready || { jay: false, kim: false }),
+            [liveSeat]: true,
+          },
+        };
+        const liveLockSource = isQuizWagerEffectivelyLocked(game, nowMs)
+          ? game
+          : {
+              ...game,
+              quizWagerAgreement: game?.quizWagerAgreement || null,
+              quizWagers: game?.quizWagers || {},
+            };
+        const lockPatch = buildQuizWagerLockPatch(liveLockSource, nowIso);
+        if (!isQuizWagerAgreementLocked(game) && !isQuizWagerEffectivelyLocked(game, nowMs) && !lockPatch) {
+          throw new Error('Both players must agree one shared wager before starting Quick Fire.');
+        }
         debugRoom('quizSetupReadyWrite', {
           gameId: game?.id || gameId || '',
           userId: user?.uid || '',
           seat,
           requestedSeat,
+          liveSeat,
           previousStage: game?.quizReadyState?.stage || '',
           previousReady: game?.quizReadyState?.ready || {},
         });
+        setGame((current) => current && !current.currentRound
+          ? {
+              ...current,
+              quizReadyState: optimisticReadyState,
+              updatedAt: new Date().toISOString(),
+            }
+          : current);
         try {
-          const transactionResult = await runTransaction(firestore, async (transaction) => {
-            const snap = await transaction.get(gameRef);
-            if (!snap.exists()) throw new Error('Room not found.');
-            const data = snap.data() || {};
-            if (data.currentRound) {
-              return { status: 'already-launched', currentRound: data.currentRound };
-            }
-            const nowMs = Date.now();
-            const nowIso = new Date(nowMs).toISOString();
-            const liveSeat = seatForUid(data, user?.uid) || seat;
-            if (!liveSeat) throw new Error('Could not determine your player seat.');
-            const liveReadyState = normalizeQuizReadyState(data.quizReadyState || null, 'ready');
-            debugRoom('quizSetupReadyRead', {
-              gameId: game?.id || gameId || '',
-              userId: user?.uid || '',
-              seat,
-              liveSeat,
-              ready: liveReadyState.ready || {},
-              stage: liveReadyState.stage || '',
-            });
-            const nextReadyState = buildQuizSetupReadyStateForSeat(liveReadyState, liveSeat, nowMs);
-            const liveLockSource = isQuizWagerEffectivelyLocked(data)
-              ? data
-              : {
-                  ...data,
-                  quizWagerAgreement: game?.quizWagerAgreement || data.quizWagerAgreement || null,
-                  quizWagers: game?.quizWagers || data.quizWagers || {},
-                };
-            const lockPatch = buildQuizWagerLockPatch(liveLockSource, nowIso);
-            if (!isQuizWagerAgreementLocked(data) && !isQuizWagerEffectivelyLocked(data) && !lockPatch) {
-              return { status: 'wager-not-locked', quizReadyState: liveReadyState };
-            }
-            transaction.update(gameRef, {
-              ...(lockPatch || {}),
-              quizReadyState: nextReadyState,
-              updatedAt: serverTimestamp(),
-            });
-            return {
-              status: nextReadyState.stage === 'countdown' ? 'countdown-started' : 'ready-written',
-              liveSeat,
-              quizReadyState: nextReadyState,
-            };
-          });
+          const readyWritePatch = {
+            ...(lockPatch || {}),
+            [`quizReadyState.ready.${liveSeat}`]: true,
+            updatedAt: serverTimestamp(),
+          };
+          if (optimisticReadyState.stage !== 'countdown') {
+            readyWritePatch['quizReadyState.stage'] = 'ready';
+          }
+          await updateDoc(gameRef, readyWritePatch);
           debugRoom('quizSetupReadyWriteComplete', {
             gameId: game?.id || gameId || '',
             userId: user?.uid || '',
             seat,
             requestedSeat,
-            liveSeat: transactionResult?.liveSeat || seat,
-            status: transactionResult?.status || '',
-            stage: transactionResult?.quizReadyState?.stage || '',
-            ready: transactionResult?.quizReadyState?.ready || {},
+            liveSeat,
+            stage: optimisticReadyState.stage || '',
+            ready: optimisticReadyState.ready || {},
           });
-          if (transactionResult?.currentRound) {
-            setGame((current) => current && !current.currentRound
-              ? {
-                  ...current,
-                  currentRound: transactionResult.currentRound,
-                  quizReadyState: null,
-                  status: 'active',
-                  updatedAt: new Date().toISOString(),
-                }
-              : current);
-          } else if (transactionResult?.quizReadyState) {
-            setGame((current) => current && !current.currentRound
-              ? {
-                  ...current,
-                  quizReadyState: transactionResult.quizReadyState,
-                  updatedAt: new Date().toISOString(),
-                }
-              : current);
-          }
         } catch (error) {
+          setGame((current) => current && !current.currentRound
+            ? {
+                ...current,
+                quizReadyState: previousReadyState,
+                updatedAt: new Date().toISOString(),
+              }
+            : current);
           debugRoom('quizSetupReadyWriteFailed', {
             gameId: game?.id || gameId || '',
             seat,
