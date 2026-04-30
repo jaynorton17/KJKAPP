@@ -58,6 +58,8 @@ button:disabled {
   display: grid;
   gap: 14px;
   align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .auth-screen {
