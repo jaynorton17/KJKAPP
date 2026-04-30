@@ -13067,7 +13067,18 @@ function ProductionApp() {
           }
         }
         const drawn = drawQuestion();
-        const nextQuestionItem = drawn.question;
+        let nextQuestionItem = drawn.question || null;
+        let nextRemainingQueueIds = drawn.remainingQueueIds;
+        if (!nextQuestionItem && Array.isArray(game.questionQueueIds) && game.questionQueueIds.length) {
+          const queuedQuestionId = game.questionQueueIds.find(Boolean) || '';
+          if (queuedQuestionId) {
+            const queuedQuestionSnap = await getDoc(doc(firestore, 'questionBank', queuedQuestionId)).catch(() => null);
+            if (queuedQuestionSnap?.exists()) {
+              nextQuestionItem = normalizeStoredQuestion(queuedQuestionSnap.data(), queuedQuestionSnap.id);
+              nextRemainingQueueIds = game.questionQueueIds.filter((id) => id !== queuedQuestionId);
+            }
+          }
+        }
         if (!nextQuestionItem) {
           if (savedCurrentRound) {
             await setDoc(gameRef, {
@@ -13108,7 +13119,7 @@ function ProductionApp() {
             : {}),
           currentRound: nextRound,
           quizReadyState: null,
-          questionQueueIds: drawn.remainingQueueIds,
+          questionQueueIds: nextRemainingQueueIds,
           status: 'active',
           updatedAt: serverTimestamp(),
         };
@@ -13296,7 +13307,19 @@ function ProductionApp() {
         : (data.quizWagers || game.quizWagers || { jay: 0, kim: 0 }),
     };
     const drawn = drawQuestion(sourceGame, rounds);
-    if (!drawn.question) {
+    let nextQuestionItem = drawn.question || null;
+    let nextRemainingQueueIds = drawn.remainingQueueIds;
+    if (!nextQuestionItem && sharedQueueIds.length) {
+      const queuedQuestionId = sharedQueueIds.find(Boolean) || '';
+      if (queuedQuestionId) {
+        const queuedQuestionSnap = await getDoc(doc(firestore, 'questionBank', queuedQuestionId)).catch(() => null);
+        if (queuedQuestionSnap?.exists()) {
+          nextQuestionItem = normalizeStoredQuestion(queuedQuestionSnap.data(), queuedQuestionSnap.id);
+          nextRemainingQueueIds = sharedQueueIds.filter((id) => id !== queuedQuestionId);
+        }
+      }
+    }
+    if (!nextQuestionItem) {
       await setDoc(gameRef, {
         quizReadyState: defaultQuizReadyState('ready'),
         updatedAt: serverTimestamp(),
@@ -13305,8 +13328,8 @@ function ProductionApp() {
     }
     const nextRoundNumber = Math.max(Number(sourceGame.roundsPlayed || 0) + 1, 1);
     const nextRound = {
-      ...buildRoundFromQuestion(drawn.question, nextRoundNumber, { isQuizGame: true, startOpen: true }),
-      id: `round-quiz-${nextRoundNumber}-${sanitizeNoteKey(drawn.question.id || drawn.question.question || 'question') || 'question'}`,
+      ...buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame: true, startOpen: true }),
+      id: `round-quiz-${nextRoundNumber}-${sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question'}`,
     };
     await setDoc(gameRef, {
       ...(promotedAgreement
@@ -13320,10 +13343,22 @@ function ProductionApp() {
         : {}),
       currentRound: nextRound,
       quizReadyState: null,
-      questionQueueIds: drawn.remainingQueueIds,
+      questionQueueIds: nextRemainingQueueIds,
       status: 'active',
       updatedAt: serverTimestamp(),
     }, { merge: true });
+    setGame((current) =>
+      current && !current.currentRound
+        ? {
+            ...current,
+            currentRound: nextRound,
+            quizReadyState: null,
+            questionQueueIds: nextRemainingQueueIds,
+            status: 'active',
+            updatedAt: new Date().toISOString(),
+          }
+        : current,
+    );
   };
 
   useEffect(() => {
