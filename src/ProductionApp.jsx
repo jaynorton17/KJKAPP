@@ -1850,7 +1850,7 @@ function LobbyScreen({
     const typeStats = new Map();
 
     (questionFeedback || []).forEach((entry) => {
-      const seat = seatFromPlayerRef(entry.userId || entry.userSeat) || '';
+      const seat = seatFromPlayerRef(entry.userSeat || entry.userId) || '';
       const value = entry.feedbackValue === 'liked' ? 'liked' : entry.feedbackValue === 'disliked' ? 'disliked' : '';
       if (!seat || !value) return;
       byUser[seat][value] += 1;
