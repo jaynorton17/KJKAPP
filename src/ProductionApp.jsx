@@ -1854,7 +1854,18 @@ function LobbyScreen({
     const sessions = (previousGames || []).filter((entry) => (entry?.gameMode || 'standard') === 'quiz');
     const completedSessions = sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || ''));
     const wins = { jay: 0, kim: 0, tie: 0 };
-    const wagers = { games: 0, jayNetShift: 0, kimNetShift: 0, movedTotal: 0, jayWon: 0, kimWon: 0, tie: 0 };
+    const wagers = {
+      games: 0,
+      jayNetShift: 0,
+      kimNetShift: 0,
+      movedTotal: 0,
+      totalPlayedFor: 0,
+      biggestSharedWager: 0,
+      averageSharedWager: 0,
+      jayWon: 0,
+      kimWon: 0,
+      tie: 0,
+    };
     completedSessions.forEach((entry) => {
       const winner = entry?.quizWinner || entry?.winner || 'tie';
       if (winner === 'jay') wins.jay += 1;
@@ -1865,14 +1876,23 @@ function LobbyScreen({
         wagers.games += 1;
         const jayShift = Number(settlement.jayShift || 0);
         const kimShift = Number(settlement.kimShift || 0);
+        const sharedWager = Math.max(
+          0,
+          Number(settlement.sharedWager || 0),
+          Number(settlement.jayWager || 0),
+          Number(settlement.kimWager || 0),
+        );
         wagers.jayNetShift += jayShift;
         wagers.kimNetShift += kimShift;
         wagers.movedTotal += Math.abs(jayShift) + Math.abs(kimShift);
+        wagers.totalPlayedFor += sharedWager;
+        wagers.biggestSharedWager = Math.max(wagers.biggestSharedWager, sharedWager);
         if (winner === 'jay') wagers.jayWon += 1;
         if (winner === 'kim') wagers.kimWon += 1;
         if (winner !== 'jay' && winner !== 'kim') wagers.tie += 1;
       }
     });
+    wagers.averageSharedWager = wagers.games ? Math.round(wagers.totalPlayedFor / wagers.games) : 0;
     return {
       totalQuizSessions: sessions.length,
       completedQuizSessions: completedSessions.length,
@@ -2696,6 +2716,9 @@ function LobbyScreen({
                         <div className="mini-heading"><div><span>Wagers</span><h3>Penalty moved</h3></div></div>
                         <div className="summary-list">
                           <article className="mini-list-row"><strong>Wager games</strong><span>{quizSessionAnalytics.wagers.games}</span></article>
+                          <article className="mini-list-row"><strong>Points played for</strong><span>{formatScore(quizSessionAnalytics.wagers.totalPlayedFor)}</span></article>
+                          <article className="mini-list-row"><strong>Biggest wager</strong><span>{formatScore(quizSessionAnalytics.wagers.biggestSharedWager)}</span></article>
+                          <article className="mini-list-row"><strong>Average wager</strong><span>{formatScore(quizSessionAnalytics.wagers.averageSharedWager)}</span></article>
                           <article className="mini-list-row"><strong>Jay net shift</strong><span>{formatScore(quizSessionAnalytics.wagers.jayNetShift)}</span></article>
                           <article className="mini-list-row"><strong>Kim net shift</strong><span>{formatScore(quizSessionAnalytics.wagers.kimNetShift)}</span></article>
                           <article className="mini-list-row"><strong>Total moved</strong><span>{formatScore(quizSessionAnalytics.wagers.movedTotal)}</span></article>
@@ -4819,6 +4842,17 @@ function GameSummaryContent({
   const summaryRounds = useMemo(() => normalizeStoredRounds(gameSummary?.rounds || []), [gameSummary?.rounds]);
   const summaryAnalytics = useMemo(() => calculateAnalytics(summaryRounds), [summaryRounds]);
   const finalScores = gameSummary?.finalScores || gameSummary?.totals || summaryAnalytics.totals || { jay: 0, kim: 0 };
+  const isQuizGame = (gameSummary?.gameMode || 'standard') === 'quiz';
+  const quizTotals = gameSummary?.quizTotals || { jay: 0, kim: 0 };
+  const wagerSettlement = gameSummary?.wagerSettlement || null;
+  const sharedWagerAmount = wagerSettlement
+    ? Math.max(
+        0,
+        Number(wagerSettlement.sharedWager || 0),
+        Number(wagerSettlement.jayWager || 0),
+        Number(wagerSettlement.kimWager || 0),
+      )
+    : 0;
   const summaryScrollRef = useRef(null);
   const summaryScrollKey = [
     gameSummary?.id,
@@ -4858,6 +4892,9 @@ function GameSummaryContent({
             <span className="game-summary-meta-pill">Completed {completedLabel}</span>
             <span className="game-summary-meta-pill">{summaryRounds.length} {summaryRounds.length === 1 ? 'round' : 'rounds'} played</span>
             <span className="game-summary-meta-pill">{winner === 'tie' ? 'Tied game' : `${PLAYER_LABEL[winner] || winner} won`}</span>
+            {isQuizGame && sharedWagerAmount > 0 ? (
+              <span className="game-summary-meta-pill">{`Played for ${formatScore(sharedWagerAmount)}`}</span>
+            ) : null}
           </div>
         </div>
         <div className="game-summary-header-actions">
@@ -4884,8 +4921,18 @@ function GameSummaryContent({
               <div className="summary-scoreboard">
                 <div className="stat-tile"><small>Winner</small><strong>{winner === 'tie' ? 'Tie' : PLAYER_LABEL[winner] || winner}</strong></div>
                 <div className="stat-tile"><small>Questions</small><strong>{summaryRounds.length}</strong></div>
-                <div className="stat-tile"><small>Jay Final</small><strong>{formatScore(finalScores.jay || 0)}</strong></div>
-                <div className="stat-tile"><small>Kim Final</small><strong>{formatScore(finalScores.kim || 0)}</strong></div>
+                {isQuizGame ? (
+                  <>
+                    <div className="stat-tile"><small>Played For</small><strong>{formatScore(sharedWagerAmount || 0)}</strong></div>
+                    <div className="stat-tile"><small>Jay Quiz</small><strong>{formatScore(quizTotals.jay || 0)}</strong></div>
+                    <div className="stat-tile"><small>Kim Quiz</small><strong>{formatScore(quizTotals.kim || 0)}</strong></div>
+                  </>
+                ) : (
+                  <>
+                    <div className="stat-tile"><small>Jay Final</small><strong>{formatScore(finalScores.jay || 0)}</strong></div>
+                    <div className="stat-tile"><small>Kim Final</small><strong>{formatScore(finalScores.kim || 0)}</strong></div>
+                  </>
+                )}
               </div>
 
               {showActions ? (
@@ -9420,6 +9467,7 @@ function ProductionApp() {
       quizWinner: nextQuizWinner,
       wagerSettlement: isQuizGame
         ? {
+            sharedWager: Math.max(jayWager, kimWager),
             jayWager,
             kimWager,
             jayShift: wagerPenaltyShiftJay,
