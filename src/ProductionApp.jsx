@@ -8746,6 +8746,10 @@ function ProductionApp() {
     () => bankQuestions.filter((question) => question?.bankType === 'quiz'),
     [bankQuestions],
   );
+  const standardSelectableQuestions = useMemo(
+    () => (gameBankQuestions.length ? gameBankQuestions : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))),
+    [gameBankQuestions],
+  );
   const lobbyCategoryOptions = useMemo(
     () => deriveCategories(gameBankQuestions, lobbyRounds, DEFAULT_CATEGORIES).map((category) => category.name).filter(Boolean),
     [gameBankQuestions, lobbyRounds],
@@ -8796,12 +8800,16 @@ function ProductionApp() {
     return nextEntries;
   }, [gameLibrary, game, rounds]);
   const bankQuestionIds = useMemo(
-    () => new Set(gameBankQuestions.map((question) => question.id).filter(Boolean)),
-    [gameBankQuestions],
+    () => new Set(standardSelectableQuestions.map((question) => question.id).filter(Boolean)),
+    [standardSelectableQuestions],
   );
   const quizQuestionIds = useMemo(
     () => new Set(quizBankQuestions.map((question) => question.id).filter(Boolean)),
     [quizBankQuestions],
+  );
+  const pairPlayedQuestionIds = useMemo(
+    () => mergeUniqueIds(pairHistory?.playedQuestionIds || []),
+    [pairHistory?.playedQuestionIds],
   );
   const reservedQuestionIds = useMemo(
     () =>
@@ -8815,17 +8823,21 @@ function ProductionApp() {
                 entry?.questionQueueIds || [],
               ),
             ),
-        ).filter((questionId) => bankQuestionIds.has(questionId)),
+        ).filter(Boolean),
       ),
-    [trackedGameEntries, bankQuestionIds],
+    [trackedGameEntries],
   );
   const trackedUsedQuestionIds = useMemo(
     () => {
-      const trackedIds = mergeUniqueIds(...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)));
+      const trackedIds = mergeUniqueIds(
+        pairPlayedQuestionIds,
+        ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+        standardSelectableQuestions.filter((question) => question?.used).map((question) => question.id),
+      );
       if (!bankQuestionIds.size) return new Set(trackedIds);
       return new Set(trackedIds.filter((questionId) => bankQuestionIds.has(questionId)));
     },
-    [trackedGameEntries, bankQuestionIds],
+    [pairPlayedQuestionIds, trackedGameEntries, standardSelectableQuestions, bankQuestionIds],
   );
   const replayEligibleQuestionIds = useMemo(
     () =>
@@ -8845,22 +8857,26 @@ function ProductionApp() {
   const usedQuestionCount = effectiveRetiredQuestionIds.size;
   const remainingQuestionCount = Math.max(0, bankCount - usedQuestionCount);
   const trackedUsedQuizQuestionIds = useMemo(() => {
-    const trackedIds = mergeUniqueIds(...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)));
+    const trackedIds = mergeUniqueIds(
+      pairPlayedQuestionIds,
+      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+      quizBankQuestions.filter((question) => question?.used).map((question) => question.id),
+    );
     if (!quizQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => quizQuestionIds.has(questionId)));
-  }, [trackedGameEntries, quizQuestionIds]);
+  }, [pairPlayedQuestionIds, trackedGameEntries, quizBankQuestions, quizQuestionIds]);
   const usedQuizQuestionCount = trackedUsedQuizQuestionIds.size;
   const remainingQuizQuestionCount = Math.max(0, quizBankCount - usedQuizQuestionCount);
   const usedQuestionIds = useMemo(() => new Set(rounds.map((round) => round.questionId).filter(Boolean)), [rounds]);
   const availableQuestions = useMemo(() => {
-    const bank = gameBankQuestions.filter(
+    const bank = standardSelectableQuestions.filter(
       (question) =>
         !effectiveRetiredQuestionIds.has(question.id)
         && !usedQuestionIds.has(question.id)
         && !reservedQuestionIds.has(question.id),
     );
-    return bank.length ? bank : gameBankQuestions.length ? [] : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question));
-  }, [gameBankQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
+    return bank;
+  }, [standardSelectableQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
   const globalUsedQuestionIds = useMemo(
     () => new Set(effectiveRetiredQuestionIds),
@@ -12845,13 +12861,19 @@ function ProductionApp() {
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
+    const starterFallbackPool = sourceBankType === 'quiz'
+      ? []
+      : standardSelectableQuestions.filter(
+          (question) =>
+            !retiredQuestionIds.has(question.id)
+            && !reservedQuestionIds.has(question.id)
+            && !usedIds.has(question.id),
+        );
     const candidateQuestions = availablePool.length
       ? availablePool
       : sourcePool.length
         ? []
-        : sourceBankType === 'quiz'
-          ? []
-          : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question));
+        : starterFallbackPool;
     const queuePool = questionQueueIds
       .map((id) => sourcePool.find((question) => question.id === id))
       .filter((question) => question && !usedIds.has(question.id) && question.id !== previousQuestionId);
