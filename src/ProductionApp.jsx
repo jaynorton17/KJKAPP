@@ -1974,6 +1974,20 @@ const getCompletedGameDisplayCount = (game = {}) => {
   return playedQuestionIdsLength;
 };
 
+const isFirestoreRateLimitedError = (error = null) => {
+  const normalizedMessage = normalizeText(error?.message || error || '').toLowerCase();
+  const normalizedCode = normalizeText(error?.code || error?.name || '').toLowerCase();
+  return (
+    normalizedMessage.includes('resource exhausted')
+    || normalizedMessage.includes('resource-exhausted')
+    || normalizedMessage.includes('quota exceeded')
+    || normalizedMessage.includes('quotaexceeded')
+    || normalizedMessage.includes('too many requests')
+    || normalizedCode.includes('resource-exhausted')
+    || normalizedCode.includes('quota-exceeded')
+  );
+};
+
 const getGameQuestionGoal = (game, rounds = []) => {
   const playedRounds = Math.max(Number(game?.roundsPlayed || 0), Array.isArray(rounds) ? rounds.length : 0);
   const queuedRounds = Array.isArray(game?.questionQueueIds) ? game.questionQueueIds.filter(Boolean).length : 0;
@@ -10130,7 +10144,6 @@ function ProductionApp() {
       }),
     [dashboardSeat, diaryEntries, previousGames, questionFeedback, questionNotes, visibleQuizAnswers],
   );
-  const completedGameAuditRef = useRef(new Set());
   const selectedGameSummary = gameLibrary.find((entry) => entry.id === selectedGameId) || null;
   const selectedLocalGameSummary = localArchivedGames.find((entry) => entry.id === selectedGameId) || null;
   const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || localEndedGameSummary;
@@ -10251,7 +10264,16 @@ function ProductionApp() {
     replayEligibleQuestionIds.forEach((questionId) => next.delete(questionId));
     return next;
   }, [trackedUsedQuestionIds, replayEligibleQuestionIds]);
-  const usedQuestionCount = effectiveRetiredQuestionIds.size;
+  const playedStandardQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => (entry?.questionBankType || 'game') !== 'quiz' && (entry?.gameMode || 'standard') !== 'quiz')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!bankQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => bankQuestionIds.has(questionId)));
+  }, [trackedGameEntries, bankQuestionIds]);
+  const usedQuestionCount = playedStandardQuestionIds.size;
   const remainingQuestionCount = Math.max(0, bankCount - usedQuestionCount);
   const trackedUsedQuizQuestionIds = useMemo(() => {
     const trackedIds = mergeUniqueIds(
@@ -10262,7 +10284,16 @@ function ProductionApp() {
     if (!quizQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => quizQuestionIds.has(questionId)));
   }, [pairPlayedQuestionIds, trackedGameEntries, quizBankQuestions, quizQuestionIds]);
-  const usedQuizQuestionCount = trackedUsedQuizQuestionIds.size;
+  const playedQuizQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => (entry?.questionBankType || 'game') === 'quiz' || (entry?.gameMode || 'standard') === 'quiz')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!quizQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => quizQuestionIds.has(questionId)));
+  }, [trackedGameEntries, quizQuestionIds]);
+  const usedQuizQuestionCount = playedQuizQuestionIds.size;
   const remainingQuizQuestionCount = Math.max(0, quizBankCount - usedQuizQuestionCount);
   const usedQuestionIds = useMemo(() => new Set(rounds.map((round) => round.questionId).filter(Boolean)), [rounds]);
   const availableQuestions = useMemo(() => {
@@ -10275,31 +10306,15 @@ function ProductionApp() {
     return bank;
   }, [standardSelectableQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
-  const globalUsedQuestionIds = useMemo(
-    () => new Set(effectiveRetiredQuestionIds),
-    [effectiveRetiredQuestionIds],
+  const allPlayedQuestionIds = useMemo(
+    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds]),
+    [playedStandardQuestionIds, playedQuizQuestionIds],
   );
-  const unusedQuestionCount = Math.max(0, bankCount - globalUsedQuestionIds.size);
+  const unusedQuestionCount = Math.max(0, bankCount - playedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
     () => persistedPreviousGames.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
     [persistedPreviousGames],
   );
-  useEffect(() => {
-    if (hasOpenRoomSession) return;
-    previousGames.forEach((entry) => {
-      if (!entry?.id || completedGameAuditRef.current.has(entry.id)) return;
-      console.log('completed game question audit', {
-        gameId: entry.id,
-        selectedQuestionsLength: Number(entry.selectedQuestionsLength || 0),
-        answeredRoundsLength: Number(entry.answeredRoundsLength || 0),
-        roundHistoryLength: Number(entry.roundHistoryLength || 0),
-        usedQuestionIdsLength: Array.isArray(entry.usedQuestionIds) ? mergeUniqueIds(entry.usedQuestionIds).length : 0,
-        currentQuestionIndex: entry.currentQuestionIndex ?? null,
-        displayedQuestionCount: getCompletedGameDisplayCount(entry),
-      });
-      completedGameAuditRef.current.add(entry.id);
-    });
-  }, [hasOpenRoomSession, previousGames]);
   const pendingActivityCount = useMemo(() => {
     const pendingGameTasks = activeGames.filter((game) => {
       const seat = game?.seats?.jay === user?.uid ? 'jay' : game?.seats?.kim === user?.uid ? 'kim' : null;
@@ -10573,7 +10588,7 @@ function ProductionApp() {
       activeGames: activeGames.length,
       previousGames: previousGames.length,
       totalRoundsPlayed: lobbyRounds.length,
-      totalQuestionsUsed: globalUsedQuestionIds.size,
+      totalQuestionsUsed: allPlayedQuestionIds.size,
       jayGameWins: wins.jay,
       kimGameWins: wins.kim,
       draws: wins.draws,
@@ -10616,7 +10631,7 @@ function ProductionApp() {
     previousGames,
     lobbyRounds,
     lobbyRoundAnalytics,
-    globalUsedQuestionIds,
+    allPlayedQuestionIds,
     previousCompletedGames,
     redemptionHistory,
     playerAccounts,
@@ -14805,12 +14820,18 @@ function ProductionApp() {
       if (quizSetupCountdownRef.current === countdownKey) quizSetupCountdownRef.current = '';
       return undefined;
     }
+    let stoppedForRateLimit = false;
     const attemptCountdownStart = () => {
-      if (quizSetupCountdownRef.current === countdownKey) return;
+      if (stoppedForRateLimit || quizSetupCountdownRef.current === countdownKey) return;
       quizSetupCountdownRef.current = countdownKey;
       startQuizSetupCountdown()
         .catch((error) => {
           debugRoom('quizSetupCountdownFailed', { gameId: game?.id || '', message: error?.message || String(error) });
+          if (isFirestoreRateLimitedError(error)) {
+            stoppedForRateLimit = true;
+            setNotice('Firebase is rate-limiting quiz setup right now. Waiting for the room to catch up.');
+            return;
+          }
           setNotice(error?.message || 'Could not start the Quick Fire countdown.');
         })
         .finally(() => {
@@ -14818,8 +14839,10 @@ function ProductionApp() {
         });
     };
     attemptCountdownStart();
-    const interval = window.setInterval(attemptCountdownStart, 250);
-    return () => window.clearInterval(interval);
+    const fallbackTimer = window.setTimeout(attemptCountdownStart, 1500);
+    return () => {
+      window.clearTimeout(fallbackTimer);
+    };
   }, [
     game?.id,
     game?.gameMode,
@@ -14844,27 +14867,34 @@ function ProductionApp() {
       return;
     }
     const endsAtMs = Date.parse(endsAt || '');
+    let stoppedForRateLimit = false;
     const attemptLaunch = () => {
-      if (quizSetupLaunchRef.current === setupKey || isBusy) return;
+      if (stoppedForRateLimit || quizSetupLaunchRef.current === setupKey || isBusy) return;
       quizSetupLaunchRef.current = setupKey;
       launchQuizRoundFromSetup()
         .catch((error) => {
           debugRoom('quizSetupLaunchFailed', { gameId: game?.id || '', message: error?.message || String(error) });
+          if (isFirestoreRateLimitedError(error)) {
+            stoppedForRateLimit = true;
+            setNotice('Firebase is rate-limiting the quiz launch right now. Waiting for the live room to catch up.');
+            return;
+          }
           setNotice(error?.message || 'Could not start Quick Fire.');
         })
         .finally(() => {
           quizSetupLaunchRef.current = '';
         });
     };
-    let retryInterval = 0;
     const launchDelayMs = Number.isFinite(endsAtMs) ? Math.max(0, endsAtMs - Date.now() + 60) : 0;
     const launchTimer = window.setTimeout(() => {
       attemptLaunch();
-      retryInterval = window.setInterval(attemptLaunch, 1000);
     }, launchDelayMs);
+    const fallbackTimer = window.setTimeout(attemptLaunch, launchDelayMs + 2500);
+    const finalFallbackTimer = window.setTimeout(attemptLaunch, launchDelayMs + 6000);
     return () => {
       window.clearTimeout(launchTimer);
-      if (retryInterval) window.clearInterval(retryInterval);
+      window.clearTimeout(fallbackTimer);
+      window.clearTimeout(finalFallbackTimer);
     };
   }, [
     game?.id,
