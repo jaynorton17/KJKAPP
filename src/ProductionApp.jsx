@@ -143,6 +143,14 @@ const buildHoldemDealReadyStatusCopy = (readyBySeat = {}, currentReadySeat = '')
   }
   return 'Players are seated. Both players must click deal to start the hand.';
 };
+const buildHoldemDealSeedKey = (roomId = '', state = {}, balances = {}) => [
+  'holdem',
+  String(roomId || ''),
+  `hand:${Number(state?.handNumber || 0) + 1}`,
+  `dealer:${String(state?.nextDealerSeat || 'jay')}`,
+  `jay:${Number(balances?.jay || 0)}`,
+  `kim:${Number(balances?.kim || 0)}`,
+].join('|');
 const mergeHoldemSnapshotState = (currentState = null, incomingState = null) => {
   if (!currentState) return incomingState;
   if (!incomingState) return currentState;
@@ -16323,6 +16331,24 @@ function ProductionApp() {
     [],
   );
 
+  const applyLocalHoldemState = useCallback((nextHoldemState, holdemStatsOverride = null, nextNotice = '') => {
+    if (!nextHoldemState || !game?.id) return;
+    const committedAtIso = new Date().toISOString();
+    setGame((current) => {
+      if (!current || current.id !== game.id) return current;
+      return {
+        ...current,
+        holdemState: {
+          ...nextHoldemState,
+          updatedAt: committedAtIso,
+        },
+        ...buildHoldemSummaryFields(nextHoldemState, holdemStatsOverride || current.holdemStats || defaultHoldemStats()),
+        updatedAt: committedAtIso,
+      };
+    });
+    if (nextNotice) setNotice(nextNotice);
+  }, [buildHoldemSummaryFields, game?.id]);
+
   const startHoldemHand = async () => {
     if (isHoldemStartBusy) return null;
     setIsHoldemStartBusy(true);
@@ -16371,6 +16397,7 @@ function ProductionApp() {
         && localSessionStatus !== 'hand_live'
         && localSessionStatus !== 'waiting_for_players'
         && localSessionStatus !== 'bankroll_blocked';
+      const otherSeat = currentSeat === 'jay' ? 'kim' : 'jay';
       const previousLocalHoldemState = shouldOptimisticallyReadySeat ? localSourceState : null;
       if (shouldOptimisticallyReadySeat) {
         const optimisticUpdatedAt = new Date().toISOString();
@@ -16416,6 +16443,38 @@ function ProductionApp() {
           }
           throw error;
         }
+      }
+      const syncedReadyBySeat = shouldOptimisticallyReadySeat ? localNextReadyBySeat : localReadyBySeat;
+      if (syncedReadyBySeat[currentSeat] && !syncedReadyBySeat[otherSeat]) {
+        setNotice('You are already ready. Waiting for the other player.');
+        return true;
+      }
+      if (
+        syncedReadyBySeat.jay
+        && syncedReadyBySeat.kim
+        && localSessionStatus !== 'hand_live'
+        && localSessionStatus !== 'waiting_for_players'
+        && localSessionStatus !== 'bankroll_blocked'
+      ) {
+        const localBalances = hasHoldemBankrollSnapshot(localSourceState?.lastSettledBalances)
+          ? localSourceState.lastSettledBalances
+          : buildHoldemBankrollsFromAccounts(playerAccounts);
+        const holdemState = buildNextHoldemHandState(
+          localSourceState,
+          localBalances,
+          true,
+          {
+            // Deterministic seeding keeps concurrent client deal writes idempotent.
+            seedKey: buildHoldemDealSeedKey(game.id, localSourceState, localBalances),
+          },
+        );
+        await setDoc(gameRef, {
+          holdemState,
+          ...buildHoldemSummaryFields(holdemState, game?.holdemStats || defaultHoldemStats()),
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+        applyLocalHoldemState(holdemState, game?.holdemStats || defaultHoldemStats(), 'Texas Hold’em hand dealt.');
+        return true;
       }
       const dealResult = await runTransaction(firestore, async (transaction) => {
         const gameSnap = await transaction.get(gameRef);
@@ -16496,19 +16555,7 @@ function ProductionApp() {
         };
       });
       if (dealResult?.holdemState) {
-        const committedAtIso = new Date().toISOString();
-        setGame((current) => {
-          if (!current || current.id !== game.id) return current;
-          return {
-            ...current,
-            holdemState: {
-              ...dealResult.holdemState,
-              updatedAt: committedAtIso,
-            },
-            ...buildHoldemSummaryFields(dealResult.holdemState, dealResult.holdemStats || current.holdemStats || defaultHoldemStats()),
-            updatedAt: committedAtIso,
-          };
-        });
+        applyLocalHoldemState(dealResult.holdemState, dealResult.holdemStats || game?.holdemStats || defaultHoldemStats());
       }
       setNotice(
         dealResult?.status === 'dealt'

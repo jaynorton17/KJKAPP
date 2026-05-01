@@ -118,6 +118,31 @@ export const shuffleHoldemDeck = (cards = []) => {
   return deck;
 };
 
+const createSeededHoldemRandom = (seedKey = '') => {
+  let seed = 2166136261;
+  const input = String(seedKey || '');
+  for (let index = 0; index < input.length; index += 1) {
+    seed ^= input.charCodeAt(index);
+    seed = Math.imul(seed, 16777619);
+  }
+  return () => {
+    seed += 0x6d2b79f5;
+    let value = seed;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const shuffleHoldemDeckWithRandom = (cards = [], randomFn = Math.random) => {
+  const deck = [...cards];
+  for (let index = deck.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(randomFn() * (index + 1));
+    [deck[index], deck[swapIndex]] = [deck[swapIndex], deck[index]];
+  }
+  return deck;
+};
+
 const rankValueFromCard = (card = '') => RANK_VALUES[String(card || '').charAt(0)] || 0;
 const suitValueFromCard = (card = '') => String(card || '').slice(1, 2);
 
@@ -440,12 +465,15 @@ const createLiveHandState = ({
   nextDealerSeat = 'jay',
   previousHandNumber = 0,
   startedAt = new Date().toISOString(),
+  seedKey = '',
 } = {}) => {
   const normalizedBalances = defaultBalances(balances);
   const dealerSeat = normalizeSeat(nextDealerSeat);
   const smallBlindSeat = dealerSeat;
   const bigBlindSeat = oppositeSeat(dealerSeat);
-  const deck = shuffleHoldemDeck(createHoldemDeck());
+  const deck = seedKey
+    ? shuffleHoldemDeckWithRandom(createHoldemDeck(), createSeededHoldemRandom(seedKey))
+    : shuffleHoldemDeck(createHoldemDeck());
   const jayHoleCards = [deck[0], deck[2]];
   const kimHoleCards = [deck[1], deck[3]];
   const communityRunout = [deck[4], deck[5], deck[6], deck[7], deck[8]];
@@ -975,7 +1003,7 @@ export const applyHoldemAction = (sourceState = {}, { seat = '', action = '', am
   throw new Error('Unsupported Hold’em action.');
 };
 
-export const buildNextHoldemHandState = (state = {}, balances = {}, bothPlayersJoined = false) => {
+export const buildNextHoldemHandState = (state = {}, balances = {}, bothPlayersJoined = false, options = {}) => {
   const normalizedBalances = defaultBalances(balances);
   if (!bothPlayersJoined || normalizedBalances.jay <= 0 || normalizedBalances.kim <= 0) {
     return updateSessionStatusForBalances(state, normalizedBalances, bothPlayersJoined);
@@ -984,6 +1012,7 @@ export const buildNextHoldemHandState = (state = {}, balances = {}, bothPlayersJ
     balances: normalizedBalances,
     nextDealerSeat: state?.nextDealerSeat || 'jay',
     previousHandNumber: state?.handNumber || 0,
+    seedKey: options?.seedKey || '',
   });
 };
 
