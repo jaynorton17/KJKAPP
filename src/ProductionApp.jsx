@@ -12378,7 +12378,6 @@ function ProductionApp() {
   const [aiChatDraft, setAiChatDraft] = useState(defaultChatDraft);
   const [isAiChatSending, setIsAiChatSending] = useState(false);
   const [lobbyGameName, setLobbyGameName] = useState('');
-  const isMobileDashboard = useMediaQuery('(max-width: 900px)');
   const leavePendingGameRef = useRef('');
   const autoSheetImportAttemptedRef = useRef(false);
   const autoThisOrThatSheetSyncInFlightRef = useRef(false);
@@ -12389,6 +12388,7 @@ function ProductionApp() {
   const autoResumedGameIdRef = useRef(gameId || '');
   const lastAuthUserIdRef = useRef(firebaseAuth?.currentUser?.uid || '');
   const staleCompletedRestoreRef = useRef(new Set());
+  const completedLiveRoomHandledRef = useRef(new Set());
   const gameLibraryRoundsCacheRef = useRef(new Map());
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
@@ -12745,12 +12745,6 @@ function ProductionApp() {
             setNotice('The saved active game was no longer available, so the app returned to the lobby.');
             return;
           }
-          if (isMobileDashboard) {
-            autoResumedGameIdRef.current = activeGameFromProfile;
-            clearPersistedActiveGame(activeGameFromProfile);
-            resetRoomLoadState();
-            return;
-          }
           autoResumedGameIdRef.current = activeGameFromProfile;
           setGameId(activeGameFromProfile);
           safeLocalStorageSet(activeGameKey, activeGameFromProfile);
@@ -12761,7 +12755,7 @@ function ProductionApp() {
       failRoomLoad(gameId, `Could not read your profile: ${error?.message || error}`, 'profile-listener');
     });
     return unsubscribe;
-  }, [user, gameId, isMobileDashboard, firestore, listenerRefreshKey]);
+  }, [user, gameId, firestore, listenerRefreshKey]);
 
   useEffect(() => {
     if (!user || !firestore) {
@@ -13178,17 +13172,38 @@ function ProductionApp() {
   }, [game, gameId]);
 
   useEffect(() => {
-    if (!isMobileDashboard || !autoResumedGameIdRef.current) return undefined;
-    const resumedGameId = autoResumedGameIdRef.current;
-    autoResumedGameIdRef.current = '';
-    clearPersistedActiveGame(resumedGameId);
-    setGameId((current) => (current === resumedGameId ? '' : current));
-    setGame((current) => (current?.id === resumedGameId ? null : current));
-    setRounds((current) => ((gameId === resumedGameId || game?.id === resumedGameId) ? [] : current));
-    setChatMessages((current) => ((gameId === resumedGameId || game?.id === resumedGameId) ? [] : current));
+    if (!game?.id || !COMPLETED_GAME_STATUSES.includes(game.status) || isLocalTestGame(game)) return undefined;
+    if (completedLiveRoomHandledRef.current.has(game.id)) return undefined;
+    completedLiveRoomHandledRef.current.add(game.id);
+    const targetGameId = game.id;
+    const summary = buildGameLibraryEntry(
+      targetGameId,
+      {
+        ...game,
+        status: game.status,
+        roundsPlayed: Math.max(Number(game.roundsPlayed || 0), Array.isArray(rounds) ? rounds.length : 0),
+      },
+      normalizeStoredRounds(rounds),
+    );
+    promoteEndedGameToCompleted(summary);
+    autoResumedGameIdRef.current = autoResumedGameIdRef.current === targetGameId ? '' : autoResumedGameIdRef.current;
+    leavePendingGameRef.current = leavePendingGameRef.current === targetGameId ? '' : leavePendingGameRef.current;
+    clearPersistedActiveGame(targetGameId);
+    try {
+      safeLocalStorageSet('kjk-dashboard-tab', 'activity');
+      safeLocalStorageSet('kjk-activity-tab', 'previousGames');
+    } catch {
+      // Ignore storage failures while returning to the lobby.
+    }
+    setGameId((current) => (current === targetGameId ? '' : current));
+    setGame((current) => (current?.id === targetGameId ? null : current));
+    setRounds((current) => (game?.id === targetGameId ? [] : current));
+    setChatMessages((current) => (game?.id === targetGameId ? [] : current));
     resetRoomLoadState();
+    setProfile((current) => (current?.activeGameId === targetGameId ? { ...current, activeGameId: '' } : current));
+    setNotice('Game ended and closed. Summary moved to Previous Games.');
     return undefined;
-  }, [isMobileDashboard, gameId, game?.id]);
+  }, [game, rounds]);
 
   useEffect(() => {
     if (!gameId || isLocalTestGameId(gameId)) {
@@ -13240,7 +13255,7 @@ function ProductionApp() {
     || null;
   const inferredRole = currentUserRole || game?.playerProfiles?.[user?.uid]?.role || null;
   const inferredSeat = currentSeat;
-  const shouldBypassMobileAutoResumeRoom = Boolean(isMobileDashboard && autoResumedGameIdRef.current);
+  const shouldBypassMobileAutoResumeRoom = false;
   const dashboardSeat = inferSeatFromUser(user, profile);
   const currentPlayerStoreId = dashboardSeat ? playerIdForSeat(dashboardSeat) : user?.uid || '';
   const currentPlayerIdentityTokens = useMemo(
@@ -14231,8 +14246,29 @@ function ProductionApp() {
         updatedAt: serverTimestamp(),
       }, { merge: true });
       await batch.commit();
-      const finalSnapshot = await getDoc(gameRef);
-      const finalizedGameDoc = finalSnapshot.exists() ? { id: finalSnapshot.id, ...finalSnapshot.data() } : gameDoc;
+      const finalizedHoldemGameFallback = {
+        ...gameDoc,
+        status: finalStatus,
+        currentRound: null,
+        endedAt: new Date().toISOString(),
+        endedBy: endedByUid,
+        totals: finalHoldemScores,
+        finalScores: finalHoldemScores,
+        winner: holdemWinner,
+        roundsPlayed: Number(holdemStats?.handsPlayed || 0),
+        actualQuestionCount: Number(holdemStats?.handsPlayed || 0),
+        questionQueueIds: [],
+        holdemState: finalizedHoldemState,
+        holdemStats,
+        lifetimePointsApplied: true,
+        lifetimePointsAppliedAt: gameDoc.lifetimePointsAppliedAt || new Date().toISOString(),
+        lifetimePointsAppliedBy: gameDoc.lifetimePointsAppliedBy || endedByUid || '',
+        updatedAt: new Date().toISOString(),
+      };
+      const finalSnapshot = await getDoc(gameRef).catch(() => null);
+      const finalizedGameDoc = finalSnapshot?.exists?.()
+        ? { id: finalSnapshot.id, ...finalSnapshot.data() }
+        : finalizedHoldemGameFallback;
       try {
         await archivePairHistory(finalizedGameDoc, targetGameId);
       } catch (error) {
@@ -14251,7 +14287,9 @@ function ProductionApp() {
       clearPersistedActiveGame(targetGameId);
       autoResumedGameIdRef.current = autoResumedGameIdRef.current === targetGameId ? '' : autoResumedGameIdRef.current;
       setProfile((current) => (current?.activeGameId === targetGameId ? { ...current, activeGameId: '' } : current));
-      const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc);
+      const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc).catch(() =>
+        buildGameLibraryEntry(targetGameId, finalizedGameDoc, loadedSummary?.rounds || []),
+      );
       return { appliedLifetimePoints: false, finalScores: finalHoldemScores, winner: holdemWinner, gameSummary };
     }
     let nextFinalScores = gameDoc.totals || gameDoc.finalScores || { jay: 0, kim: 0 };
@@ -14432,8 +14470,44 @@ function ProductionApp() {
       }));
     }
 
-    const finalSnapshot = await getDoc(gameRef);
-    const finalizedGameDoc = finalSnapshot.exists() ? { id: finalSnapshot.id, ...finalSnapshot.data() } : gameDoc;
+    const finalizedRoundsData =
+      archivedRoundResult && !alreadyArchivedCurrentRound
+        ? normalizeStoredRounds([...(loadedSummary?.rounds || []), archivedRoundResult])
+        : normalizeStoredRounds(loadedSummary?.rounds || []);
+    const finalizedGameFallback = {
+      ...gameDoc,
+      status: finalStatus,
+      currentRound: null,
+      endedAt: new Date().toISOString(),
+      endedBy: endedByUid,
+      totals: nextFinalScores,
+      finalScores: nextFinalScores,
+      winner: isQuizGame ? nextQuizWinner : nextWinner,
+      quizTotals: nextQuizTotals,
+      quizWinner: nextQuizWinner,
+      wagerSettlement: isQuizGame
+        ? {
+            sharedWager: Math.max(jayWager, kimWager),
+            jayWager,
+            kimWager,
+            jayShift: wagerPenaltyShiftJay,
+            kimShift: wagerPenaltyShiftKim,
+            settledAt: new Date().toISOString(),
+          }
+        : {},
+      roundsPlayed: finalizedRoundsPlayed,
+      actualQuestionCount: finalizedRoundsPlayed,
+      questionQueueIds: [],
+      usedQuestionIds: finalizedUsedQuestionIds,
+      lifetimePointsApplied: true,
+      lifetimePointsAppliedAt: gameDoc.lifetimePointsAppliedAt || new Date().toISOString(),
+      lifetimePointsAppliedBy: gameDoc.lifetimePointsAppliedBy || endedByUid || '',
+      updatedAt: new Date().toISOString(),
+    };
+    const finalSnapshot = await getDoc(gameRef).catch(() => null);
+    const finalizedGameDoc = finalSnapshot?.exists?.()
+      ? { id: finalSnapshot.id, ...finalSnapshot.data() }
+      : finalizedGameFallback;
     try {
       await archivePairHistory(finalizedGameDoc, targetGameId);
     } catch (error) {
@@ -14452,7 +14526,9 @@ function ProductionApp() {
     clearPersistedActiveGame(targetGameId);
     autoResumedGameIdRef.current = autoResumedGameIdRef.current === targetGameId ? '' : autoResumedGameIdRef.current;
     setProfile((current) => (current?.activeGameId === targetGameId ? { ...current, activeGameId: '' } : current));
-    const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc);
+    const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc).catch(() =>
+      buildGameLibraryEntry(targetGameId, finalizedGameDoc, finalizedRoundsData),
+    );
     return { appliedLifetimePoints, finalScores: nextFinalScores, winner: nextWinner, gameSummary };
   };
 
