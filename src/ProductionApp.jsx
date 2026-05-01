@@ -16624,60 +16624,72 @@ function ProductionApp() {
 
       if (!firestore) throw new Error('Firebase is not configured.');
       const gameRef = doc(firestore, 'games', game.id);
-      const jayRef = doc(firestore, 'users', fixedPlayerUids.jay);
-      const kimRef = doc(firestore, 'users', fixedPlayerUids.kim);
-
-      await runTransaction(firestore, async (transaction) => {
-        const [gameSnap, jaySnap, kimSnap] = await Promise.all([
-          transaction.get(gameRef),
-          transaction.get(jayRef),
-          transaction.get(kimRef),
-        ]);
-        if (!gameSnap.exists()) throw new Error('The Hold’em game no longer exists.');
-        const gameData = { id: gameSnap.id, ...gameSnap.data() };
-        if (!isHoldemGameMode(gameData?.gameMode || 'standard')) throw new Error('This room is not a Texas Hold’em game.');
-        const nextHoldemState = applyHoldemAction(gameData?.holdemState || initializeHoldemSessionState(currentSeat, true), {
-          seat: currentSeat,
-          action,
-          amount,
-        });
-        const currentStats = gameData?.holdemStats || defaultHoldemStats();
-        let nextStats = currentStats;
-        if (nextHoldemState?.settlement) {
-          nextStats = mergeHoldemStats(currentStats, getHoldemStatDelta(nextHoldemState));
-          const deltaJay = Number(nextHoldemState?.settlement?.netChanges?.jay || 0);
-          const deltaKim = Number(nextHoldemState?.settlement?.netChanges?.kim || 0);
-          // Penalty points double as the Hold'em bankroll for this mode. We apply
-          // only the per-hand net delta here so standard rounds/history stay intact.
-          const jayCurrent = Number(jaySnap.exists() ? jaySnap.data()?.lifetimePenaltyPoints || 0 : 0);
-          const kimCurrent = Number(kimSnap.exists() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : 0);
-          transaction.set(jayRef, {
-            uid: fixedPlayerUids.jay,
-            displayName: 'Jay',
-            lifetimePenaltyPoints: Math.max(0, jayCurrent + deltaJay),
-            updatedAt: serverTimestamp(),
-          }, { merge: true });
-          transaction.set(kimRef, {
-            uid: fixedPlayerUids.kim,
-            displayName: 'Kim',
-            lifetimePenaltyPoints: Math.max(0, kimCurrent + deltaKim),
-            updatedAt: serverTimestamp(),
-          }, { merge: true });
-          nextHoldemState.lastSettledBalances = {
-            jay: Math.max(0, jayCurrent + deltaJay),
-            kim: Math.max(0, kimCurrent + deltaKim),
-          };
-        }
-        transaction.set(gameRef, {
-          holdemState: {
-            ...nextHoldemState,
-            updatedAt: serverTimestamp(),
-          },
-          holdemStats: nextStats,
-          ...buildHoldemSummaryFields(nextHoldemState, nextStats),
+      const sourceHoldemState = game?.holdemState || initializeHoldemSessionState(currentSeat, true);
+      const nextHoldemState = applyHoldemAction(sourceHoldemState, {
+        seat: currentSeat,
+        action,
+        amount,
+      });
+      const currentStats = game?.holdemStats || defaultHoldemStats();
+      let nextStats = currentStats;
+      const batch = writeBatch(firestore);
+      if (nextHoldemState?.settlement) {
+        nextStats = mergeHoldemStats(currentStats, getHoldemStatDelta(nextHoldemState));
+        const settledBalances = {
+          jay: Math.max(0, Number(nextHoldemState?.players?.jay?.stack || 0)),
+          kim: Math.max(0, Number(nextHoldemState?.players?.kim?.stack || 0)),
+        };
+        // Penalty points double as the Hold'em bankroll for this mode. We apply
+        // the settled hand balances back to the player docs without rereading them,
+        // so live actions do not stall on extra Firestore reads.
+        nextHoldemState.lastSettledBalances = settledBalances;
+        batch.set(doc(firestore, 'users', fixedPlayerUids.jay), {
+          uid: fixedPlayerUids.jay,
+          displayName: 'Jay',
+          lifetimePenaltyPoints: settledBalances.jay,
           updatedAt: serverTimestamp(),
         }, { merge: true });
-      });
+        batch.set(doc(firestore, 'users', fixedPlayerUids.kim), {
+          uid: fixedPlayerUids.kim,
+          displayName: 'Kim',
+          lifetimePenaltyPoints: settledBalances.kim,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      }
+      batch.set(gameRef, {
+        holdemState: {
+          ...nextHoldemState,
+          updatedAt: serverTimestamp(),
+        },
+        holdemStats: nextStats,
+        ...buildHoldemSummaryFields(nextHoldemState, nextStats),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      await batch.commit();
+      applyLocalHoldemState(nextHoldemState, nextStats);
+      if (nextHoldemState?.settlement?.lastSettledBalances || nextHoldemState?.lastSettledBalances) {
+        const settledBalances = nextHoldemState?.lastSettledBalances || null;
+        if (settledBalances) {
+          const settledAtIso = new Date().toISOString();
+          setPlayerAccounts((current) => ({
+            ...current,
+            jay: {
+              ...(current?.jay || {}),
+              uid: fixedPlayerUids.jay,
+              displayName: current?.jay?.displayName || 'Jay',
+              lifetimePenaltyPoints: Math.max(0, Number(settledBalances.jay || 0)),
+              updatedAt: settledAtIso,
+            },
+            kim: {
+              ...(current?.kim || {}),
+              uid: fixedPlayerUids.kim,
+              displayName: current?.kim?.displayName || 'Kim',
+              lifetimePenaltyPoints: Math.max(0, Number(settledBalances.kim || 0)),
+              updatedAt: settledAtIso,
+            },
+          }));
+        }
+      }
       return true;
     }, 'Could not update Texas Hold’em.');
 
