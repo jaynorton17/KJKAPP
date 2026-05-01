@@ -3482,7 +3482,7 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(0) !== 'center'}
                   >
                     <section
-                      className="panel lobby-panel lobby-panel--lobby create-game-card lobby-image-tile"
+                      className="panel lobby-panel lobby-panel--lobby create-game-card lobby-image-tile lobby-image-tile--normal"
                       style={{ '--lobby-tile-image': `url("${normalGameTileImage}")` }}
                     >
                 <div className="panel-heading">
@@ -3595,7 +3595,7 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(1) !== 'center'}
                   >
 	                <section
-                    className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile"
+                    className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--quiz"
                     style={{ '--lobby-tile-image': `url("${quickFireQuizTileImage}")` }}
                   >
 	                <div className="panel-heading">
@@ -3690,7 +3690,7 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(2) !== 'center'}
                   >
                     <section
-                      className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile"
+                      className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
                       style={{ '--lobby-tile-image': `url("${pokerTileImage}")` }}
                     >
                 <div className="panel-heading">

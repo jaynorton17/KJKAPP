@@ -191,10 +191,13 @@ button:disabled {
 }
 
 .lobby-carousel-shell {
+  --lobby-carousel-card-height: clamp(640px, 74vh, 820px);
   display: grid;
   gap: 12px;
   min-width: 0;
   overflow: hidden;
+  grid-template-rows: auto var(--lobby-carousel-card-height) auto;
+  align-content: start;
 }
 
 .lobby-carousel-header {
@@ -243,7 +246,8 @@ button:disabled {
   position: relative;
   display: grid;
   place-items: stretch center;
-  min-height: 520px;
+  min-height: var(--lobby-carousel-card-height);
+  height: var(--lobby-carousel-card-height);
   overflow: hidden;
   padding: 4px clamp(46px, 8vw, 86px) 8px;
   touch-action: pan-y;
@@ -252,6 +256,7 @@ button:disabled {
 .lobby-carousel-slide {
   grid-area: 1 / 1;
   width: min(780px, 100%);
+  height: 100%;
   transition: transform 220ms ease, opacity 220ms ease, filter 220ms ease;
 }
 
@@ -324,10 +329,18 @@ button:disabled {
 .lobby-image-tile {
   position: relative;
   isolation: isolate;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   background:
-    linear-gradient(180deg, rgba(5, 10, 19, 0.2), rgba(5, 10, 19, 0.35)),
-    var(--lobby-tile-image) center center / cover no-repeat,
+    linear-gradient(180deg, rgba(5, 10, 19, 0.08), rgba(5, 10, 19, 0.22)),
+    var(--lobby-tile-image) var(--lobby-tile-position, center center) / cover no-repeat,
     linear-gradient(180deg, rgba(11, 20, 38, 0.96), rgba(5, 11, 21, 0.98));
 }
 
@@ -337,14 +350,27 @@ button:disabled {
   inset: 0;
   z-index: 0;
   background:
-    linear-gradient(180deg, rgba(4, 9, 17, 0.2) 0%, rgba(4, 9, 17, 0.72) 38%, rgba(4, 9, 17, 0.94) 100%),
-    radial-gradient(circle at top right, rgba(255, 224, 138, 0.18), transparent 28%),
-    radial-gradient(circle at left center, rgba(63, 121, 255, 0.18), transparent 32%);
+    linear-gradient(180deg, rgba(4, 9, 17, 0.1) 0%, rgba(4, 9, 17, 0.56) 34%, rgba(4, 9, 17, 0.86) 100%),
+    radial-gradient(circle at top right, rgba(255, 224, 138, 0.2), transparent 30%),
+    radial-gradient(circle at left center, rgba(63, 121, 255, 0.18), transparent 34%);
+  pointer-events: none;
 }
 
 .lobby-image-tile > * {
   position: relative;
   z-index: 1;
+}
+
+.lobby-image-tile--normal {
+  --lobby-tile-position: center 18%;
+}
+
+.lobby-image-tile--quiz {
+  --lobby-tile-position: center 16%;
+}
+
+.lobby-image-tile--holdem {
+  --lobby-tile-position: center 24%;
 }
 
 .lobby-image-tile .field,
@@ -363,7 +389,7 @@ button:disabled {
 .lobby-image-tile .field input,
 .lobby-image-tile .field select,
 .lobby-image-tile .field textarea {
-  background: rgba(8, 15, 28, 0.82);
+  background: rgba(8, 15, 28, 0.74);
   border-color: rgba(255, 255, 255, 0.16);
   color: #fff;
 }
@@ -372,7 +398,7 @@ button:disabled {
 .lobby-image-tile .field-note {
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(6, 13, 24, 0.62);
+  background: rgba(6, 13, 24, 0.52);
 }
 
 .lobby-carousel-slide .lobby-panel {
@@ -407,11 +433,15 @@ button:disabled {
   min-width: 0;
   width: 320px;
   min-height: 0;
+  height: 100%;
 }
 
 @media (max-width: 900px) {
   .game-lobby-grid {
     grid-template-columns: 1fr;
+  }
+  .lobby-carousel-shell {
+    --lobby-carousel-card-height: clamp(600px, 76svh, 760px);
   }
   .lobby-carousel-header {
     align-items: start;
@@ -428,7 +458,6 @@ button:disabled {
     min-height: 52px;
   }
   .lobby-carousel-stage {
-    min-height: 560px;
     padding-inline: 34px;
   }
   .lobby-carousel-stage-arrow {
