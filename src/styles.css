@@ -202,6 +202,11 @@ button:disabled {
   .game-lobby-grid {
     grid-template-columns: 1fr;
   }
+
+  .create-game-card--carousel {
+    grid-column: 1 / -1;
+  }
+
   .lobby-chat-card {
     grid-column: 1 / -1;
     width: 100%;
@@ -224,6 +229,10 @@ button:disabled {
 .question-bank-card {
   position: relative;
   height: 100%;
+}
+
+.create-game-card--carousel {
+  grid-column: 1 / span 2;
 }
 
 .game-lobby-grid > .lobby-panel {
@@ -265,6 +274,61 @@ button:disabled {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   display: grid;
   gap: 8px;
+}
+
+.create-game-carousel-shell {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.create-game-carousel-toolbar {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  gap: 10px;
+  align-items: center;
+}
+
+.create-game-carousel-arrow {
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  justify-content: center;
+}
+
+.create-game-carousel-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.create-game-carousel-tab {
+  width: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
+.create-game-carousel-note {
+  margin-top: -2px;
+}
+
+.create-game-carousel-stage {
+  display: grid;
+  gap: 12px;
+  min-height: 320px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--section-accent, var(--accent)) 12%, transparent), transparent 60%),
+    rgba(0, 0, 0, 0.16);
+}
+
+.create-game-mode-panel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
 }
 
 .join-invite-panel {
