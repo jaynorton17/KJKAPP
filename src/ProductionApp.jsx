@@ -108,6 +108,7 @@ const seats = ['jay', 'kim'];
 const HOLDEM_GAME_MODE = 'holdem';
 const TRUE_FALSE_GAME_MODE = 'trueFalseGame';
 const TRUE_FALSE_WRONG_PENALTY = 10;
+const TRUE_FALSE_UNANSWERED_PENALTY = 10;
 const TRUE_FALSE_TIMER_SECONDS = 8;
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const categoryColorMap = CATEGORY_COLOR_MAP;
@@ -1865,23 +1866,75 @@ const buildTrueFalseRoundOutcome = (round = {}) => {
   const kimGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '');
   const jayActual = normalizeTrueFalseChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
   const kimActual = normalizeTrueFalseChoice(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '');
-  const jayCorrect = Boolean(jayGuess) && Boolean(kimActual) && jayGuess === kimActual;
-  const kimCorrect = Boolean(kimGuess) && Boolean(jayActual) && kimGuess === jayActual;
+  const jayGuessScorable = Boolean(jayGuess) && Boolean(kimActual);
+  const kimGuessScorable = Boolean(kimGuess) && Boolean(jayActual);
+  const jayCorrect = jayGuessScorable && jayGuess === kimActual;
+  const kimCorrect = kimGuessScorable && kimGuess === jayActual;
+  const jayMissingGuess = !Boolean(jayGuess);
+  const kimMissingGuess = !Boolean(kimGuess);
+  const jayMissingOwnAnswer = !Boolean(jayActual);
+  const kimMissingOwnAnswer = !Boolean(kimActual);
+  const jayMissingResponse = jayMissingGuess || jayMissingOwnAnswer;
+  const kimMissingResponse = kimMissingGuess || kimMissingOwnAnswer;
+  const jayDefaultPenalty = (jayGuessScorable && !jayCorrect ? TRUE_FALSE_WRONG_PENALTY : 0)
+    + (jayMissingResponse ? TRUE_FALSE_UNANSWERED_PENALTY : 0);
+  const kimDefaultPenalty = (kimGuessScorable && !kimCorrect ? TRUE_FALSE_WRONG_PENALTY : 0)
+    + (kimMissingResponse ? TRUE_FALSE_UNANSWERED_PENALTY : 0);
   const jayPenalty = Number.isFinite(Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay))
     ? Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay)
-    : (jayCorrect ? 0 : TRUE_FALSE_WRONG_PENALTY);
+    : jayDefaultPenalty;
   const kimPenalty = Number.isFinite(Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim))
     ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
-    : (kimCorrect ? 0 : TRUE_FALSE_WRONG_PENALTY);
+    : kimDefaultPenalty;
   return {
     jayGuess,
     kimGuess,
     jayActual,
     kimActual,
+    jayGuessScorable,
+    kimGuessScorable,
     jayCorrect,
     kimCorrect,
+    jayMissingGuess,
+    kimMissingGuess,
+    jayMissingOwnAnswer,
+    kimMissingOwnAnswer,
+    jayMissingResponse,
+    kimMissingResponse,
     jayPenalty,
     kimPenalty,
+  };
+};
+const getTrueFalseRetiredQuestionIdsForGame = (game = {}) => {
+  const playedQuestionIds = getPlayedQuestionIdsForGame(game);
+  const bankType = normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard'));
+  if (bankType !== 'trueFalseGame') return playedQuestionIds;
+  return mergeUniqueIds(
+    playedQuestionIds,
+    game?.currentRound?.questionId ? [game.currentRound.questionId] : [],
+    game?.questionQueueIds || [],
+  );
+};
+const getLifetimeRollbackForGame = (game = {}) => {
+  const gameMode = game?.gameMode || 'standard';
+  if (isHoldemGameMode(gameMode)) {
+    return {
+      jay: -Number(game?.holdemStats?.netMovementJay || 0),
+      kim: -Number(game?.holdemStats?.netMovementKim || 0),
+    };
+  }
+  if (!game?.lifetimePointsApplied) {
+    return { jay: 0, kim: 0 };
+  }
+  if (gameMode === 'quiz') {
+    return {
+      jay: -Number(game?.wagerSettlement?.jayShift || 0),
+      kim: -Number(game?.wagerSettlement?.kimShift || 0),
+    };
+  }
+  return {
+    jay: -Number(game?.finalScores?.jay ?? game?.totals?.jay ?? 0),
+    kim: -Number(game?.finalScores?.kim ?? game?.totals?.kim ?? 0),
   };
 };
 const hasReadySeat = (round = {}, seat = '') => Boolean(round?.ready?.[seat]);
@@ -6491,7 +6544,7 @@ function TrueFalseAutoAnswerEntryBase({
         ))}
       </div>
       <p className="field-note true-false-answer-note">
-        {value ? `Locked in: ${value}` : 'Tap one answer. Your first choice locks immediately.'}
+        {value ? `Locked: ${value}` : 'First tap locks instantly.'}
       </p>
     </section>
   );
@@ -6499,7 +6552,7 @@ function TrueFalseAutoAnswerEntryBase({
   return (
     <div className={`room-answer-entry room-answer-entry--true-false ${embedded ? 'room-answer-entry--embedded' : ''}`}>
       <div className="true-false-answer-header">
-        <p>Guess what the other person will answer, then lock your own answer too.</p>
+        <p>Guess their answer, then lock your own.</p>
         <span className="status-pill">{lockedChoiceLabel}</span>
       </div>
       <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''}`}>
@@ -6609,8 +6662,23 @@ function RoomRevealPlayerCard({
     const viewerGuess = playerSeat === 'jay' ? outcome.jayGuess : outcome.kimGuess;
     const actualAnswer = playerSeat === 'jay' ? outcome.jayActual : outcome.kimActual;
     const targetAnswer = playerSeat === 'jay' ? outcome.kimActual : outcome.jayActual;
+    const guessScorable = playerSeat === 'jay' ? outcome.jayGuessScorable : outcome.kimGuessScorable;
+    const missingGuess = playerSeat === 'jay' ? outcome.jayMissingGuess : outcome.kimMissingGuess;
+    const missingOwnAnswer = playerSeat === 'jay' ? outcome.jayMissingOwnAnswer : outcome.kimMissingOwnAnswer;
     const wasCorrect = playerSeat === 'jay' ? outcome.jayCorrect : outcome.kimCorrect;
     const penalty = playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty;
+    const matchTone = missingGuess || missingOwnAnswer || !guessScorable
+      ? 'neutral'
+      : wasCorrect
+        ? 'success'
+        : 'warning';
+    const matchLabel = missingGuess
+      ? `No guess locked: +${formatScore(TRUE_FALSE_UNANSWERED_PENALTY)}`
+      : !guessScorable
+        ? 'Other player gave no real answer, so this guess was not charged'
+        : wasCorrect
+          ? 'Correct guess'
+          : 'Wrong guess';
     return (
       <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
         <div className="room-reveal-player-head">
@@ -6634,8 +6702,8 @@ function RoomRevealPlayerCard({
             <div className="room-reveal-answer-copy">
               <strong>{targetAnswer || 'No answer submitted'}</strong>
             </div>
-            <small className={`room-reveal-match room-reveal-match--${wasCorrect ? 'success' : 'warning'}`}>
-              {wasCorrect ? 'Correct guess' : 'Wrong guess'}
+            <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
+              {matchLabel}
             </small>
           </div>
         </div>
@@ -6650,7 +6718,7 @@ function RoomRevealPlayerCard({
             <strong>{formatScore(penalty || roundPenalty || 0)}</strong>
           </div>
           <div>
-            <span>Total penalty</span>
+            <span>{missingOwnAnswer ? 'Missed-answer penalty included' : 'Total penalty'}</span>
             <strong>{formatScore(totalPenalty || 0)}</strong>
           </div>
         </div>
@@ -6819,11 +6887,22 @@ function RoomActiveFrameBase({
     jay: hasNextReadySeat(currentRound, 'jay'),
     kim: hasNextReadySeat(currentRound, 'kim'),
   };
+  const trueFalseOutcome = useMemo(
+    () => (isTrueFalseGame ? buildTrueFalseRoundOutcome(currentRound || {}) : null),
+    [currentRound, isTrueFalseGame],
+  );
+  const trueFalseSummaryLabel = !trueFalseOutcome
+    ? ''
+    : trueFalseOutcome.jayCorrect && trueFalseOutcome.kimCorrect
+      ? 'Both guessed correctly'
+      : trueFalseOutcome.jayMissingResponse || trueFalseOutcome.kimMissingResponse
+        ? 'Missed answers triggered penalties'
+        : 'Automatic penalties applied';
 
   return (
-    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''}`} aria-label="Active round scoreboard">
+    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''}`} aria-label="Active round scoreboard">
       <div className="scoreboard-sheen" aria-hidden="true" />
-      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''}`}>
+      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''}`}>
         <header className="room-active-header">
           <div>
             <span className="scoreboard-kicker">{revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
@@ -7030,17 +7109,15 @@ function RoomActiveFrameBase({
                 ) : isTrueFalseGame ? (
                   <>
                     <span>Round Result</span>
-                    <strong>
-                      {buildTrueFalseRoundOutcome(currentRound || {}).jayCorrect && buildTrueFalseRoundOutcome(currentRound || {}).kimCorrect
-                        ? 'Both guessed correctly'
-                        : 'Automatic penalties applied'}
-                    </strong>
+                    <strong>{trueFalseSummaryLabel}</strong>
                     <p>
                       {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])}
                       {' · '}
                       {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
                     </p>
-                    <small>Each wrong guess adds {formatScore(TRUE_FALSE_WRONG_PENALTY)} penalty points automatically.</small>
+                    <small>
+                      Wrong guesses add {formatScore(TRUE_FALSE_WRONG_PENALTY)}. Missing either locked answer adds another {formatScore(TRUE_FALSE_UNANSWERED_PENALTY)}.
+                    </small>
                     <small>
                       Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
                       {' · '}
@@ -13334,13 +13411,94 @@ function ProductionApp() {
   const deleteGameById = async (targetGameId) => {
     if (!firestore || !targetGameId) return;
     const gameRef = doc(firestore, 'games', targetGameId);
-    const roundDocs = await getDocs(collection(gameRef, 'rounds'));
-    const chatDocs = await getDocs(collection(gameRef, 'chatMessages'));
+    const snapshot = await getDoc(gameRef);
+    if (!snapshot.exists()) return;
+    const gameDoc = { id: snapshot.id, ...snapshot.data() };
+    const pairId = gameDoc.pairId || buildPairKey();
+    const rollback = getLifetimeRollbackForGame(gameDoc);
+    const deletedPlayedQuestionIds = getPlayedQuestionIdsForGame(gameDoc);
+    const [allPairGamesSnap, jaySnap, kimSnap, roundDocs, chatDocs] = await Promise.all([
+      getDocs(query(collection(firestore, 'games'), where('pairId', '==', pairId))),
+      getDoc(doc(firestore, 'users', fixedPlayerUids.jay)),
+      getDoc(doc(firestore, 'users', fixedPlayerUids.kim)),
+      getDocs(collection(gameRef, 'rounds')),
+      getDocs(collection(gameRef, 'chatMessages')),
+    ]);
+    const remainingGames = (allPairGamesSnap?.docs || [])
+      .map((entry) => ({ id: entry.id, ...entry.data() }))
+      .filter((entry) => entry.id !== targetGameId);
+    const remainingPairPlayedQuestionIds = mergeUniqueIds(
+      ...remainingGames.map((entry) => getTrueFalseRetiredQuestionIdsForGame(entry)),
+    );
+    const remainingCompletedGames = remainingGames
+      .filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || '') || Boolean(entry?.endedAt))
+      .sort(sortByNewestGameSession);
+    const latestCompletedGame = remainingCompletedGames[0] || null;
+    const remainingCompletedGameIds = remainingCompletedGames.map((entry) => entry.id).filter(Boolean);
+    const deletedQuestionRestoreIds = deletedPlayedQuestionIds.filter(
+      (questionId) => questionId && !remainingPairPlayedQuestionIds.includes(questionId),
+    );
+    const questionsToRestore = bankQuestions.filter((question) => deletedQuestionRestoreIds.includes(question.id));
+    const currentJayBalance = Number(jaySnap.exists() ? jaySnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.jay?.lifetimePenaltyPoints || 0);
+    const currentKimBalance = Number(kimSnap.exists() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.kim?.lifetimePenaltyPoints || 0);
+    const nextJayBalance = Math.max(0, currentJayBalance + Number(rollback.jay || 0));
+    const nextKimBalance = Math.max(0, currentKimBalance + Number(rollback.kim || 0));
     const batch = writeBatch(firestore);
+    if (questionsToRestore.length) {
+      questionsToRestore.forEach((question) => {
+        batch.set(doc(firestore, 'questionBank', question.id), setQuestionUsed(question, false), { merge: true });
+      });
+    }
+    if (Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0) {
+      batch.set(doc(firestore, 'users', fixedPlayerUids.jay), {
+        uid: fixedPlayerUids.jay,
+        displayName: 'Jay',
+        lifetimePenaltyPoints: nextJayBalance,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      batch.set(doc(firestore, 'users', fixedPlayerUids.kim), {
+        uid: fixedPlayerUids.kim,
+        displayName: 'Kim',
+        lifetimePenaltyPoints: nextKimBalance,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    }
+    batch.set(doc(firestore, 'playerPairs', pairId), {
+      pairId,
+      playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
+      playedQuestionIds: remainingPairPlayedQuestionIds,
+      completedGameIds: remainingCompletedGameIds,
+      updatedAt: serverTimestamp(),
+      stats: {
+        completedGames: remainingCompletedGameIds.length,
+        lastWinner: latestCompletedGame?.winner || 'tie',
+        lastFinalScores: latestCompletedGame?.finalScores || latestCompletedGame?.totals || { jay: 0, kim: 0 },
+        roundsPlayed: Number(latestCompletedGame?.roundsPlayed || latestCompletedGame?.rounds?.length || 0),
+      },
+    }, { merge: true });
     roundDocs.forEach((entry) => batch.delete(entry.ref));
     chatDocs.forEach((entry) => batch.delete(entry.ref));
     batch.delete(gameRef);
     await batch.commit();
+    if (Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0) {
+      setPlayerAccounts((current) => ({
+        ...current,
+        jay: {
+          ...(current?.jay || {}),
+          uid: fixedPlayerUids.jay,
+          displayName: current?.jay?.displayName || 'Jay',
+          lifetimePenaltyPoints: nextJayBalance,
+          updatedAt: new Date().toISOString(),
+        },
+        kim: {
+          ...(current?.kim || {}),
+          uid: fixedPlayerUids.kim,
+          displayName: current?.kim?.displayName || 'Kim',
+          lifetimePenaltyPoints: nextKimBalance,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+    }
   };
 
   const saveRedemptionItem = async ({ itemId = '', ownerPlayerId, title, description, cost, active = true, keepOnRedeemed = false, itemType = 'forfeit' }) => {
@@ -16396,8 +16554,8 @@ function ProductionApp() {
   const getTrueFalsePenaltyMap = useCallback((round = null) => {
     const outcome = buildTrueFalseRoundOutcome(round || {});
     return {
-      jay: outcome.jayCorrect ? 0 : TRUE_FALSE_WRONG_PENALTY,
-      kim: outcome.kimCorrect ? 0 : TRUE_FALSE_WRONG_PENALTY,
+      jay: outcome.jayPenalty,
+      kim: outcome.kimPenalty,
     };
   }, []);
 
