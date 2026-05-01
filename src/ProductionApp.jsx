@@ -4023,7 +4023,7 @@ function LobbyScreen({
                           cardId: 'standard',
                           eyebrow: 'Game Lobby',
                           title: 'Normal Game',
-                          statusText: `${thisOrThatReadyCount} ready`,
+                          statusText: `${questionCount} ready`,
                           description: 'Penalty-point rounds, question reveals, and all the usual Jay vs Kim game flow.',
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
@@ -4056,7 +4056,7 @@ function LobbyScreen({
                               <p className="eyebrow">Game Lobby</p>
                               <h2>Create New Game</h2>
                             </div>
-                            <span className="status-pill">{thisOrThatReadyCount} ready</span>
+                            <span className="status-pill">{questionCount} ready</span>
                           </div>
 
                           <div className="create-mode-row">
@@ -4375,7 +4375,7 @@ function LobbyScreen({
                           cardId: 'thisOrThat',
                           eyebrow: 'Prediction Match',
                           title: 'This or That',
-                          statusText: `${questionCount} ready`,
+                          statusText: `${thisOrThatReadyCount} ready`,
                           description: 'A prediction-first mode where both players choose between two options, lock what they would pick, and also guess which option the other person will choose.',
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
@@ -4408,7 +4408,7 @@ function LobbyScreen({
                               <p className="eyebrow">Prediction Match</p>
                               <h2>This or That</h2>
                             </div>
-                            <span className="status-pill">{questionCount} ready</span>
+                            <span className="status-pill">{thisOrThatReadyCount} ready</span>
                           </div>
                           <p className="panel-copy">Each player locks what they think the other person will pick and what they would really choose. Wrong guesses add +10 penalty automatically.</p>
                           <label className="field">
@@ -16170,13 +16170,20 @@ function ProductionApp() {
           if (!queue.length) {
             throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
-          if (actualCount < requestedQuestionCount) {
-            const shouldContinue = window.confirm(`${warning} Create test game with ${actualCount}?`);
-            if (!shouldContinue) {
-              setNotice('Editing Mode game creation cancelled before the local queue was finalized.');
-              return;
+            if (actualCount < requestedQuestionCount) {
+              if (isThisOrThatGame) {
+                console.debug('This or That local game auto-accepting shorter compatible queue', {
+                  requestedQuestionCount,
+                  actualCount,
+                });
+              } else {
+                const shouldContinue = window.confirm(`${warning} Create test game with ${actualCount}?`);
+                if (!shouldContinue) {
+                  setNotice('Editing Mode game creation cancelled before the local queue was finalized.');
+                  return;
+                }
+              }
             }
-          }
         }
         const initialHoldemState = isHoldemGame
           ? initializeHoldemSessionState(creatorSeat, true)
@@ -16362,10 +16369,17 @@ function ProductionApp() {
               throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
             }
             if (actualCount < requestedQuestionCount) {
-              const shouldContinue = window.confirm(`${warning} Create game with ${actualCount}?`);
-              if (!shouldContinue) {
-                setNotice('Game creation cancelled before question queue was finalized.');
-                return;
+              if (isThisOrThatGame) {
+                console.debug('This or That live game auto-accepting shorter compatible queue', {
+                  requestedQuestionCount,
+                  actualCount,
+                });
+              } else {
+                const shouldContinue = window.confirm(`${warning} Create game with ${actualCount}?`);
+                if (!shouldContinue) {
+                  setNotice('Game creation cancelled before question queue was finalized.');
+                  return;
+                }
               }
             }
           }
