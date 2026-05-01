@@ -7,7 +7,7 @@ const parseDelimitedItems = (value) => {
     return value.map((item) => compactText(item)).filter(Boolean);
   }
   return String(value || '')
-    .split(/\n|,|;/)
+    .split(/\n|,|;|\|/)
     .map((item) => item.replace(/^\d+[.)]\s*/, '').trim())
     .filter(Boolean);
 };
@@ -217,6 +217,16 @@ export const buildEitherOrOptions = (question = '') => {
     if (!match) continue;
     const left = compactText(match[1]).replace(/^(to |be |have )/i, '');
     const right = compactText(match[2]).replace(/^(to |be |have )/i, '');
+    if (left && right) return [left, right];
+  }
+
+  const simpleEitherOrMatch = cleaned.match(/^(.+?)\s+or\s+(.+)$/i);
+  if (simpleEitherOrMatch) {
+    const left = compactText(simpleEitherOrMatch[1])
+      .replace(/^(which|what|who)\s+/i, '')
+      .replace(/^(would you rather|do you prefer|would you choose|are you more of)\s+/i, '')
+      .replace(/^(to |be |have )/i, '');
+    const right = compactText(simpleEitherOrMatch[2]).replace(/^(to |be |have )/i, '');
     if (left && right) return [left, right];
   }
 
