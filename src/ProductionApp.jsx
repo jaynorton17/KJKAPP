@@ -12396,6 +12396,7 @@ function ProductionApp() {
   const [quizAnswers, setQuizAnswers] = useState([]);
   const [quizWagerDraft, setQuizWagerDraft] = useState('');
   const [listenerRefreshKey, setListenerRefreshKey] = useState(0);
+  const [isFirestoreCoolingDown, setIsFirestoreCoolingDown] = useState(false);
   const [penaltyDraft, setPenaltyDraft] = useState(defaultPenaltyDraft);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatDraft, setChatDraft] = useState(defaultChatDraft);
@@ -12411,6 +12412,7 @@ function ProductionApp() {
   const autoThisOrThatSheetSyncInFlightRef = useRef(false);
   const autoTrueFalseSheetSyncInFlightRef = useRef(false);
   const roomLoadTimeoutRef = useRef(null);
+  const firestoreCooldownTimerRef = useRef(null);
   const gameListenerRetryRef = useRef({ timer: null, gameId: '', attempts: 0 });
   const amaStoreSeededRef = useRef({ jay: false, kim: false });
   const autoResumedGameIdRef = useRef(gameId || '');
@@ -12421,6 +12423,7 @@ function ProductionApp() {
   const gameLibrarySnapshotRequestRef = useRef(0);
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
+  const shouldPauseBackgroundFirestore = isFirestoreCoolingDown && !hasOpenRoomSession;
   const shouldLoadQuestionBankData = Boolean(
     user
     && firestore
@@ -12482,7 +12485,7 @@ function ProductionApp() {
     && firestore
     && deferredLobbyDataReady
     && !hasOpenRoomSession
-    && ['analytics', 'ai', 'diary', 'forfeitStore'].includes(dashboardTabState),
+    && ['analytics', 'ai', 'diary'].includes(dashboardTabState),
   );
   const shouldLoadSelectedCompletedGameRoundHistory = Boolean(
     user
@@ -12517,6 +12520,26 @@ function ProductionApp() {
     clearGameListenerRetry();
     setRoomLoadState({ status: 'idle', gameId: '', reason: '', message: '' });
   };
+
+  const enterFirestoreCooldown = useCallback((source = '') => {
+    if (firestoreCooldownTimerRef.current) {
+      window.clearTimeout(firestoreCooldownTimerRef.current);
+    }
+    debugRoom('enterFirestoreCooldown', { source });
+    setIsFirestoreCoolingDown(true);
+    setNotice((current) => current || 'Firebase is rate-limiting the app right now. Pausing background sync for 30 seconds.');
+    firestoreCooldownTimerRef.current = window.setTimeout(() => {
+      firestoreCooldownTimerRef.current = null;
+      setIsFirestoreCoolingDown(false);
+    }, 30000);
+  }, []);
+
+  const reportFirestoreListenerError = useCallback((tag, error) => {
+    if (isFirestoreRateLimitedError(error)) {
+      enterFirestoreCooldown(tag);
+    }
+    debugRoom(tag, { message: error?.message || String(error) });
+  }, [enterFirestoreCooldown]);
 
   const armRoomLoadTimeout = (nextGameId, reason = 'loading room') => {
     if (!nextGameId) return;
@@ -12610,7 +12633,13 @@ function ProductionApp() {
     await clearCompletedGameProfiles(targetGame.id, targetGame.playerUids || []);
   };
 
-  useEffect(() => () => clearRoomLoadTimer(), []);
+  useEffect(() => () => {
+    clearRoomLoadTimer();
+    if (firestoreCooldownTimerRef.current) {
+      window.clearTimeout(firestoreCooldownTimerRef.current);
+      firestoreCooldownTimerRef.current = null;
+    }
+  }, []);
 
   const appStyle = useMemo(
     () => ({
@@ -12795,10 +12824,13 @@ function ProductionApp() {
         return;
       }
     }, (error) => {
+      if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('profile-listener');
+      }
       failRoomLoad(gameId, `Could not read your profile: ${error?.message || error}`, 'profile-listener');
     });
     return unsubscribe;
-  }, [user, gameId, firestore, listenerRefreshKey]);
+  }, [user, gameId, firestore, listenerRefreshKey, enterFirestoreCooldown]);
 
   useEffect(() => {
     gameLibrarySnapshotRequestRef.current += 1;
@@ -12806,7 +12838,7 @@ function ProductionApp() {
       setGameLibrary([]);
       return undefined;
     }
-    if (hasOpenRoomSession) return undefined;
+    if (hasOpenRoomSession || shouldPauseBackgroundFirestore) return undefined;
     const gamesRef = query(collection(firestore, 'games'), where('playerUids', 'array-contains', user.uid));
     let isListenerActive = true;
     const unsubscribe = onSnapshot(gamesRef, (snapshot) => {
@@ -12860,12 +12892,14 @@ function ProductionApp() {
         if (isStaleRequest()) return;
         setGameLibrary(summaries.filter(Boolean));
       })().catch((error) => {
-        if (!isStaleRequest()) {
-          debugRoom('gameLibrarySnapshotLoadError', { message: error?.message || String(error) });
+        if (!isStaleRequest()) return;
+        if (isFirestoreRateLimitedError(error)) {
+          enterFirestoreCooldown('gameLibrarySnapshotLoadError');
         }
+        debugRoom('gameLibrarySnapshotLoadError', { message: error?.message || String(error) });
       });
     }, (error) => {
-      debugRoom('gameLibrarySnapshotError', { message: error?.message || String(error) });
+      reportFirestoreListenerError('gameLibrarySnapshotError', error);
     });
     return () => {
       isListenerActive = false;
@@ -12876,10 +12910,13 @@ function ProductionApp() {
     user,
     firestore,
     hasOpenRoomSession,
+    shouldPauseBackgroundFirestore,
     selectedGameId,
     localEndedGameSummary?.id,
     shouldLoadAllCompletedGameRounds,
     shouldLoadSelectedCompletedGameRoundHistory,
+    enterFirestoreCooldown,
+    reportFirestoreListenerError,
   ]);
 
   useEffect(() => {
@@ -12887,6 +12924,7 @@ function ProductionApp() {
       setPairHistory({ playedQuestionIds: [], completedGameIds: [] });
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const pairRef = doc(firestore, 'playerPairs', buildPairKey());
     const unsubscribe = onSnapshot(
       pairRef,
@@ -12898,13 +12936,14 @@ function ProductionApp() {
           completedGameIds: Array.isArray(data.completedGameIds) ? data.completedGameIds.filter(Boolean) : [],
         });
       },
-      (error) => debugRoom('pairHistorySnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('pairHistorySnapshotError', error),
     );
     return unsubscribe;
-  }, [user, firestore]);
+  }, [user, firestore, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!firestore || !user) return undefined;
+    if (shouldPauseBackgroundFirestore) return undefined;
     const playerRefs = {
       jay: doc(firestore, 'users', fixedPlayerUids.jay),
       kim: doc(firestore, 'users', fixedPlayerUids.kim),
@@ -12921,52 +12960,56 @@ function ProductionApp() {
             updatedAt: data.updatedAt || null,
           },
         }));
-      }, (error) => debugRoom('playerAccountSnapshotError', { seat, message: error?.message || String(error) })),
+      }, (error) => reportFirestoreListenerError(`playerAccountSnapshotError:${seat}`, error)),
     );
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe && unsubscribe());
-  }, [user, firestore]);
+  }, [user, firestore, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadStoreCollections) {
       setRedemptionItems([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const itemsRef = query(collection(firestore, 'redemptionItems'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(itemsRef, (snapshot) => {
       setRedemptionItems(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('redemptionItemsSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('redemptionItemsSnapshotError', error));
     return unsubscribe;
-  }, [firestore, shouldLoadStoreCollections]);
+  }, [firestore, shouldLoadStoreCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadStoreCollections) {
       setRedemptionHistory([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const historyRef = query(collection(firestore, 'redemptionHistory'), orderBy('redeemedAt', 'desc'), limit(40));
     const unsubscribe = onSnapshot(historyRef, (snapshot) => {
       setRedemptionHistory(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('redemptionHistorySnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('redemptionHistorySnapshotError', error));
     return unsubscribe;
-  }, [firestore, shouldLoadStoreCollections]);
+  }, [firestore, shouldLoadStoreCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadStoreCollections) {
       setForfeitPriceRequests([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const requestRef = query(collection(firestore, 'forfeitPriceRequests'), orderBy('requestedAt', 'desc'), limit(80));
     const unsubscribe = onSnapshot(requestRef, (snapshot) => {
       setForfeitPriceRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('forfeitRequestsSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('forfeitRequestsSnapshotError', error));
     return unsubscribe;
-  }, [firestore, shouldLoadStoreCollections]);
+  }, [firestore, shouldLoadStoreCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setGameInvites([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const inferredInviteSeat = preferredSeatForUser(user, profile) || 'jay';
     const inviteTargetIds = mergeUniqueIds(
       user.uid,
@@ -12988,15 +13031,16 @@ function ProductionApp() {
         roomInviteId: '',
         ...entry.data(),
       })).sort(sortByNewest));
-    }, (error) => debugRoom('gameInvitesSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('gameInvitesSnapshotError', error));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setRoomGameInvites([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const inferredInviteSeat = preferredSeatForUser(user, profile) || 'jay';
     const roomInviteLookupTokens = mergeUniqueIds(
       user.uid,
@@ -13040,47 +13084,50 @@ function ProductionApp() {
         };
       });
       setRoomGameInvites(roomInvites.sort(sortByNewest));
-    }, (error) => debugRoom('roomInviteSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('roomInviteSnapshotError', error));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadStoreCollections) {
       setAmaRequests([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const amaRef = query(collection(firestore, 'amaRequests'), orderBy('updatedAt', 'desc'), limit(120));
     const unsubscribe = onSnapshot(amaRef, (snapshot) => {
       setAmaRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('amaRequestsSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('amaRequestsSnapshotError', error));
     return unsubscribe;
-  }, [firestore, shouldLoadStoreCollections]);
+  }, [firestore, shouldLoadStoreCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadDiaryCollections) {
       setDiaryEntries([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const diaryRef = query(collection(firestore, 'diaryEntries'), orderBy('updatedAt', 'desc'), limit(120));
     const unsubscribe = onSnapshot(diaryRef, (snapshot) => {
       setDiaryEntries(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('diaryEntriesSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('diaryEntriesSnapshotError', error));
     return unsubscribe;
-  }, [firestore, shouldLoadDiaryCollections]);
+  }, [firestore, shouldLoadDiaryCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!firestore || !user?.uid || hasOpenRoomSession || !deferredLobbyDataReady) {
       setQuestionNotes([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const notesRef = query(collection(firestore, 'users', user.uid, 'questionNotes'), orderBy('updatedAt', 'desc'), limit(200));
     const unsubscribe = onSnapshot(
       notesRef,
       (snapshot) => setQuestionNotes(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
-      (error) => debugRoom('questionNotesSnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('questionNotesSnapshotError', error),
     );
     return unsubscribe;
-  }, [deferredLobbyDataReady, user?.uid, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user?.uid, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadAiChatHistory) {
@@ -13088,6 +13135,7 @@ function ProductionApp() {
       setOptimisticAiChatMessages([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const aiChatRef = query(
       collection(firestore, 'users', user.uid, 'aiChatMessages'),
       orderBy('createdAtMs', 'asc'),
@@ -13097,59 +13145,63 @@ function ProductionApp() {
       aiChatRef,
       (snapshot) => setAiChatMessages(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
       (error) => {
-        debugRoom('aiChatSnapshotError', { message: error?.message || String(error) });
+        reportFirestoreListenerError('aiChatSnapshotError', error);
         if (String(error?.code || '').includes('permission-denied') || String(error?.message || '').toLowerCase().includes('insufficient permissions')) {
           setNotice((current) => current || 'AI chat is showing local replies, but private AI history cannot sync until Firestore permissions are updated.');
         }
       },
     );
     return unsubscribe;
-  }, [firestore, shouldLoadAiChatHistory, user?.uid]);
+  }, [firestore, shouldLoadAiChatHistory, user?.uid, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadQuestionFeedback) {
       setQuestionFeedback([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const feedbackRef = query(collection(firestore, 'questionFeedback'), where('pairId', '==', buildPairKey()), limit(2000));
     const unsubscribe = onSnapshot(
       feedbackRef,
       (snapshot) => setQuestionFeedback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
-      (error) => debugRoom('questionFeedbackSnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('questionFeedbackSnapshotError', error),
     );
     return unsubscribe;
-  }, [firestore, shouldLoadQuestionFeedback, user]);
+  }, [firestore, shouldLoadQuestionFeedback, user, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadQuestionReplays) {
       setQuestionReplays([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const replayRef = query(collection(firestore, 'questionReplays'), where('pairId', '==', buildPairKey()), limit(3000));
     const unsubscribe = onSnapshot(
       replayRef,
       (snapshot) => setQuestionReplays(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
-      (error) => debugRoom('questionReplaysSnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('questionReplaysSnapshotError', error),
     );
     return unsubscribe;
-  }, [firestore, shouldLoadQuestionReplays, user]);
+  }, [firestore, shouldLoadQuestionReplays, user, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadQuizAnswerHistory) {
       setQuizAnswers([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const answersRef = query(collection(firestore, 'quizAnswers'), where('pairId', '==', buildPairKey()), limit(4000));
     const unsubscribe = onSnapshot(
       answersRef,
       (snapshot) => setQuizAnswers(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
-      (error) => debugRoom('quizAnswersSnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('quizAnswersSnapshotError', error),
     );
     return unsubscribe;
-  }, [firestore, shouldLoadQuizAnswerHistory, user]);
+  }, [firestore, shouldLoadQuizAnswerHistory, user, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadQuestionBankData) return undefined;
+    if (shouldPauseBackgroundFirestore) return undefined;
     const bankRef = collection(firestore, 'questionBank');
     const unsubscribe = onSnapshot(query(bankRef, orderBy('question', 'asc')), async (snapshot) => {
       if (snapshot.empty) {
@@ -13157,9 +13209,9 @@ function ProductionApp() {
         return;
       }
       setBankQuestions(snapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id)));
-    }, (error) => debugRoom('bankSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('bankSnapshotError', error));
     return unsubscribe;
-  }, [firestore, gameId, game?.id, shouldLoadQuestionBankData]);
+  }, [firestore, gameId, game?.id, shouldLoadQuestionBankData, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (isLocalTestGameId(gameId)) {
@@ -13228,16 +13280,16 @@ function ProductionApp() {
     });
     unsubscribeRounds = onSnapshot(roundsRef, (snapshot) => {
       setRounds(normalizeStoredRounds(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))));
-    }, (error) => debugRoom('roundsSnapshotError', { gameId, message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('roundsSnapshotError', error));
     unsubscribeChat = onSnapshot(chatRef, (snapshot) => {
       setChatMessages(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('chatSnapshotError', { gameId, message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('chatSnapshotError', error));
     return () => {
       unsubscribeGame();
       unsubscribeRounds();
       unsubscribeChat();
     };
-  }, [gameId, listenerRefreshKey]);
+  }, [gameId, listenerRefreshKey, enterFirestoreCooldown, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!game?.id || !COMPLETED_GAME_STATUSES.includes(game.status) || autoResumedGameIdRef.current !== game.id) return undefined;
@@ -14754,32 +14806,25 @@ function ProductionApp() {
   const deleteGameById = async (targetGameId) => {
     if (!firestore || !targetGameId) return;
     const gameRef = doc(firestore, 'games', targetGameId);
-    const snapshot = await getDoc(gameRef);
-    if (!snapshot.exists()) return;
-    const gameDoc = { id: snapshot.id, ...snapshot.data() };
+    const cachedGameDoc =
+      (game?.id === targetGameId ? game : null)
+      || gameLibrary.find((entry) => entry?.id === targetGameId)
+      || localArchivedGames.find((entry) => entry?.id === targetGameId)
+      || null;
+    const snapshot = cachedGameDoc ? null : await getDoc(gameRef);
+    if (!cachedGameDoc && !snapshot?.exists()) return;
+    const gameDoc = cachedGameDoc || { id: snapshot.id, ...snapshot.data() };
     const pairId = gameDoc.pairId || buildPairKey();
     const rollback = getLifetimeRollbackForGame(gameDoc);
     const shouldRollbackLifetimePoints = Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0;
     const deletedPlayedQuestionIds = getPlayedQuestionIdsForGame(gameDoc);
-    const cachedPairGames = gameLibrary.filter((entry) => entry?.id && !isLocalTestGameId(entry.id));
-    const [allPairGamesSnap, jaySnap, kimSnap, roundDocs, chatDocs, playerDocs, inviteDocs] = await Promise.all([
-      cachedPairGames.length
-        ? Promise.resolve(null)
-        : getDocs(query(collection(firestore, 'games'), where('pairId', '==', pairId))),
-      shouldRollbackLifetimePoints
-        ? getDoc(doc(firestore, 'users', fixedPlayerUids.jay))
-        : Promise.resolve(null),
-      shouldRollbackLifetimePoints
-        ? getDoc(doc(firestore, 'users', fixedPlayerUids.kim))
-        : Promise.resolve(null),
-      getDocs(collection(gameRef, 'rounds')),
-      getDocs(collection(gameRef, 'chatMessages')),
-      getDocs(collection(gameRef, 'players')),
-      getDocs(query(collection(firestore, 'gameInvites'), where('gameId', '==', targetGameId))),
-    ]);
-    const pairGames = cachedPairGames.length
-      ? cachedPairGames
-      : (allPairGamesSnap?.docs || []).map((entry) => ({ id: entry.id, ...entry.data() }));
+    const cachedPairGames = gameLibrary
+      .filter((entry) => entry?.id && !isLocalTestGameId(entry.id))
+      .map((entry) => ({ ...entry }));
+    if (!cachedPairGames.some((entry) => entry.id === targetGameId)) {
+      cachedPairGames.push(gameDoc);
+    }
+    const pairGames = cachedPairGames;
     const remainingGames = pairGames
       .filter((entry) => entry.id !== targetGameId);
     const remainingPairPlayedQuestionIds = mergeUniqueIds(
@@ -14794,31 +14839,33 @@ function ProductionApp() {
       (questionId) => questionId && !remainingPairPlayedQuestionIds.includes(questionId),
     );
     const questionsToRestore = bankQuestions.filter((question) => deletedQuestionRestoreIds.includes(question.id));
-    const currentJayBalance = Number(jaySnap?.exists?.() ? jaySnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.jay?.lifetimePenaltyPoints || 0);
-    const currentKimBalance = Number(kimSnap?.exists?.() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.kim?.lifetimePenaltyPoints || 0);
+    const currentJayBalance = Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0);
+    const currentKimBalance = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
     const nextJayBalance = Math.max(0, currentJayBalance + Number(rollback.jay || 0));
     const nextKimBalance = Math.max(0, currentKimBalance + Number(rollback.kim || 0));
-    const batch = writeBatch(firestore);
+    await deleteDoc(gameRef);
+
+    const cleanupBatch = writeBatch(firestore);
     if (questionsToRestore.length) {
       questionsToRestore.forEach((question) => {
-        batch.set(doc(firestore, 'questionBank', question.id), setQuestionUsed(question, false), { merge: true });
+        cleanupBatch.set(doc(firestore, 'questionBank', question.id), setQuestionUsed(question, false), { merge: true });
       });
     }
-    if (Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0) {
-      batch.set(doc(firestore, 'users', fixedPlayerUids.jay), {
+    if (shouldRollbackLifetimePoints) {
+      cleanupBatch.set(doc(firestore, 'users', fixedPlayerUids.jay), {
         uid: fixedPlayerUids.jay,
         displayName: 'Jay',
         lifetimePenaltyPoints: nextJayBalance,
         updatedAt: serverTimestamp(),
       }, { merge: true });
-      batch.set(doc(firestore, 'users', fixedPlayerUids.kim), {
+      cleanupBatch.set(doc(firestore, 'users', fixedPlayerUids.kim), {
         uid: fixedPlayerUids.kim,
         displayName: 'Kim',
         lifetimePenaltyPoints: nextKimBalance,
         updatedAt: serverTimestamp(),
       }, { merge: true });
     }
-    batch.set(doc(firestore, 'playerPairs', pairId), {
+    cleanupBatch.set(doc(firestore, 'playerPairs', pairId), {
       pairId,
       playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
       playedQuestionIds: remainingPairPlayedQuestionIds,
@@ -14831,12 +14878,18 @@ function ProductionApp() {
         roundsPlayed: Number(latestCompletedGame?.roundsPlayed || latestCompletedGame?.rounds?.length || 0),
       },
     }, { merge: true });
-    roundDocs.forEach((entry) => batch.delete(entry.ref));
-    chatDocs.forEach((entry) => batch.delete(entry.ref));
-    playerDocs.forEach((entry) => batch.delete(entry.ref));
-    inviteDocs.forEach((entry) => batch.delete(entry.ref));
-    batch.delete(gameRef);
-    await batch.commit();
+    [fixedPlayerUids.jay, fixedPlayerUids.kim]
+      .map((uid) => buildGameInviteId(targetGameId, uid))
+      .filter(Boolean)
+      .forEach((inviteId) => {
+        cleanupBatch.delete(doc(firestore, 'gameInvites', inviteId));
+      });
+    await cleanupBatch.commit().catch((error) => {
+      if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('deleteGameByIdCleanup');
+      }
+      console.warn('Deleted the game doc, but some follow-up cleanup did not finish.', error);
+    });
     if (Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0) {
       setPlayerAccounts((current) => ({
         ...current,
@@ -14856,6 +14909,28 @@ function ProductionApp() {
         },
       }));
     }
+
+    void Promise.allSettled([
+      getDocs(collection(gameRef, 'rounds')),
+      getDocs(collection(gameRef, 'chatMessages')),
+      getDocs(collection(gameRef, 'players')),
+    ]).then(async ([roundsResult, chatResult, playersResult]) => {
+      const docsToDelete = [
+        ...(roundsResult.status === 'fulfilled' ? roundsResult.value.docs : []),
+        ...(chatResult.status === 'fulfilled' ? chatResult.value.docs : []),
+        ...(playersResult.status === 'fulfilled' ? playersResult.value.docs : []),
+      ];
+      for (const chunk of chunkArray(docsToDelete, 400)) {
+        const batch = writeBatch(firestore);
+        chunk.forEach((entry) => batch.delete(entry.ref));
+        await batch.commit();
+      }
+    }).catch((error) => {
+      if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('deleteGameByIdArtifactCleanup');
+      }
+      console.warn('Background cleanup for deleted game artifacts did not finish.', error);
+    });
   };
 
   const saveRedemptionItem = async ({ itemId = '', ownerPlayerId, title, description, cost, active = true, keepOnRedeemed = false, itemType = 'forfeit' }) => {
@@ -15623,6 +15698,7 @@ function ProductionApp() {
       console.error('END GAME FAILED', error);
       console.error('[KJK ROOM] Confirm game action failed', error, actionToConfirm);
       if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('confirmGameAction');
         setNotice(
           actionToConfirm?.type === 'delete'
             ? 'Firebase is rate-limiting the app right now. Wait a moment, then try deleting the game again.'
@@ -15842,6 +15918,7 @@ function ProductionApp() {
         return null;
       }
       if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('withBusy');
         setNotice('Firebase is rate-limiting the app right now. Please wait a moment and try again.');
         return null;
       }
