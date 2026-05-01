@@ -2745,6 +2745,11 @@ function LobbyScreen({
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
   const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
+  const [flippedLobbyTiles, setFlippedLobbyTiles] = useState(() => ({
+    standard: false,
+    quiz: false,
+    holdem: false,
+  }));
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
@@ -2807,6 +2812,38 @@ function LobbyScreen({
       categories: createMode === 'custom' ? selectedCategories : [],
       sendInvite: true,
     });
+
+  const handleCreateQuizGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: quizCreateCodeDraft,
+      mode: 'random',
+      gameMode: 'quiz',
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: quizQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateHoldemGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: holdemCreateCodeDraft,
+      gameName: "Texas Hold'em",
+      mode: 'random',
+      gameMode: HOLDEM_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const setLobbyTileFlipped = (cardId, nextValue) => {
+    setFlippedLobbyTiles((current) => {
+      if (current?.[cardId] === nextValue) return current;
+      return {
+        ...current,
+        [cardId]: nextValue,
+      };
+    });
+  };
 
   const closeDashboardMenu = () => {
     dashboardMenuRef.current?.removeAttribute('open');
@@ -3282,6 +3319,47 @@ function LobbyScreen({
     moveLobbyCarousel(deltaX < 0 ? 1 : -1);
   };
 
+  const isStandardTileFlipped = Boolean(flippedLobbyTiles.standard);
+  const isQuizTileFlipped = Boolean(flippedLobbyTiles.quiz);
+  const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
+
+  const renderLobbyTileFront = ({ cardId, eyebrow, title, description, statusText, onCreateAndInvite }) => {
+    const isFlipped = Boolean(flippedLobbyTiles?.[cardId]);
+    return (
+      <div className="lobby-image-tile-face lobby-image-tile-face--front" inert={isFlipped} aria-hidden={isFlipped}>
+        <div className="lobby-image-tile-front-copy">
+          <div className="panel-heading lobby-image-tile-front-heading">
+            <div>
+              <p className="eyebrow">{eyebrow}</p>
+              <h2>{title}</h2>
+            </div>
+            {statusText ? <span className="status-pill">{statusText}</span> : null}
+          </div>
+          <p className="panel-copy lobby-image-tile-front-summary">{description}</p>
+        </div>
+        <div className="lobby-image-tile-front-spacer" aria-hidden="true" />
+        <div className="button-row lobby-image-tile-front-actions">
+          <Button
+            type="button"
+            className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
+            onClick={() => setLobbyTileFlipped(cardId, true)}
+            disabled={isBusy}
+          >
+            Create New Game
+          </Button>
+          <Button
+            type="button"
+            className="primary-button compact lobby-primary-button lobby-image-tile-action"
+            onClick={onCreateAndInvite}
+            disabled={isBusy}
+          >
+            Create + Invite
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
 	  return (
 	    <main className={`app production-app ${isMobileDashboardNav ? 'mobile-app' : ''}`}>
 	      <header className="top-bar top-bar--shell">
@@ -3464,107 +3542,129 @@ function LobbyScreen({
                       className="panel lobby-panel lobby-panel--lobby create-game-card lobby-image-tile lobby-image-tile--normal"
                       style={{ '--lobby-tile-image': `url("${normalGameTileImage}")` }}
                     >
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">Game Lobby</p>
-                    <h2>Create New Game</h2>
-                  </div>
-                  <span className="status-pill">{questionCount} ready</span>
-                </div>
+                      <div className={`lobby-image-tile-flip ${isStandardTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'standard',
+                          eyebrow: 'Game Lobby',
+                          title: 'Normal Game',
+                          description: 'Penalty-point rounds, question reveals, and all the usual Jay vs Kim game flow.',
+                          statusText: `${questionCount} ready`,
+                          onCreateAndInvite: handleCreateAndInviteGame,
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isStandardTileFlipped} aria-hidden={!isStandardTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('standard', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Game Lobby</p>
+                              <h2>Create New Game</h2>
+                            </div>
+                            <span className="status-pill">{questionCount} ready</span>
+                          </div>
 
-                <div className="create-mode-row">
-                  <Button className={`ghost-button compact ${createMode === 'random' ? 'is-on' : ''}`} onClick={() => setCreateMode('random')}>
-                    Pick X Random Questions
-                  </Button>
-                  <Button className={`ghost-button compact ${createMode === 'custom' ? 'is-on' : ''}`} onClick={() => setCreateMode('custom')}>
-                    Select My Own
-                  </Button>
-                </div>
+                          <div className="create-mode-row">
+                            <Button className={`ghost-button compact ${createMode === 'random' ? 'is-on' : ''}`} onClick={() => setCreateMode('random')}>
+                              Pick X Random Questions
+                            </Button>
+                            <Button className={`ghost-button compact ${createMode === 'custom' ? 'is-on' : ''}`} onClick={() => setCreateMode('custom')}>
+                              Select My Own
+                            </Button>
+                          </div>
 
-                <div className="lobby-actions lobby-actions--stack">
-                  <label className="field">
-                    <span>Game Name</span>
-                    <input value={gameName} onChange={(event) => onGameNameChange(event.target.value)} placeholder="Jay vs Kim showdown" />
-                  </label>
-                  <label className="field">
-                    <span>Number of Questions</span>
-                    <input type="number" inputMode="numeric" min="1" value={gameQuestionCount} onChange={(event) => onGameQuestionCountChange(event.target.value)} placeholder="10" />
-                  </label>
-                  <label className="field">
-                    <span>Host Code Seed</span>
-                    <input value={createCode} onChange={(event) => onCreateCodeChange(normalizeJoinCode(event.target.value))} placeholder="Optional" />
-                  </label>
-                </div>
+                          <div className="lobby-actions lobby-actions--stack">
+                            <label className="field">
+                              <span>Game Name</span>
+                              <input value={gameName} onChange={(event) => onGameNameChange(event.target.value)} placeholder="Jay vs Kim showdown" />
+                            </label>
+                            <label className="field">
+                              <span>Number of Questions</span>
+                              <input type="number" inputMode="numeric" min="1" value={gameQuestionCount} onChange={(event) => onGameQuestionCountChange(event.target.value)} placeholder="10" />
+                            </label>
+                            <label className="field">
+                              <span>Host Code Seed</span>
+                              <input value={createCode} onChange={(event) => onCreateCodeChange(normalizeJoinCode(event.target.value))} placeholder="Optional" />
+                            </label>
+                          </div>
 
-                {createMode === 'custom' ? (
-                  <div className="create-filters-grid">
-                    <section className="filter-card">
-                      <div className="mini-heading">
-                        <div>
-                          <span>Question Types</span>
-                          <h3>Choose formats</h3>
+                          {createMode === 'custom' ? (
+                            <div className="create-filters-grid">
+                              <section className="filter-card">
+                                <div className="mini-heading">
+                                  <div>
+                                    <span>Question Types</span>
+                                    <h3>Choose formats</h3>
+                                  </div>
+                                </div>
+                                <div className="filter-chip-grid">
+                                  {typeOptions.map((option) => (
+                                    <button
+                                      key={option.value}
+                                      type="button"
+                                      className={`filter-chip ${selectedRoundTypes.includes(option.value) ? 'is-on' : ''}`}
+                                      onClick={() => toggleFilterValue(option.value, selectedRoundTypes, setSelectedRoundTypes)}
+                                    >
+                                      {option.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </section>
+
+                              <section className="filter-card">
+                                <div className="mini-heading">
+                                  <div>
+                                    <span>Categories</span>
+                                    <h3>Choose themes</h3>
+                                  </div>
+                                </div>
+                                <div className="filter-chip-grid filter-chip-grid--categories">
+                                  {categoryOptions.map((category) => (
+                                    <button
+                                      key={category}
+                                      type="button"
+                                      className={`filter-chip ${selectedCategories.includes(category) ? 'is-on' : ''}`}
+                                      onClick={() => toggleFilterValue(category, selectedCategories, setSelectedCategories)}
+                                    >
+                                      {category}
+                                    </button>
+                                  ))}
+                                </div>
+                              </section>
+                            </div>
+                          ) : (
+                            <p className="panel-copy">Create instantly with a random pack of unused questions for Jay vs Kim.</p>
+                          )}
+
+                          <div className="button-row lobby-create-actions">
+                            <Button type="button" className="primary-button lobby-primary-button" onClick={handleCreateGame} disabled={isBusy}>
+                              Create New Game
+                            </Button>
+                            <Button type="button" className="ghost-button lobby-secondary-button" onClick={handleCreateAndInviteGame} disabled={isBusy}>
+                              Create + Invite
+                            </Button>
+                          </div>
+
+                          <div className="lobby-join-inline">
+                            <p className="eyebrow">OR Join a game with code</p>
+                            <div className="lobby-actions lobby-actions--stack">
+                              <label className="field">
+                                <span>Join Code</span>
+                                <input value={joinCode} onChange={(event) => onJoinCodeChange(normalizeJoinCode(event.target.value))} placeholder="ABCD12" />
+                              </label>
+                              <Button className="ghost-button lobby-secondary-button" onClick={onJoinGame} disabled={isBusy || !joinCode.length}>
+                                Join Game
+                              </Button>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                      <div className="filter-chip-grid">
-                        {typeOptions.map((option) => (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={`filter-chip ${selectedRoundTypes.includes(option.value) ? 'is-on' : ''}`}
-                            onClick={() => toggleFilterValue(option.value, selectedRoundTypes, setSelectedRoundTypes)}
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-
-                    <section className="filter-card">
-                      <div className="mini-heading">
-                        <div>
-                          <span>Categories</span>
-                          <h3>Choose themes</h3>
-                        </div>
-                      </div>
-                      <div className="filter-chip-grid filter-chip-grid--categories">
-                        {categoryOptions.map((category) => (
-                          <button
-                            key={category}
-                            type="button"
-                            className={`filter-chip ${selectedCategories.includes(category) ? 'is-on' : ''}`}
-                            onClick={() => toggleFilterValue(category, selectedCategories, setSelectedCategories)}
-                          >
-                            {category}
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-                  </div>
-                ) : (
-                  <p className="panel-copy">Create instantly with a random pack of unused questions for Jay vs Kim.</p>
-                )}
-
-                <div className="button-row lobby-create-actions">
-                  <Button type="button" className="primary-button lobby-primary-button" onClick={handleCreateGame} disabled={isBusy}>
-                    Create New Game
-                  </Button>
-                  <Button type="button" className="ghost-button lobby-secondary-button" onClick={handleCreateAndInviteGame} disabled={isBusy}>
-                    Create + Send Game Request
-                  </Button>
-                </div>
-
-                <div className="lobby-join-inline">
-                  <p className="eyebrow">OR Join a game with code</p>
-                  <div className="lobby-actions lobby-actions--stack">
-                    <label className="field">
-                      <span>Join Code</span>
-                      <input value={joinCode} onChange={(event) => onJoinCodeChange(normalizeJoinCode(event.target.value))} placeholder="ABCD12" />
-                    </label>
-                    <Button className="ghost-button lobby-secondary-button" onClick={onJoinGame} disabled={isBusy || !joinCode.length}>
-                      Join Game
-                    </Button>
-                  </div>
-                </div>
                     </section>
                   </div>
 
@@ -3577,89 +3677,94 @@ function LobbyScreen({
                     className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--quiz"
                     style={{ '--lobby-tile-image': `url("${quickFireQuizTileImage}")` }}
                   >
-	                <div className="panel-heading">
-	                  <div>
-	                    <p className="eyebrow">Quick Fire</p>
-	                    <h2>Quiz Mode</h2>
-	                  </div>
-	                </div>
-	                <p className="panel-copy">Start a speed quiz game from the Quiz sheet question set.</p>
-                <div className="quiz-card-hero" aria-hidden="true">
-                  <div className="quiz-card-hero-main">
-                    <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
-                      <defs>
-                        <linearGradient id="quiz-card-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                          <stop offset="0%" stopColor="#7ad8ff" />
-                          <stop offset="100%" stopColor="#4f7bff" />
-                        </linearGradient>
-                      </defs>
-                      <circle cx="60" cy="60" r="52" fill="rgba(6,16,34,0.72)" stroke="url(#quiz-card-gradient)" strokeWidth="4" />
-                      <path d="M34 56h52M34 70h36" stroke="#bfe1ff" strokeWidth="4" strokeLinecap="round" />
-                      <circle cx="86" cy="70" r="7" fill="#9be5a6" />
-                      <path d="M83.5 70.2 85.5 72.4 89 67.8" stroke="#0f3117" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </div>
-                  <div className="quiz-card-hero-meta">
-                    <strong>10s Timer</strong>
-                    <small>Fast answers score higher</small>
-                  </div>
-                  <div className="quiz-card-hero-meta">
-                    <strong>Live Quiz</strong>
-                    <small>Separate from normal game points</small>
-	                  </div>
-	                </div>
-	                <label className="field">
-	                  <span>Quiz Code</span>
-	                  <input
-	                    value={quizCreateCodeDraft}
-	                    onChange={(event) => setQuizCreateCodeDraft(normalizeJoinCode(event.target.value))}
-	                    placeholder="Optional"
-	                  />
-	                </label>
-	                <label className="field">
-	                  <span>Number of Quiz Questions</span>
-	                  <input
-	                    type="number"
-	                    inputMode="numeric"
-	                    min="1"
-	                    value={quizQuestionCountDraft}
-	                    onChange={(event) => setQuizQuestionCountDraft(event.target.value)}
-	                    placeholder="10"
-	                  />
-	                </label>
-	                <div className="button-row">
-	                  <Button
-	                    className="primary-button compact"
-	                    onClick={() =>
-	                      onCreateGame({
-	                        createCode: quizCreateCodeDraft,
-	                        mode: 'random',
-	                        gameMode: 'quiz',
-	                        roundTypes: [],
-	                        categories: [],
-	                        requestedQuestionCount: quizQuestionCountDraft,
-	                      })}
-	                    disabled={isBusy}
-	                  >
-	                    Create Quiz Game
-	                  </Button>
-	                  <Button
-	                    className="ghost-button compact"
-	                    onClick={() =>
-	                      onCreateGame({
-	                        createCode: quizCreateCodeDraft,
-	                        mode: 'random',
-	                        gameMode: 'quiz',
-	                        roundTypes: [],
-	                        categories: [],
-	                        sendInvite: true,
-	                        requestedQuestionCount: quizQuestionCountDraft,
-	                      })}
-	                    disabled={isBusy}
-	                  >
-	                    Create + Invite
-	                  </Button>
-	                </div>
+                      <div className={`lobby-image-tile-flip ${isQuizTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'quiz',
+                          eyebrow: 'Quick Fire',
+                          title: 'Quick Fire Quiz',
+                          description: 'Fast-answer quiz mode with its own scoring, timer pressure, and separate quiz points.',
+                          statusText: `${quizQuestionCount} ready`,
+                          onCreateAndInvite: () => handleCreateQuizGame(true),
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isQuizTileFlipped} aria-hidden={!isQuizTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('quiz', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+	                        <div className="panel-heading">
+	                          <div>
+	                            <p className="eyebrow">Quick Fire</p>
+	                            <h2>Quiz Mode</h2>
+	                          </div>
+	                        </div>
+	                        <p className="panel-copy">Start a speed quiz game from the Quiz sheet question set.</p>
+                          <div className="quiz-card-hero" aria-hidden="true">
+                            <div className="quiz-card-hero-main">
+                              <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
+                                <defs>
+                                  <linearGradient id="quiz-card-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stopColor="#7ad8ff" />
+                                    <stop offset="100%" stopColor="#4f7bff" />
+                                  </linearGradient>
+                                </defs>
+                                <circle cx="60" cy="60" r="52" fill="rgba(6,16,34,0.72)" stroke="url(#quiz-card-gradient)" strokeWidth="4" />
+                                <path d="M34 56h52M34 70h36" stroke="#bfe1ff" strokeWidth="4" strokeLinecap="round" />
+                                <circle cx="86" cy="70" r="7" fill="#9be5a6" />
+                                <path d="M83.5 70.2 85.5 72.4 89 67.8" stroke="#0f3117" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            </div>
+                            <div className="quiz-card-hero-meta">
+                              <strong>10s Timer</strong>
+                              <small>Fast answers score higher</small>
+                            </div>
+                            <div className="quiz-card-hero-meta">
+                              <strong>Live Quiz</strong>
+                              <small>Separate from normal game points</small>
+	                          </div>
+	                        </div>
+	                        <label className="field">
+	                          <span>Quiz Code</span>
+	                          <input
+	                            value={quizCreateCodeDraft}
+	                            onChange={(event) => setQuizCreateCodeDraft(normalizeJoinCode(event.target.value))}
+	                            placeholder="Optional"
+	                          />
+	                        </label>
+	                        <label className="field">
+	                          <span>Number of Quiz Questions</span>
+	                          <input
+	                            type="number"
+	                            inputMode="numeric"
+	                            min="1"
+	                            value={quizQuestionCountDraft}
+	                            onChange={(event) => setQuizQuestionCountDraft(event.target.value)}
+	                            placeholder="10"
+	                          />
+	                        </label>
+	                        <div className="button-row">
+	                          <Button
+	                            className="primary-button compact"
+	                            onClick={() => handleCreateQuizGame(false)}
+	                            disabled={isBusy}
+	                          >
+	                            Create Quiz Game
+	                          </Button>
+	                          <Button
+	                            className="ghost-button compact"
+	                            onClick={() => handleCreateQuizGame(true)}
+	                            disabled={isBusy}
+	                          >
+	                            Create + Invite
+	                          </Button>
+	                        </div>
+                        </div>
+                      </div>
 	                </section>
                   </div>
 
@@ -3672,62 +3777,67 @@ function LobbyScreen({
                       className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
                       style={{ '--lobby-tile-image': `url("${pokerTileImage}")` }}
                     >
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">Cards</p>
-                    <h2>Texas Hold'em</h2>
-                  </div>
-                  <span className="status-pill">{formatScore(HOLDEM_SMALL_BLIND)} / {formatScore(HOLDEM_BIG_BLIND)}</span>
-                </div>
-                <p className="panel-copy">Open a heads-up Texas Hold'em table where Jay and Kim use their live penalty-point totals as the poker bankroll.</p>
-                <div className="hold-em-card-hero" aria-hidden="true">
-                  <span className="hold-em-card-chip">A♠</span>
-                  <span className="hold-em-card-chip">K♥</span>
-                  <span className="hold-em-card-chip">Q♣</span>
-                  <span className="hold-em-card-chip">J♦</span>
-                </div>
-                <label className="field">
-                  <span>Texas Hold'em Code</span>
-                  <input
-                    value={holdemCreateCodeDraft}
-                    onChange={(event) => setHoldemCreateCodeDraft(normalizeJoinCode(event.target.value))}
-                    placeholder="Optional"
-                  />
-                </label>
-                <p className="field-note">Small blind {formatScore(HOLDEM_SMALL_BLIND)}. Big blind {formatScore(HOLDEM_BIG_BLIND)}. Bets settle back into penalty points when the hand ends.</p>
-                <div className="button-row">
-                  <Button
-                    className="primary-button compact"
-                    onClick={() =>
-                      onCreateGame({
-                        createCode: holdemCreateCodeDraft,
-                        gameName: "Texas Hold'em",
-                        mode: 'random',
-                        gameMode: HOLDEM_GAME_MODE,
-                        roundTypes: [],
-                        categories: [],
-                      })}
-                    disabled={isBusy}
-                  >
-                    Create Texas Hold'em
-                  </Button>
-                  <Button
-                    className="ghost-button compact"
-                    onClick={() =>
-                      onCreateGame({
-                        createCode: holdemCreateCodeDraft,
-                        gameName: "Texas Hold'em",
-                        mode: 'random',
-                        gameMode: HOLDEM_GAME_MODE,
-                        roundTypes: [],
-                        categories: [],
-                        sendInvite: true,
-                      })}
-                    disabled={isBusy}
-                  >
-                    Create + Invite
-                  </Button>
-                </div>
+                      <div className={`lobby-image-tile-flip ${isHoldemTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'holdem',
+                          eyebrow: 'Cards',
+                          title: "Texas Hold'em",
+                          description: 'Heads-up poker using Jay and Kim’s live penalty-point totals as the bankroll for each hand.',
+                          statusText: `${formatScore(HOLDEM_SMALL_BLIND)} / ${formatScore(HOLDEM_BIG_BLIND)}`,
+                          onCreateAndInvite: () => handleCreateHoldemGame(true),
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isHoldemTileFlipped} aria-hidden={!isHoldemTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('holdem', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Cards</p>
+                              <h2>Texas Hold'em</h2>
+                            </div>
+                            <span className="status-pill">{formatScore(HOLDEM_SMALL_BLIND)} / {formatScore(HOLDEM_BIG_BLIND)}</span>
+                          </div>
+                          <p className="panel-copy">Open a heads-up Texas Hold'em table where Jay and Kim use their live penalty-point totals as the poker bankroll.</p>
+                          <div className="hold-em-card-hero" aria-hidden="true">
+                            <span className="hold-em-card-chip">A♠</span>
+                            <span className="hold-em-card-chip">K♥</span>
+                            <span className="hold-em-card-chip">Q♣</span>
+                            <span className="hold-em-card-chip">J♦</span>
+                          </div>
+                          <label className="field">
+                            <span>Texas Hold'em Code</span>
+                            <input
+                              value={holdemCreateCodeDraft}
+                              onChange={(event) => setHoldemCreateCodeDraft(normalizeJoinCode(event.target.value))}
+                              placeholder="Optional"
+                            />
+                          </label>
+                          <p className="field-note">Small blind {formatScore(HOLDEM_SMALL_BLIND)}. Big blind {formatScore(HOLDEM_BIG_BLIND)}. Bets settle back into penalty points when the hand ends.</p>
+                          <div className="button-row">
+                            <Button
+                              className="primary-button compact"
+                              onClick={() => handleCreateHoldemGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create Texas Hold'em
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateHoldemGame(true)}
+                              disabled={isBusy}
+                            >
+                              Create + Invite
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
                                   </section>
                   </div>
                 </div>
