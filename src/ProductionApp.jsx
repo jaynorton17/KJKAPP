@@ -14693,12 +14693,14 @@ function ProductionApp() {
     const pairId = gameDoc.pairId || buildPairKey();
     const rollback = getLifetimeRollbackForGame(gameDoc);
     const deletedPlayedQuestionIds = getPlayedQuestionIdsForGame(gameDoc);
-    const [allPairGamesSnap, jaySnap, kimSnap, roundDocs, chatDocs] = await Promise.all([
+    const [allPairGamesSnap, jaySnap, kimSnap, roundDocs, chatDocs, playerDocs, inviteDocs] = await Promise.all([
       getDocs(query(collection(firestore, 'games'), where('pairId', '==', pairId))),
       getDoc(doc(firestore, 'users', fixedPlayerUids.jay)),
       getDoc(doc(firestore, 'users', fixedPlayerUids.kim)),
       getDocs(collection(gameRef, 'rounds')),
       getDocs(collection(gameRef, 'chatMessages')),
+      getDocs(collection(gameRef, 'players')),
+      getDocs(query(collection(firestore, 'gameInvites'), where('gameId', '==', targetGameId))),
     ]);
     const remainingGames = (allPairGamesSnap?.docs || [])
       .map((entry) => ({ id: entry.id, ...entry.data() }))
@@ -14754,6 +14756,8 @@ function ProductionApp() {
     }, { merge: true });
     roundDocs.forEach((entry) => batch.delete(entry.ref));
     chatDocs.forEach((entry) => batch.delete(entry.ref));
+    playerDocs.forEach((entry) => batch.delete(entry.ref));
+    inviteDocs.forEach((entry) => batch.delete(entry.ref));
     batch.delete(gameRef);
     await batch.commit();
     if (Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0) {
@@ -15511,6 +15515,9 @@ function ProductionApp() {
         }
         await deleteGameById(actionToConfirm.gameId);
         setGameLibrary((current) => current.filter((entry) => entry?.id !== actionToConfirm.gameId));
+        setLocalArchivedGames((current) => current.filter((entry) => entry?.id !== actionToConfirm.gameId));
+        setGameInvites((current) => current.filter((entry) => entry?.gameId !== actionToConfirm.gameId));
+        setRoomGameInvites((current) => current.filter((entry) => entry?.gameId !== actionToConfirm.gameId));
         if (isCurrentGameSession(actionToConfirm.gameId)) {
           setGameId('');
           localStorage.removeItem(activeGameKey);
@@ -15521,6 +15528,7 @@ function ProductionApp() {
           setProfile((current) => (current ? { ...current, activeGameId: '' } : current));
         }
         if (actionToConfirm.gameId === selectedGameId) setSelectedGameId('');
+        if (localEndedGameSummary?.id === actionToConfirm.gameId) setLocalEndedGameSummary(null);
         setNotice('Game deleted permanently.');
       }
 
