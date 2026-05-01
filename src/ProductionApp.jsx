@@ -7473,6 +7473,7 @@ function HoldemActionControls({
   holdemState,
   viewerSeat,
   isBusy,
+  startHandBusy = false,
   onStartHand,
   onTakeAction,
 }) {
@@ -7533,7 +7534,7 @@ function HoldemActionControls({
         </p>
         {(!isFirstHoldemHand || bothPlayersDealReady) ? (
           <div className="button-row holdem-action-row">
-            <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || (viewerDealReady && !bothPlayersDealReady)}>
+            <Button className="primary-button compact" onClick={onStartHand} disabled={startHandBusy || (viewerDealReady && !bothPlayersDealReady)}>
               {bothPlayersDealReady
                 ? 'Deal Now'
                 : viewerDealReady
@@ -7563,7 +7564,7 @@ function HoldemActionControls({
               : holdemState.statusMessage || 'Review the showdown, then both players can deal the next hand.'}
         </p>
         <div className="button-row holdem-action-row">
-          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || (viewerDealReady && !bothPlayersDealReady)}>
+          <Button className="primary-button compact" onClick={onStartHand} disabled={startHandBusy || (viewerDealReady && !bothPlayersDealReady)}>
             {bothPlayersDealReady ? 'Deal Now' : viewerDealReady ? 'Ready' : 'Deal Next Hand'}
           </Button>
         </div>
@@ -7640,7 +7641,7 @@ function HoldemActionControls({
 function HoldemReadyModal({
   holdemState,
   viewerSeat,
-  isBusy,
+  startHandBusy = false,
   onStartHand,
 }) {
   if (!holdemState || holdemState.sessionStatus !== 'ready_to_deal' || Number(holdemState.handNumber || 0) > 0) {
@@ -7694,7 +7695,7 @@ function HoldemReadyModal({
           ))}
         </div>
         <div className="button-row holdem-ready-modal-actions">
-          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || (viewerDealReady && !bothPlayersDealReady)}>
+          <Button className="primary-button compact" onClick={onStartHand} disabled={startHandBusy || (viewerDealReady && !bothPlayersDealReady)}>
             {bothPlayersDealReady
               ? 'Deal Cards Now'
               : viewerDealReady
@@ -7712,6 +7713,7 @@ function HoldemTable({
   viewerSeat,
   editingModeEnabled,
   isBusy,
+  startHandBusy = false,
   onStartHand,
   onTakeAction,
 }) {
@@ -7853,6 +7855,7 @@ function HoldemTable({
           holdemState={holdemState}
           viewerSeat={viewerSeat}
           isBusy={isBusy}
+          startHandBusy={startHandBusy}
           onStartHand={onStartHand}
           onTakeAction={onTakeAction}
         />
@@ -7883,6 +7886,7 @@ function HoldemGameRoom({
   confirmAction,
   onConfirmAction,
   onCancelAction,
+  holdemStartBusy = false,
   onStartHoldemHand,
   onTakeHoldemAction,
 }) {
@@ -7920,14 +7924,14 @@ function HoldemGameRoom({
   ].join(':');
 
   useEffect(() => {
-    if (!shouldAutoRetryReadyDeal || isBusy || typeof onStartHoldemHand !== 'function') return;
+    if (!shouldAutoRetryReadyDeal || holdemStartBusy || typeof onStartHoldemHand !== 'function') return;
     if (autoDealAttemptRef.current === autoDealAttemptKey) return;
     autoDealAttemptRef.current = autoDealAttemptKey;
     Promise.resolve(onStartHoldemHand()).catch((error) => {
       console.warn('Could not auto-start the ready Hold’em hand.', error);
       autoDealAttemptRef.current = '';
     });
-  }, [autoDealAttemptKey, isBusy, onStartHoldemHand, shouldAutoRetryReadyDeal]);
+  }, [autoDealAttemptKey, holdemStartBusy, onStartHoldemHand, shouldAutoRetryReadyDeal]);
 
   useEffect(() => {
     if (!shouldAutoRetryReadyDeal) autoDealAttemptRef.current = '';
@@ -8037,6 +8041,7 @@ function HoldemGameRoom({
               viewerSeat={resolvedViewerSeat}
               editingModeEnabled={editingModeEnabled}
               isBusy={isBusy}
+              startHandBusy={holdemStartBusy}
               onStartHand={onStartHoldemHand}
               onTakeAction={onTakeHoldemAction}
             />
@@ -8076,7 +8081,7 @@ function HoldemGameRoom({
       <HoldemReadyModal
         holdemState={holdemState}
         viewerSeat={resolvedViewerSeat}
-        isBusy={isBusy}
+        startHandBusy={holdemStartBusy}
         onStartHand={onStartHoldemHand}
       />
       <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
@@ -10992,6 +10997,7 @@ function GameRoomView({
         confirmAction={confirmAction}
         onConfirmAction={onConfirmAction}
         onCancelAction={onCancelAction}
+        holdemStartBusy={isHoldemStartBusy}
         onStartHoldemHand={onStartHoldemHand}
         onTakeHoldemAction={onTakeHoldemAction}
       />
@@ -11512,6 +11518,7 @@ function ProductionApp() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [isHoldemStartBusy, setIsHoldemStartBusy] = useState(false);
   const [connectionState, setConnectionState] = useState(() => ({
     online: typeof navigator !== 'undefined' ? navigator.onLine : true,
     lastGameSnapshotAt: 0,
@@ -16206,8 +16213,10 @@ function ProductionApp() {
     return 'Players are seated. Both players must click deal to start the hand.';
   }, []);
 
-  const startHoldemHand = async () =>
-    withBusy(async () => {
+  const startHoldemHand = async () => {
+    if (isHoldemStartBusy) return null;
+    setIsHoldemStartBusy(true);
+    try {
       if (!game?.id) throw new Error('Open a Hold’em room first.');
       if (!isHoldemGameMode(game?.gameMode || 'standard')) throw new Error('Texas Hold’em actions only work in Texas Hold’em rooms.');
       const bothPlayersJoined = Boolean(game?.seats?.jay && game?.seats?.kim);
@@ -16341,7 +16350,24 @@ function ProductionApp() {
               : 'Hold’em deal ready updated.',
       );
       return true;
-    }, 'Could not start Texas Hold’em.');
+    } catch (error) {
+      const message = String(error?.message || 'Could not start Texas Hold’em.');
+      const normalizedMessage = normalizeText(message);
+      if (
+        normalizedMessage.includes('quota exceeded')
+        || normalizedMessage.includes('quotaexceeded')
+        || normalizedMessage.includes('resource exhausted')
+        || normalizedMessage.includes('resource-exhausted')
+      ) {
+        setNotice('Texas Hold’em is being rate-limited by Firestore right now. Wait a moment and try the ready button again.');
+        return null;
+      }
+      setNotice(message);
+      return null;
+    } finally {
+      setIsHoldemStartBusy(false);
+    }
+  };
 
   const takeHoldemAction = async ({ action = '', amount = 0 } = {}) =>
     withBusy(async () => {
