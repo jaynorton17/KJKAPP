@@ -10357,12 +10357,11 @@ function ProductionApp() {
       const trackedIds = mergeUniqueIds(
         pairPlayedQuestionIds,
         ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
-        standardSelectableQuestions.filter((question) => question?.used).map((question) => question.id),
       );
       if (!bankQuestionIds.size) return new Set(trackedIds);
       return new Set(trackedIds.filter((questionId) => bankQuestionIds.has(questionId)));
     },
-    [pairPlayedQuestionIds, trackedGameEntries, standardSelectableQuestions, bankQuestionIds],
+    [pairPlayedQuestionIds, trackedGameEntries, bankQuestionIds],
   );
   const replayEligibleQuestionIds = useMemo(
     () =>
@@ -10399,11 +10398,10 @@ function ProductionApp() {
     const trackedIds = mergeUniqueIds(
       pairPlayedQuestionIds,
       ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
-      quizBankQuestions.filter((question) => question?.used).map((question) => question.id),
     );
     if (!quizQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => quizQuestionIds.has(questionId)));
-  }, [pairPlayedQuestionIds, trackedGameEntries, quizBankQuestions, quizQuestionIds]);
+  }, [pairPlayedQuestionIds, trackedGameEntries, quizQuestionIds]);
   const playedQuizQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -13239,7 +13237,6 @@ function ProductionApp() {
               return;
             }
           }
-          await updateQuestionBankUsage(queue, true);
           const createdGameState = {
             ...openingGameState,
             joinCode,
@@ -14518,6 +14515,7 @@ function ProductionApp() {
       let completedRoundsAfterSave = completedRoundsBefore;
       let nextQuizTotals = game.quizTotals || { jay: 0, kim: 0 };
       let archivedQuestionId = '';
+      let archivedQuestionRecord = null;
       let savedCurrentRound = false;
 
       if (game.currentRound) {
@@ -14563,7 +14561,14 @@ function ProductionApp() {
         }
         completedRoundsAfterSave = completedRoundsBefore + 1;
         archivedQuestionId = game.currentRound.questionId || '';
+        archivedQuestionRecord = bankQuestions.find((question) => question.id === archivedQuestionId) || null;
         savedCurrentRound = true;
+        if (archivedQuestionRecord) {
+          await updateQuestionBankUsage([archivedQuestionRecord], true);
+        }
+        if (archivedQuestionId) {
+          await recordPairQuestionUsage([archivedQuestionId]);
+        }
 
         if (totalQuestionGoal > 0 && completedRoundsAfterSave >= totalQuestionGoal) {
           await setDoc(gameRef, {
@@ -14619,9 +14624,6 @@ function ProductionApp() {
               : 'Game ended and moved to Previous Games.',
           );
           return;
-        }
-        if (!Array.isArray(game.questionQueueIds) || !game.questionQueueIds.includes(nextQuestionItem.id)) {
-          await updateQuestionBankUsage([nextQuestionItem], true);
         }
         const nextRoundNumber = Math.max(
           completedRoundsAfterSave + 1,
