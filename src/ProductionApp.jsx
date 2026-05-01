@@ -12521,8 +12521,12 @@ function ProductionApp() {
       warning:
         queue.length < safeRequestedCount
           ? queue.length
-            ? `Only ${queue.length} unique questions are available for this player pair.`
-            : 'No unused questions remain for this player pair.'
+            ? requestedBankType === 'trueFalseGame'
+              ? `Only ${queue.length} unrepeated True or False questions are available for this player pair. This mode does not repeat questions.`
+              : `Only ${queue.length} unique questions are available for this player pair.`
+            : requestedBankType === 'trueFalseGame'
+              ? 'No unused True or False questions remain for this player pair. This mode does not repeat questions.'
+              : 'No unused questions remain for this player pair.'
           : '',
     };
   };
@@ -15391,10 +15395,29 @@ function ProductionApp() {
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           };
+          const trueFalseQueueIds = isTrueFalseGame ? mergeUniqueIds(queue.map((question) => question.id)) : [];
           setGame(createdGameState);
           setGameId(gameRef.id);
           safeLocalStorageSet(activeGameKey, gameRef.id);
-          await setDoc(gameRef, createdGameDoc, { merge: true });
+          if (isTrueFalseGame && trueFalseQueueIds.length) {
+            const batch = writeBatch(firestore);
+            batch.set(gameRef, createdGameDoc, { merge: true });
+            batch.set(
+              doc(firestore, 'playerPairs', buildPairKey()),
+              {
+                pairId: buildPairKey(),
+                playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
+                // True or False questions are retired as soon as they are queued
+                // into a live session so this mode never repeats statements later.
+                playedQuestionIds: arrayUnion(...trueFalseQueueIds),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true },
+            );
+            await batch.commit();
+          } else {
+            await setDoc(gameRef, createdGameDoc, { merge: true });
+          }
           setNotice(
             isHoldemGame
               ? `Texas Hold’em game ${joinCode} created.`
