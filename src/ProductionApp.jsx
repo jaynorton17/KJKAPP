@@ -7899,6 +7899,22 @@ function HoldemTable({
               })}
             </div>
           ) : null}
+          <section className="holdem-board-controls">
+            <div className="mini-heading">
+              <div>
+                <span>Action Controls</span>
+                <h3>{holdemState?.actionSeat ? `${PLAYER_LABEL[holdemState.actionSeat] || holdemState.actionSeat} to act` : 'Table Controls'}</h3>
+              </div>
+            </div>
+            <HoldemActionControls
+              holdemState={holdemState}
+              viewerSeat={viewerSeat}
+              isBusy={isBusy}
+              startHandBusy={startHandBusy}
+              onStartHand={onStartHand}
+              onTakeAction={onTakeAction}
+            />
+          </section>
         </div>
 
         <article className={`holdem-player-panel holdem-player-panel--jay ${holdemState?.actionSeat === 'jay' ? 'is-acting' : ''} ${winningSeats.includes('jay') ? 'is-winning' : ''}`}>
@@ -7926,23 +7942,6 @@ function HoldemTable({
           <small>{`Available balance ${formatScore(displayedStacks.jay)} · Committed ${formatScore(Number(holdemState?.players?.jay?.totalCommitted || 0))}`}</small>
         </article>
       </div>
-
-      <section className="holdem-controls-panel">
-        <div className="mini-heading">
-          <div>
-            <span>Action Controls</span>
-            <h3>{holdemState?.actionSeat ? `${PLAYER_LABEL[holdemState.actionSeat] || holdemState.actionSeat} to act` : 'Table Controls'}</h3>
-          </div>
-        </div>
-        <HoldemActionControls
-          holdemState={holdemState}
-          viewerSeat={viewerSeat}
-          isBusy={isBusy}
-          startHandBusy={startHandBusy}
-          onStartHand={onStartHand}
-          onTakeAction={onTakeAction}
-        />
-      </section>
     </section>
   );
 }

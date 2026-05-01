@@ -827,6 +827,7 @@ button:disabled {
 .holdem-status-grid,
 .holdem-table-surface,
 .holdem-board-panel,
+.holdem-board-controls,
 .holdem-showdown-grid,
 .holdem-controls-panel,
 .holdem-action-stack,
@@ -861,6 +862,9 @@ button:disabled {
 }
 
 .holdem-table-surface {
+  grid-template-areas: "kim board jay";
+  grid-template-columns: minmax(200px, 0.9fr) minmax(320px, 1.18fr) minmax(200px, 0.9fr);
+  align-items: stretch;
   padding: 16px;
   border: 1px solid rgba(228, 199, 121, 0.26);
   border-radius: 24px;
@@ -881,6 +885,14 @@ button:disabled {
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(7, 15, 30, 0.38);
+}
+
+.holdem-player-panel--kim {
+  grid-area: kim;
+}
+
+.holdem-player-panel--jay {
+  grid-area: jay;
 }
 
 .holdem-player-panel.is-acting {
@@ -921,6 +933,10 @@ button:disabled {
   gap: 8px;
 }
 
+.holdem-community-row {
+  justify-content: center;
+}
+
 .holdem-card {
   display: inline-flex;
   align-items: center;
@@ -954,6 +970,9 @@ button:disabled {
 }
 
 .holdem-board-panel {
+  grid-area: board;
+  align-content: start;
+  justify-items: stretch;
   justify-items: center;
   text-align: center;
   padding-block: 18px;
@@ -967,8 +986,31 @@ button:disabled {
   justify-content: center;
 }
 
+.holdem-board-controls {
+  width: min(100%, 460px);
+  justify-self: center;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(5, 13, 24, 0.42);
+  text-align: left;
+}
+
+.holdem-board-controls .mini-heading {
+  margin-bottom: 2px;
+}
+
+.holdem-board-controls .holdem-action-row {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.holdem-board-controls .holdem-raise-row {
+  grid-template-columns: minmax(0, 180px) minmax(0, 1fr);
+}
+
 .holdem-showdown-grid {
   width: min(100%, 420px);
+  justify-self: center;
 }
 
 .holdem-controls-panel {
@@ -1023,6 +1065,13 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .holdem-table-surface {
+    grid-template-areas:
+      "board board"
+      "kim jay";
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .holdem-room-side .chat-panel {
     min-height: 0;
   }
@@ -1038,6 +1087,11 @@ button:disabled {
   }
 
   .holdem-table-surface {
+    grid-template-areas:
+      "board"
+      "kim"
+      "jay";
+    grid-template-columns: 1fr;
     padding: 12px;
   }
 
@@ -1057,6 +1111,15 @@ button:disabled {
   }
 
   .holdem-raise-row {
+    grid-template-columns: 1fr;
+  }
+
+  .holdem-board-controls {
+    width: 100%;
+    padding: 12px;
+  }
+
+  .holdem-board-controls .holdem-raise-row {
     grid-template-columns: 1fr;
   }
 }
