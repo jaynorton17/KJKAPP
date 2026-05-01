@@ -10514,6 +10514,7 @@ function GameRoomView({
   onConfirmAction,
   onCancelAction,
   isBusy,
+  holdemStartBusy = false,
   currentRound,
   penaltyDraft,
   setPenaltyDraft,
@@ -10997,7 +10998,7 @@ function GameRoomView({
         confirmAction={confirmAction}
         onConfirmAction={onConfirmAction}
         onCancelAction={onCancelAction}
-        holdemStartBusy={isHoldemStartBusy}
+        holdemStartBusy={holdemStartBusy}
         onStartHoldemHand={onStartHoldemHand}
         onTakeHoldemAction={onTakeHoldemAction}
       />
@@ -18799,6 +18800,7 @@ function ProductionApp() {
       onConfirmAction={confirmGameAction}
       onCancelAction={cancelGameAction}
       isBusy={isBusy}
+      holdemStartBusy={isHoldemStartBusy}
       currentRound={currentRound}
       penaltyDraft={penaltyDraft}
       setPenaltyDraft={setPenaltyDraft}
