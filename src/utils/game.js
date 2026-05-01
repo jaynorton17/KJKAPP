@@ -830,6 +830,9 @@ export const createRoundResult = (input, nextNumber = 1, priorTotals = emptyTota
     kim: addScores(priorTotals.kim, penaltyAdded.kim),
   };
   const roundPenaltyValue = Math.max(0, parseNumber(input.roundPenaltyValue ?? input.fixedPenalty ?? input.penalty, 5));
+  const correctAnswer = normalizeText(input.correctAnswer || '');
+  const normalizedCorrectAnswer = normalizeText(input.normalizedCorrectAnswer || '')
+    || normalizeText(correctAnswer).toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
   return {
     id: input.id || makeId('round'),
@@ -840,7 +843,15 @@ export const createRoundResult = (input, nextNumber = 1, priorTotals = emptyTota
     answerType,
     defaultAnswerType,
     category: normalizeText(input.category),
+    bankType: normalizeQuestionBankType(input.bankType),
     tags: parseTags(input.tags),
+    intensity: Math.max(0, parseNumber(input.intensity, 0)),
+    tone: normalizeText(input.tone),
+    relationshipArea: normalizeText(input.relationshipArea),
+    avoidIf: parseTags(input.avoidIf),
+    gameSuitability: parseTags(input.gameSuitability),
+    aiUseCase: parseTags(input.aiUseCase),
+    repeatGroup: normalizeText(input.repeatGroup),
     unitLabel: normalizeText(input.unitLabel),
     notes: normalizeText(input.notes),
     actualAnswer: parseNumber(input.actualAnswer ?? input.actual, 0),
@@ -873,6 +884,8 @@ export const createRoundResult = (input, nextNumber = 1, priorTotals = emptyTota
       roundType === 'trueFalse'
         ? DEFAULT_TRUE_FALSE_OPTIONS
         : parseAnswerList(input.multipleChoiceOptions ?? input.options),
+    correctAnswer,
+    normalizedCorrectAnswer,
     penaltyAdded,
     scores,
     manualScores: Boolean(input.manualScores),

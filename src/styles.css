@@ -10523,6 +10523,61 @@ select:focus-visible {
   margin-top: 2px;
 }
 
+.round-metadata-details {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 10px 12px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.round-metadata-summary {
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.round-metadata-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.round-metadata-row {
+  display: grid;
+  gap: 6px;
+}
+
+.round-metadata-row > strong {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.round-metadata-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.round-metadata-pill {
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 0.68rem;
+}
+
+.round-metadata-value {
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
 @media (max-width: 1180px) {
   .game-summary-layout--modal {
     grid-template-columns: 1fr;

@@ -58,6 +58,7 @@ import {
   getRoundPenaltyTotals,
   makeId,
   normalizeText,
+  normalizeQuestionCategoryKey,
   PALETTES,
   PLAYER_LABEL,
   STARTER_QUESTIONS,
@@ -1915,6 +1916,9 @@ const buildGameQuestion = (question) => ({
   roundType: normalizeQuestionType(question.roundType, 'text'),
   defaultAnswerType: question.defaultAnswerType || getDefaultAnswerType(question.roundType),
   multipleChoiceOptions: question.multipleChoiceOptions || [],
+  correctAnswer: question.correctAnswer || '',
+  normalizedCorrectAnswer: question.normalizedCorrectAnswer || '',
+  bankType: normalizeQuestionBankType(question.bankType),
   tags: question.tags || [],
   intensity: Number(question.intensity || 0),
   tone: question.tone || '',
@@ -1931,6 +1935,126 @@ const buildGameQuestion = (question) => ({
 const emptyRoundDraft = () => ({ question: '', category: '', roundType: 'numeric', penalties: defaultPenaltyDraft });
 
 const isValidDateString = (value) => typeof value === 'string' && !Number.isNaN(Date.parse(value));
+
+const QUESTION_METADATA_ARRAY_FIELDS = ['tags', 'avoidIf', 'gameSuitability', 'aiUseCase'];
+
+const hasQuestionMetadataItems = (value) => Array.isArray(value) && value.some((item) => normalizeText(item));
+
+const buildQuestionMetadataLookup = (questions = []) => {
+  const byId = new Map();
+  const byBankAndCategoryKey = new Map();
+  const byCategoryKey = new Map();
+
+  (questions || []).forEach((rawQuestion) => {
+    const question = createQuestionTemplate(rawQuestion || {});
+    const bankType = normalizeQuestionBankType(question?.bankType);
+    const categoryKey = normalizeQuestionCategoryKey(question?.question, question?.category);
+    if (question?.id && !byId.has(question.id)) byId.set(question.id, question);
+    if (!categoryKey) return;
+    const scopedKey = `${bankType}::${categoryKey}`;
+    if (!byBankAndCategoryKey.has(scopedKey)) byBankAndCategoryKey.set(scopedKey, question);
+    if (!byCategoryKey.has(categoryKey)) byCategoryKey.set(categoryKey, question);
+  });
+
+  return {
+    byId,
+    byBankAndCategoryKey,
+    byCategoryKey,
+  };
+};
+
+const lookupQuestionMetadataForRound = (round = {}, questionLookup = null, fallbackBankType = 'game') => {
+  if (!questionLookup) return null;
+  const roundQuestionId = normalizeText(round?.questionId || '');
+  if (roundQuestionId && questionLookup.byId.has(roundQuestionId)) {
+    return questionLookup.byId.get(roundQuestionId) || null;
+  }
+  const categoryKey = normalizeQuestionCategoryKey(round?.question, round?.category);
+  if (!categoryKey) return null;
+  const bankType = normalizeQuestionBankType(round?.bankType || fallbackBankType);
+  return (
+    questionLookup.byBankAndCategoryKey.get(`${bankType}::${categoryKey}`)
+    || questionLookup.byCategoryKey.get(categoryKey)
+    || null
+  );
+};
+
+const enrichRoundQuestionMetadata = (round = {}, questionLookup = null, fallbackBankType = 'game') => {
+  if (!round) return round;
+  const sourceQuestion = lookupQuestionMetadataForRound(round, questionLookup, fallbackBankType);
+  if (!sourceQuestion) return round;
+
+  const nextRound = {
+    ...round,
+    questionId: round.questionId || sourceQuestion.id || '',
+    category: round.category || sourceQuestion.category || '',
+    roundType: normalizeQuestionType(round.roundType || sourceQuestion.roundType, 'text'),
+    bankType: normalizeQuestionBankType(round.bankType || sourceQuestion.bankType || fallbackBankType),
+    defaultAnswerType: round.defaultAnswerType || sourceQuestion.defaultAnswerType || getDefaultAnswerType(round.roundType || sourceQuestion.roundType),
+    multipleChoiceOptions:
+      Array.isArray(round.multipleChoiceOptions) && round.multipleChoiceOptions.length
+        ? round.multipleChoiceOptions
+        : (sourceQuestion.multipleChoiceOptions || []),
+    correctAnswer: round.correctAnswer || sourceQuestion.correctAnswer || '',
+    normalizedCorrectAnswer: round.normalizedCorrectAnswer || sourceQuestion.normalizedCorrectAnswer || '',
+    notes: round.notes || sourceQuestion.notes || '',
+    unitLabel: round.unitLabel || sourceQuestion.unitLabel || '',
+    intensity: Number(round.intensity || 0) || Number(sourceQuestion.intensity || 0),
+    tone: round.tone || sourceQuestion.tone || '',
+    relationshipArea: round.relationshipArea || sourceQuestion.relationshipArea || '',
+    repeatGroup: round.repeatGroup || sourceQuestion.repeatGroup || '',
+  };
+
+  QUESTION_METADATA_ARRAY_FIELDS.forEach((field) => {
+    nextRound[field] = hasQuestionMetadataItems(round[field]) ? round[field] : (sourceQuestion[field] || []);
+  });
+
+  return nextRound;
+};
+
+const enrichGameQuestionMetadata = (gameSummary = null, questionLookup = null) => {
+  if (!gameSummary) return gameSummary;
+  const fallbackBankType = normalizeQuestionBankType(
+    gameSummary?.questionBankType || getQuestionBankTypeForGameMode(gameSummary?.gameMode || 'standard'),
+  );
+  const nextRounds = Array.isArray(gameSummary?.rounds)
+    ? gameSummary.rounds.map((round) => enrichRoundQuestionMetadata(round, questionLookup, fallbackBankType))
+    : [];
+  const nextCurrentRound = gameSummary?.currentRound
+    ? enrichRoundQuestionMetadata(gameSummary.currentRound, questionLookup, fallbackBankType)
+    : gameSummary?.currentRound || null;
+
+  return {
+    ...gameSummary,
+    rounds: nextRounds,
+    currentRound: nextCurrentRound,
+  };
+};
+
+const buildRoundMetadataEntries = (round = {}) => {
+  const entries = [];
+  const tags = Array.isArray(round?.tags) ? round.tags.map(normalizeText).filter(Boolean) : [];
+  const avoidIf = Array.isArray(round?.avoidIf) ? round.avoidIf.map(normalizeText).filter(Boolean) : [];
+  const gameSuitability = Array.isArray(round?.gameSuitability) ? round.gameSuitability.map(normalizeText).filter(Boolean) : [];
+  const aiUseCase = Array.isArray(round?.aiUseCase) ? round.aiUseCase.map(normalizeText).filter(Boolean) : [];
+  const tone = normalizeText(round?.tone);
+  const relationshipArea = normalizeText(round?.relationshipArea);
+  const repeatGroup = normalizeText(round?.repeatGroup);
+  const notes = normalizeText(round?.notes);
+  const intensity = Math.max(0, Number(round?.intensity || 0));
+
+  if (tags.length) entries.push({ label: 'Tags', items: tags });
+  if (Number.isFinite(intensity) && intensity > 0) entries.push({ label: 'Intensity', value: String(intensity) });
+  if (tone) entries.push({ label: 'Tone', value: tone });
+  if (relationshipArea) entries.push({ label: 'Relationship Area', value: relationshipArea });
+  if (avoidIf.length) entries.push({ label: 'Avoid If', items: avoidIf });
+  if (gameSuitability.length) entries.push({ label: 'Game Suitability', items: gameSuitability });
+  if (aiUseCase.length) entries.push({ label: 'AI Use Case', items: aiUseCase });
+  if (repeatGroup) entries.push({ label: 'Repeat Group', value: repeatGroup });
+  if (notes) entries.push({ label: 'Notes', value: notes });
+
+  return entries;
+};
 
 const normalizeStoredQuestion = (raw = {}, fallbackId = '') => {
   const hydrated = createQuestionTemplate({
@@ -8931,30 +9055,78 @@ function GameSummaryContent({
                   <div className="summary-list">
                     {summaryRounds.length ? (
                       isTrueFalseGame ? (
-                        trueFalseRoundRows.map(({ round, outcome }, index) => (
-                          <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
-                            <strong>Round {index + 1}</strong>
-                            <span>{round.question}</span>
-                            <small>{`Jay guessed ${outcome.jayGuess || 'No answer'} / Kim said ${outcome.kimActual || 'No answer'} · ${outcome.jayCorrect ? 'Jay was correct' : `Jay +${formatScore(outcome.jayPenalty)}`}`}</small>
-                            <small>{`Kim guessed ${outcome.kimGuess || 'No answer'} / Jay said ${outcome.jayActual || 'No answer'} · ${outcome.kimCorrect ? 'Kim was correct' : `Kim +${formatScore(outcome.kimPenalty)}`}`}</small>
-                          </article>
-                        ))
+                        trueFalseRoundRows.map(({ round, outcome }, index) => {
+                          const metadataEntries = buildRoundMetadataEntries(round);
+                          return (
+                            <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
+                              <strong>Round {index + 1}</strong>
+                              <span>{round.question}</span>
+                              <small>{`Jay guessed ${outcome.jayGuess || 'No answer'} / Kim said ${outcome.kimActual || 'No answer'} · ${outcome.jayCorrect ? 'Jay was correct' : `Jay +${formatScore(outcome.jayPenalty)}`}`}</small>
+                              <small>{`Kim guessed ${outcome.kimGuess || 'No answer'} / Jay said ${outcome.jayActual || 'No answer'} · ${outcome.kimCorrect ? 'Kim was correct' : `Kim +${formatScore(outcome.kimPenalty)}`}`}</small>
+                              {metadataEntries.length ? (
+                                <details className="round-metadata-details">
+                                  <summary className="round-metadata-summary">Question metadata</summary>
+                                  <div className="round-metadata-grid">
+                                    {metadataEntries.map((entry) => (
+                                      <div className="round-metadata-row" key={`${round.id || round.questionId || index}-${entry.label}`}>
+                                        <strong>{entry.label}</strong>
+                                        {entry.items?.length ? (
+                                          <div className="round-metadata-pills">
+                                            {entry.items.map((item) => (
+                                              <span className="filter-chip round-metadata-pill" key={`${entry.label}-${item}`}>{item}</span>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <span className="round-metadata-value">{entry.value}</span>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </details>
+                              ) : null}
+                            </article>
+                          );
+                        })
                       ) : (
-                        summaryRounds.map((round, index) => (
-                          <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
-                            <strong>Round {index + 1}</strong>
-                            <span>{round.question}</span>
-                            <small>
-                              Jay {formatScore(round.penaltyAdded?.jay || 0)} · Kim {formatScore(round.penaltyAdded?.kim || 0)} · Winner {round.winner || 'tie'}
-                            </small>
-                            <small>
-                              Jay answered {formatRoundAnswerValue(round.actualAnswers?.jay, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.jay, round.roundType)}
-                            </small>
-                            <small>
-                              Kim answered {formatRoundAnswerValue(round.actualAnswers?.kim, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.kim, round.roundType)}
-                            </small>
-                          </article>
-                        ))
+                        summaryRounds.map((round, index) => {
+                          const metadataEntries = buildRoundMetadataEntries(round);
+                          return (
+                            <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
+                              <strong>Round {index + 1}</strong>
+                              <span>{round.question}</span>
+                              <small>
+                                Jay {formatScore(round.penaltyAdded?.jay || 0)} · Kim {formatScore(round.penaltyAdded?.kim || 0)} · Winner {round.winner || 'tie'}
+                              </small>
+                              <small>
+                                Jay answered {formatRoundAnswerValue(round.actualAnswers?.jay, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.jay, round.roundType)}
+                              </small>
+                              <small>
+                                Kim answered {formatRoundAnswerValue(round.actualAnswers?.kim, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.kim, round.roundType)}
+                              </small>
+                              {metadataEntries.length ? (
+                                <details className="round-metadata-details">
+                                  <summary className="round-metadata-summary">Question metadata</summary>
+                                  <div className="round-metadata-grid">
+                                    {metadataEntries.map((entry) => (
+                                      <div className="round-metadata-row" key={`${round.id || round.questionId || index}-${entry.label}`}>
+                                        <strong>{entry.label}</strong>
+                                        {entry.items?.length ? (
+                                          <div className="round-metadata-pills">
+                                            {entry.items.map((item) => (
+                                              <span className="filter-chip round-metadata-pill" key={`${entry.label}-${item}`}>{item}</span>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <span className="round-metadata-value">{entry.value}</span>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </details>
+                              ) : null}
+                            </article>
+                          );
+                        })
                       )
                     ) : (
                       <p className="empty-copy">No rounds were archived for this game.</p>
@@ -13043,32 +13215,55 @@ function ProductionApp() {
     [amaRequests, matchesCurrentPlayerIdentity],
   );
   const currentRound = game?.currentRound || null;
+  const metadataSeedQuestions = useMemo(
+    () => dedupeQuestionsById([
+      ...bankQuestions,
+      ...STARTER_QUESTIONS.map((question) => createQuestionTemplate(question)),
+    ]),
+    [bankQuestions],
+  );
+  const questionMetadataLookup = useMemo(
+    () => buildQuestionMetadataLookup(metadataSeedQuestions),
+    [metadataSeedQuestions],
+  );
+  const enrichedGameLibrary = useMemo(
+    () => gameLibrary.map((entry) => enrichGameQuestionMetadata(entry, questionMetadataLookup)),
+    [gameLibrary, questionMetadataLookup],
+  );
+  const enrichedLocalArchivedGames = useMemo(
+    () => localArchivedGames.map((entry) => enrichGameQuestionMetadata(entry, questionMetadataLookup)),
+    [localArchivedGames, questionMetadataLookup],
+  );
+  const enrichedLocalEndedGameSummary = useMemo(
+    () => enrichGameQuestionMetadata(localEndedGameSummary, questionMetadataLookup),
+    [localEndedGameSummary, questionMetadataLookup],
+  );
   const activeGames = useMemo(
-    () => gameLibrary.filter((entry) => ['opening', 'active', 'paused'].includes(entry.status)),
-    [gameLibrary],
+    () => enrichedGameLibrary.filter((entry) => ['opening', 'active', 'paused'].includes(entry.status)),
+    [enrichedGameLibrary],
   );
   const persistedPreviousGames = useMemo(
-    () => gameLibrary.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
-    [gameLibrary],
+    () => enrichedGameLibrary.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
+    [enrichedGameLibrary],
   );
   const previousGames = useMemo(() => {
     const mergedById = new Map();
-    [...localArchivedGames, ...persistedPreviousGames].forEach((entry) => {
+    [...enrichedLocalArchivedGames, ...persistedPreviousGames].forEach((entry) => {
       if (entry?.id && !mergedById.has(entry.id)) mergedById.set(entry.id, entry);
     });
     return [...mergedById.values()].sort(
       (left, right) => getRecordTime(right?.endedAt || right?.createdAt || 0) - getRecordTime(left?.endedAt || left?.createdAt || 0),
     );
-  }, [localArchivedGames, persistedPreviousGames]);
+  }, [enrichedLocalArchivedGames, persistedPreviousGames]);
   const knownQuizSessionIds = useMemo(
     () =>
       new Set(
-        gameLibrary
+        enrichedGameLibrary
           .filter((entry) => (entry?.gameMode || 'standard') === 'quiz')
           .map((entry) => entry?.id)
           .filter(Boolean),
       ),
-    [gameLibrary],
+    [enrichedGameLibrary],
   );
   const visibleQuizAnswers = useMemo(
     () =>
@@ -13108,15 +13303,15 @@ function ProductionApp() {
       }),
     [dashboardSeat, diaryEntries, previousGames, questionFeedback, questionNotes, visibleQuizAnswers],
   );
-  const selectedGameSummary = gameLibrary.find((entry) => entry.id === selectedGameId) || null;
-  const selectedLocalGameSummary = localArchivedGames.find((entry) => entry.id === selectedGameId) || null;
-  const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || localEndedGameSummary;
+  const selectedGameSummary = enrichedGameLibrary.find((entry) => entry.id === selectedGameId) || null;
+  const selectedLocalGameSummary = enrichedLocalArchivedGames.find((entry) => entry.id === selectedGameId) || null;
+  const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || enrichedLocalEndedGameSummary;
   const lobbyRounds = useMemo(
     () =>
-      gameLibrary
+      enrichedGameLibrary
         .filter((entry) => !isTrueFalseGameMode(entry?.gameMode || 'standard'))
         .flatMap((entry) => entry.rounds || []),
-    [gameLibrary],
+    [enrichedGameLibrary],
   );
   const gameBankQuestions = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'game'),
@@ -13174,7 +13369,7 @@ function ProductionApp() {
   const thisOrThatBankCount = thisOrThatBankQuestions.length;
   const trueFalseBankCount = trueFalseBankQuestions.length;
   const trackedGameEntries = useMemo(() => {
-    if (!game?.id || isLocalTestGame(game)) return gameLibrary;
+    if (!game?.id || isLocalTestGame(game)) return enrichedGameLibrary;
     const currentGameSummary = {
       ...game,
       rounds: rounds.length ? rounds : game.rounds || [],
@@ -13183,12 +13378,12 @@ function ProductionApp() {
         (rounds || []).map((round) => round.questionId),
       ),
     };
-    const nextEntries = [...gameLibrary];
+    const nextEntries = [...enrichedGameLibrary];
     const existingIndex = nextEntries.findIndex((entry) => entry.id === game.id);
     if (existingIndex >= 0) nextEntries[existingIndex] = { ...nextEntries[existingIndex], ...currentGameSummary };
     else nextEntries.push(currentGameSummary);
     return nextEntries;
-  }, [gameLibrary, game, rounds]);
+  }, [enrichedGameLibrary, game, rounds]);
   const bankQuestionIds = useMemo(
     () => new Set(standardSelectableQuestions.map((question) => question.id).filter(Boolean)),
     [standardSelectableQuestions],
@@ -13356,7 +13551,7 @@ function ProductionApp() {
   );
   const holdemAnalytics = useMemo(() => {
     const mergedById = new Map();
-    [...localArchivedGames, ...gameLibrary].forEach((entry) => {
+    [...enrichedLocalArchivedGames, ...enrichedGameLibrary].forEach((entry) => {
       if (!entry?.id || !isHoldemGameMode(entry?.gameMode || 'standard')) return;
       mergedById.set(entry.id, entry);
     });
@@ -13371,7 +13566,7 @@ function ProductionApp() {
       activeSessions: sessions.filter((entry) => ACTIVE_GAME_STATUSES.includes(entry?.status)).length,
       completedSessions: sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status)).length,
     };
-  }, [gameLibrary, localArchivedGames]);
+  }, [enrichedGameLibrary, enrichedLocalArchivedGames]);
   const pendingActivityCount = useMemo(() => {
     const pendingGameTasks = activeGames.filter((game) => {
       const seat = game?.seats?.jay === user?.uid ? 'jay' : game?.seats?.kim === user?.uid ? 'kim' : null;
@@ -17536,6 +17731,7 @@ function ProductionApp() {
       question: nextQuestionItem.question,
       category: nextQuestionItem.category || '',
       roundType,
+      bankType: normalizeQuestionBankType(nextQuestionItem.bankType),
       defaultAnswerType: nextQuestionItem.defaultAnswerType || getDefaultAnswerType(roundType),
       multipleChoiceOptions,
       correctAnswer: nextQuestionItem.correctAnswer || '',
