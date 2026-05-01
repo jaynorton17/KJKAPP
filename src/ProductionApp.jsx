@@ -2943,6 +2943,7 @@ function LobbyScreen({
   currentPlayerSeat,
   currentPlayerLifetimeLabel,
   pendingActivityCount,
+  bankQuestions,
   questionCategories,
   createCode,
   joinCode,
@@ -19459,6 +19460,7 @@ function ProductionApp() {
         currentPlayerSeat={dashboardSeat}
         currentPlayerLifetimeLabel={currentPlayerLifetimeLabel}
         pendingActivityCount={pendingActivityCount}
+        bankQuestions={gameBankQuestions}
         questionCategories={lobbyCategoryOptions}
         gameName={lobbyGameName}
         gameQuestionCount={lobbyQuestionCount}
