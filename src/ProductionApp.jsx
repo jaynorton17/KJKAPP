@@ -10418,6 +10418,7 @@ function GameRoomView({
   onStartHoldemHand,
   onTakeHoldemAction,
   onSubmitAnswer,
+  onLockTrueFalseAnswer,
   onMarkReady,
   onAddQuestion,
   onSyncSheet,
@@ -18522,6 +18523,7 @@ function ProductionApp() {
       onStartHoldemHand={startHoldemHand}
       onTakeHoldemAction={takeHoldemAction}
 	      onSubmitAnswer={submitAnswer}
+      onLockTrueFalseAnswer={lockTrueFalseAnswerField}
 	      onMarkReady={markReady}
 	      onAddQuestion={addQuestion}
       onSyncSheet={syncSheet}
