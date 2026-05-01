@@ -42,6 +42,11 @@ const defaultBalances = (balances = {}) => ({
   kim: toWholePoints(balances?.kim),
 });
 
+const defaultDealReadyBySeat = (ready = {}) => ({
+  jay: Boolean(ready?.jay),
+  kim: Boolean(ready?.kim),
+});
+
 const clonePlayers = (players = {}) => ({
   jay: { ...defaultHoldemPlayerState('jay', 0), ...(players?.jay || {}), holeCards: [...(players?.jay?.holeCards || [])] },
   kim: { ...defaultHoldemPlayerState('kim', 0), ...(players?.kim || {}), holeCards: [...(players?.kim?.holeCards || [])] },
@@ -84,6 +89,7 @@ const buildEmptyHoldemState = ({
     potTotal: 0,
     showdown: null,
     settlement: null,
+    dealReadyBySeat: defaultDealReadyBySeat(),
     actionLog: [],
     updatedAt: '',
     completedAt: '',
@@ -487,6 +493,7 @@ const createLiveHandState = ({
     potTotal: toWholePoints(players.jay.totalCommitted || 0) + toWholePoints(players.kim.totalCommitted || 0),
     showdown: null,
     settlement: null,
+    dealReadyBySeat: defaultDealReadyBySeat(),
     actionLog: [
       buildActionLogEntry({ handNumber: Number(previousHandNumber || 0) + 1, actionLog: [] }, smallBlindSeat, 'small_blind', players[smallBlindSeat].streetCommitted),
       buildActionLogEntry({ handNumber: Number(previousHandNumber || 0) + 1, actionLog: [{}] }, bigBlindSeat, 'big_blind', players[bigBlindSeat].streetCommitted),
@@ -618,6 +625,7 @@ export const resolveHoldemShowdown = (sourceState = {}) => {
     raiseDisabledSeats: [],
     showdown,
     settlement: showdown,
+    dealReadyBySeat: defaultDealReadyBySeat(),
     statusMessage:
       showdown.winningSeats.length > 1
         ? 'Showdown complete. The pot was split.'
@@ -676,6 +684,7 @@ const awardFoldWinner = (sourceState = {}, winnerSeat = 'jay') => {
       netChanges,
       winningSeats: [winnerSeat],
     },
+    dealReadyBySeat: defaultDealReadyBySeat(),
     statusMessage: `${winnerSeat === 'jay' ? 'Jay' : 'Kim'} wins the pot after a fold.`,
     completedAt: new Date().toISOString(),
   };

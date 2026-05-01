@@ -185,9 +185,220 @@ button:disabled {
 }
 
 .game-lobby-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   align-items: stretch;
   min-height: 0;
+}
+
+.lobby-carousel-shell {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.lobby-carousel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-inline: 4px;
+}
+
+.lobby-carousel-header h2 {
+  margin: 0;
+}
+
+.lobby-carousel-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lobby-carousel-arrow {
+  min-width: 88px;
+  min-height: 52px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 1.6rem;
+  line-height: 1;
+  gap: 8px;
+  border-color: rgba(255, 223, 140, 0.48);
+  background:
+    linear-gradient(135deg, rgba(255, 204, 92, 0.24), rgba(46, 92, 255, 0.2)),
+    rgba(10, 18, 34, 0.9);
+  box-shadow:
+    0 12px 24px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.lobby-carousel-arrow small {
+  font-size: 0.74rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lobby-carousel-stage {
+  position: relative;
+  display: grid;
+  place-items: stretch center;
+  min-height: 520px;
+  overflow: hidden;
+  padding: 4px clamp(46px, 8vw, 86px) 8px;
+  touch-action: pan-y;
+}
+
+.lobby-carousel-slide {
+  grid-area: 1 / 1;
+  width: min(780px, 100%);
+  transition: transform 220ms ease, opacity 220ms ease, filter 220ms ease;
+}
+
+.lobby-carousel-slide--center {
+  position: relative;
+  z-index: 2;
+  opacity: 1;
+  transform: translateX(0) scale(1);
+  pointer-events: auto;
+}
+
+.lobby-carousel-slide--left,
+.lobby-carousel-slide--right {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  z-index: 1;
+  width: min(620px, 74%);
+  max-height: calc(100% - 12px);
+  overflow: hidden;
+  opacity: 0.48;
+  filter: saturate(0.72);
+  pointer-events: none;
+}
+
+.lobby-carousel-slide--left {
+  transform: translateX(-132%) scale(0.9);
+}
+
+.lobby-carousel-slide--right {
+  transform: translateX(32%) scale(0.9);
+}
+
+.lobby-carousel-shell .hold-em-game-card {
+  grid-column: auto;
+}
+
+.lobby-carousel-stage-arrow {
+  position: absolute;
+  top: 50%;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  min-width: 60px;
+  min-height: 60px;
+  padding: 0;
+  border-radius: 999px;
+  border-color: rgba(255, 223, 140, 0.58);
+  background:
+    linear-gradient(135deg, rgba(255, 218, 122, 0.34), rgba(58, 110, 255, 0.28)),
+    rgba(9, 16, 30, 0.94);
+  box-shadow:
+    0 18px 28px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  font-size: 2.4rem;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.lobby-carousel-stage-arrow--left {
+  left: 8px;
+}
+
+.lobby-carousel-stage-arrow--right {
+  right: 8px;
+}
+
+.lobby-image-tile {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(5, 10, 19, 0.2), rgba(5, 10, 19, 0.35)),
+    var(--lobby-tile-image) center center / cover no-repeat,
+    linear-gradient(180deg, rgba(11, 20, 38, 0.96), rgba(5, 11, 21, 0.98));
+}
+
+.lobby-image-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(180deg, rgba(4, 9, 17, 0.2) 0%, rgba(4, 9, 17, 0.72) 38%, rgba(4, 9, 17, 0.94) 100%),
+    radial-gradient(circle at top right, rgba(255, 224, 138, 0.18), transparent 28%),
+    radial-gradient(circle at left center, rgba(63, 121, 255, 0.18), transparent 32%);
+}
+
+.lobby-image-tile > * {
+  position: relative;
+  z-index: 1;
+}
+
+.lobby-image-tile .field,
+.lobby-image-tile .panel-copy,
+.lobby-image-tile .field-note,
+.lobby-image-tile .create-mode-row,
+.lobby-image-tile .lobby-actions,
+.lobby-image-tile .create-filters-grid,
+.lobby-image-tile .hold-em-card-hero,
+.lobby-image-tile .quiz-card-hero,
+.lobby-image-tile .button-row,
+.lobby-image-tile .lobby-join-inline {
+  backdrop-filter: blur(6px);
+}
+
+.lobby-image-tile .field input,
+.lobby-image-tile .field select,
+.lobby-image-tile .field textarea {
+  background: rgba(8, 15, 28, 0.82);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.lobby-image-tile .panel-copy,
+.lobby-image-tile .field-note {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(6, 13, 24, 0.62);
+}
+
+.lobby-carousel-slide .lobby-panel {
+  height: 100%;
+  min-height: 100%;
+}
+
+.lobby-carousel-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.lobby-carousel-dot {
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 34%, transparent);
+  cursor: pointer;
+}
+
+.lobby-carousel-dot.is-active {
+  width: 26px;
+  background: var(--accent);
 }
 
 .lobby-chat-card {
@@ -201,6 +412,37 @@ button:disabled {
 @media (max-width: 900px) {
   .game-lobby-grid {
     grid-template-columns: 1fr;
+  }
+  .lobby-carousel-header {
+    align-items: start;
+    flex-direction: column;
+  }
+  .lobby-carousel-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .lobby-carousel-arrow {
+    min-width: 108px;
+  }
+  .lobby-carousel-controls .lobby-carousel-arrow {
+    min-height: 52px;
+  }
+  .lobby-carousel-stage {
+    min-height: 560px;
+    padding-inline: 34px;
+  }
+  .lobby-carousel-stage-arrow {
+    width: 54px;
+    min-width: 54px;
+    min-height: 54px;
+    height: 54px;
+    font-size: 2.1rem;
+  }
+  .lobby-carousel-slide--left {
+    transform: translateX(-126%) scale(0.88);
+  }
+  .lobby-carousel-slide--right {
+    transform: translateX(26%) scale(0.88);
   }
   .hold-em-game-card {
     grid-column: 1 / -1;
@@ -8042,6 +8284,19 @@ button:disabled {
   min-height: 30px;
   padding-inline: 9px;
   font-size: 0.68rem;
+}
+
+.lobby-carousel-controls .lobby-carousel-arrow {
+  min-height: 52px;
+  padding-inline: 14px;
+}
+
+.lobby-carousel-stage .lobby-carousel-stage-arrow {
+  width: 60px;
+  min-width: 60px;
+  min-height: 60px;
+  height: 60px;
+  padding: 0;
 }
 
 .primary-button:hover,

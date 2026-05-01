@@ -36,6 +36,9 @@ import {
 } from 'firebase/storage';
 import AnalyticsPanel from './components/AnalyticsPanel.jsx';
 import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
+import normalGameTileImage from '../Normal Game.png';
+import pokerTileImage from '../Poker.png';
+import quickFireQuizTileImage from '../Quick FIre QUiz.png';
 import {
   calculateAnalytics,
   CATEGORY_COLOR_MAP,
@@ -88,6 +91,9 @@ const buildHoldemBankrollsFromAccounts = (accounts = {}) => ({
   jay: Math.max(0, Math.floor(Number(accounts?.jay?.lifetimePenaltyPoints || 0) || 0)),
   kim: Math.max(0, Math.floor(Number(accounts?.kim?.lifetimePenaltyPoints || 0) || 0)),
 });
+const hasHoldemBankrollSnapshot = (balances = null) =>
+  Number.isFinite(Number(balances?.jay))
+  && Number.isFinite(Number(balances?.kim));
 const defaultAuthForm = { displayName: '', email: '', password: '', resetEmail: '' };
 const defaultDraft = { ownAnswer: '', guessedOther: '' };
 const defaultPenaltyDraft = { jay: '0', kim: '0' };
@@ -2759,6 +2765,7 @@ function LobbyScreen({
   const [quizCreateCodeDraft, setQuizCreateCodeDraft] = useState('');
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
+  const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
@@ -2772,6 +2779,8 @@ function LobbyScreen({
   const [editingNoteDraft, setEditingNoteDraft] = useState('');
   const [mobileLobbyChatOpen, setMobileLobbyChatOpen] = useState(false);
   const dashboardMenuRef = useRef(null);
+  const lobbyCarouselTouchStartXRef = useRef(null);
+  const lobbyCarouselTouchInteractiveRef = useRef(false);
   const isMobileDashboardNav = useMediaQuery('(max-width: 900px)');
   const pendingInviteCount = useMemo(() => {
     if (!Array.isArray(gameInvites)) return 0;
@@ -3245,6 +3254,55 @@ function LobbyScreen({
     setMobileLobbyChatOpen(false);
   }, [activeTab, isMobileDashboardNav]);
 
+  const lobbyCarouselCards = [
+    { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
+    { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
+    { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
+  ];
+
+  const lobbyCarouselCount = lobbyCarouselCards.length;
+  const activeLobbyCarouselCard = lobbyCarouselCards[lobbyCarouselIndex] || lobbyCarouselCards[0];
+
+  const moveLobbyCarousel = (direction) => {
+    setLobbyCarouselIndex((current) => (current + direction + lobbyCarouselCount) % lobbyCarouselCount);
+  };
+
+  const getLobbyCarouselPosition = (index) => {
+    const offset = (index - lobbyCarouselIndex + lobbyCarouselCount) % lobbyCarouselCount;
+    if (offset === 0) return 'center';
+    if (offset === 1) return 'right';
+    return 'left';
+  };
+
+  const handleLobbyCarouselTouchStart = (event) => {
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    const target = event.target instanceof Element ? event.target : null;
+    lobbyCarouselTouchInteractiveRef.current = Boolean(
+      target?.closest('input, textarea, select, button, label, .field, .filter-chip, a'),
+    );
+    if (lobbyCarouselTouchInteractiveRef.current) {
+      lobbyCarouselTouchStartXRef.current = null;
+      return;
+    }
+    lobbyCarouselTouchStartXRef.current = touch.clientX;
+  };
+
+  const handleLobbyCarouselTouchEnd = (event) => {
+    if (lobbyCarouselTouchInteractiveRef.current) {
+      lobbyCarouselTouchInteractiveRef.current = false;
+      lobbyCarouselTouchStartXRef.current = null;
+      return;
+    }
+    const touch = event.changedTouches?.[0];
+    const startX = lobbyCarouselTouchStartXRef.current;
+    lobbyCarouselTouchStartXRef.current = null;
+    if (!touch || typeof startX !== 'number') return;
+    const deltaX = touch.clientX - startX;
+    if (Math.abs(deltaX) < 44) return;
+    moveLobbyCarousel(deltaX < 0 ? 1 : -1);
+  };
+
 	  return (
 	    <main className={`app production-app ${isMobileDashboardNav ? 'mobile-app' : ''}`}>
 	      <header className="top-bar top-bar--shell">
@@ -3368,7 +3426,65 @@ function LobbyScreen({
               </section>
             ) : null}
             <div className="game-lobby-grid">
-              <section className="panel lobby-panel lobby-panel--lobby create-game-card">
+              <section className="lobby-carousel-shell" aria-label="Game mode carousel">
+                <div className="lobby-carousel-header">
+                  <div>
+                    <p className="eyebrow">Choose a mode</p>
+                    <h2>{activeLobbyCarouselCard.label}</h2>
+                  </div>
+                  <div className="lobby-carousel-controls" aria-label="Carousel controls">
+                    <Button
+                      type="button"
+                      className="ghost-button compact lobby-carousel-arrow"
+                      onClick={() => moveLobbyCarousel(-1)}
+                      aria-label="Show previous lobby box"
+                    >
+                      <span aria-hidden="true">‹</span>
+                      <small>Prev</small>
+                    </Button>
+                    <Button
+                      type="button"
+                      className="ghost-button compact lobby-carousel-arrow"
+                      onClick={() => moveLobbyCarousel(1)}
+                      aria-label="Show next lobby box"
+                    >
+                      <small>Next</small>
+                      <span aria-hidden="true">›</span>
+                    </Button>
+                  </div>
+                </div>
+
+                <div
+                  className="lobby-carousel-stage"
+                  aria-live="polite"
+                  onTouchStart={handleLobbyCarouselTouchStart}
+                  onTouchEnd={handleLobbyCarouselTouchEnd}
+                >
+                  <Button
+                    type="button"
+                    className="ghost-button compact lobby-carousel-stage-arrow lobby-carousel-stage-arrow--left"
+                    onClick={() => moveLobbyCarousel(-1)}
+                    aria-label="Show previous game mode"
+                  >
+                    <span aria-hidden="true">‹</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    className="ghost-button compact lobby-carousel-stage-arrow lobby-carousel-stage-arrow--right"
+                    onClick={() => moveLobbyCarousel(1)}
+                    aria-label="Show next game mode"
+                  >
+                    <span aria-hidden="true">›</span>
+                  </Button>
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(0)}`}
+                    inert={getLobbyCarouselPosition(0) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(0) !== 'center'}
+                  >
+                    <section
+                      className="panel lobby-panel lobby-panel--lobby create-game-card lobby-image-tile"
+                      style={{ '--lobby-tile-image': `url("${normalGameTileImage}")` }}
+                    >
                 <div className="panel-heading">
                   <div>
                     <p className="eyebrow">Game Lobby</p>
@@ -3470,9 +3586,18 @@ function LobbyScreen({
                     </Button>
                   </div>
                 </div>
-              </section>
+                    </section>
+                  </div>
 
-	              <section className="panel lobby-panel lobby-panel--lobby join-game-card">
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(1)}`}
+                    inert={getLobbyCarouselPosition(1) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(1) !== 'center'}
+                  >
+	                <section
+                    className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile"
+                    style={{ '--lobby-tile-image': `url("${quickFireQuizTileImage}")` }}
+                  >
 	                <div className="panel-heading">
 	                  <div>
 	                    <p className="eyebrow">Quick Fire</p>
@@ -3556,9 +3681,18 @@ function LobbyScreen({
 	                    Create + Invite
 	                  </Button>
 	                </div>
-	              </section>
+	                </section>
+                  </div>
 
-              <section className="panel lobby-panel lobby-panel--lobby hold-em-game-card">
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(2)}`}
+                    inert={getLobbyCarouselPosition(2) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(2) !== 'center'}
+                  >
+                    <section
+                      className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile"
+                      style={{ '--lobby-tile-image': `url("${pokerTileImage}")` }}
+                    >
                 <div className="panel-heading">
                   <div>
                     <p className="eyebrow">Cards</p>
@@ -3615,8 +3749,24 @@ function LobbyScreen({
                     Create + Invite
                   </Button>
                 </div>
+                                  </section>
+                  </div>
+                </div>
+
+                <div className="lobby-carousel-dots" role="tablist" aria-label="Game modes">
+                  {lobbyCarouselCards.map((card, index) => (
+                    <button
+                      key={card.id}
+                      type="button"
+                      className={`lobby-carousel-dot ${index === lobbyCarouselIndex ? 'is-active' : ''}`}
+                      onClick={() => setLobbyCarouselIndex(index)}
+                      aria-label={`Show ${card.label}`}
+                      aria-selected={index === lobbyCarouselIndex}
+                    />
+                  ))}
+                </div>
               </section>
-            
+
 
                 {!isMobileDashboardNav ? (
                   <section className="panel lobby-panel lobby-panel--lobby lobby-chat-card">
@@ -6477,6 +6627,13 @@ function HoldemActionControls({
     () => getHoldemActionStateFromRules(holdemState || {}, viewerSeat),
     [holdemState, viewerSeat],
   );
+  const dealReadyBySeat = holdemState?.dealReadyBySeat || { jay: false, kim: false };
+  const viewerDealReady = Boolean(dealReadyBySeat?.[viewerSeat]);
+  const otherSeatWaitingOnDeal = dealReadyBySeat.jay && !dealReadyBySeat.kim
+    ? 'kim'
+    : dealReadyBySeat.kim && !dealReadyBySeat.jay
+      ? 'jay'
+      : '';
   const draftKey = [
     holdemState?.handNumber || 0,
     holdemState?.phase || '',
@@ -6510,10 +6667,18 @@ function HoldemActionControls({
   if (holdemState.sessionStatus === 'ready_to_deal') {
     return (
       <div className="holdem-action-stack">
-        <p className="panel-copy holdem-action-copy">{holdemState.statusMessage || 'Players are seated. Deal the next hand when ready.'}</p>
+        <p className="panel-copy holdem-action-copy">
+          {viewerDealReady && otherSeatWaitingOnDeal
+            ? `You are ready. Waiting for ${PLAYER_LABEL[otherSeatWaitingOnDeal] || otherSeatWaitingOnDeal} to click Deal First Hand.`
+            : holdemState.statusMessage || 'Players are seated. Both players must click Deal First Hand to begin.'}
+        </p>
         <div className="button-row holdem-action-row">
-          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy}>
-            {Number(holdemState.handNumber || 0) > 0 ? 'Deal Next Hand' : 'Deal First Hand'}
+          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || viewerDealReady}>
+            {viewerDealReady
+              ? 'Ready'
+              : Number(holdemState.handNumber || 0) > 0
+                ? 'Deal Next Hand'
+                : 'Deal First Hand'}
           </Button>
         </div>
       </div>
@@ -6529,10 +6694,14 @@ function HoldemActionControls({
         : 'Hand complete';
     return (
       <div className="holdem-action-stack">
-        <p className="panel-copy holdem-action-copy">{resultLabel}. {holdemState.statusMessage || 'Review the showdown, then deal the next hand.'}</p>
+        <p className="panel-copy holdem-action-copy">
+          {resultLabel}. {viewerDealReady && otherSeatWaitingOnDeal
+            ? `You are ready for the next hand. Waiting for ${PLAYER_LABEL[otherSeatWaitingOnDeal] || otherSeatWaitingOnDeal}.`
+            : holdemState.statusMessage || 'Review the showdown, then both players can deal the next hand.'}
+        </p>
         <div className="button-row holdem-action-row">
-          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy}>
-            Deal Next Hand
+          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || viewerDealReady}>
+            {viewerDealReady ? 'Ready' : 'Deal Next Hand'}
           </Button>
         </div>
       </div>
@@ -14712,6 +14881,16 @@ function ProductionApp() {
       bothPlayersJoined,
     }), [playerAccounts]);
 
+  const buildHoldemDealReadyStatusMessage = useCallback((readyBySeat = {}, currentReadySeat = '') => {
+    const readySeats = seats.filter((seatName) => Boolean(readyBySeat?.[seatName]));
+    if (readySeats.length >= 2) return 'Both players are ready. Dealing the next hand…';
+    if (readySeats.length === 1) {
+      const waitingSeat = seats.find((seatName) => seatName !== readySeats[0]) || currentReadySeat || '';
+      return `${PLAYER_LABEL[readySeats[0]] || readySeats[0]} is ready. Waiting for ${PLAYER_LABEL[waitingSeat] || waitingSeat || 'the other player'} to click deal.`;
+    }
+    return 'Players are seated. Both players must click deal to start the hand.';
+  }, []);
+
   const startHoldemHand = async () =>
     withBusy(async () => {
       if (!game?.id) throw new Error('Open a Hold’em room first.');
@@ -14737,37 +14916,76 @@ function ProductionApp() {
             updatedAt: new Date().toISOString(),
           };
         });
+        setNotice('Texas Hold’em hand dealt.');
         return true;
       }
 
       if (!firestore) throw new Error('Firebase is not configured.');
+      if (!currentSeat) throw new Error('Could not determine your Hold’em seat.');
       const gameRef = doc(firestore, 'games', game.id);
-      const jayRef = doc(firestore, 'users', fixedPlayerUids.jay);
-      const kimRef = doc(firestore, 'users', fixedPlayerUids.kim);
-      await runTransaction(firestore, async (transaction) => {
-        const [gameSnap, jaySnap, kimSnap] = await Promise.all([
-          transaction.get(gameRef),
-          transaction.get(jayRef),
-          transaction.get(kimRef),
-        ]);
+      const dealResult = await runTransaction(firestore, async (transaction) => {
+        const gameSnap = await transaction.get(gameRef);
         if (!gameSnap.exists()) throw new Error('The Hold’em game no longer exists.');
         const gameData = { id: gameSnap.id, ...gameSnap.data() };
         if (!isHoldemGameMode(gameData?.gameMode || 'standard')) throw new Error('This room is not a Texas Hold’em game.');
         const joined = Boolean(gameData?.seats?.jay && gameData?.seats?.kim);
         if (!joined) throw new Error('Both players need to join before the first Hold’em hand can start.');
-        const baseBalances = gameData?.holdemState?.lastSettledBalances
-          || {
+        const actingSeat = seatForUid(gameData, user?.uid) || currentSeat;
+        if (!actingSeat) throw new Error('Could not determine your Hold’em seat.');
+        if ((gameData?.holdemState?.sessionStatus || '') === 'hand_live') return 'already-live';
+        let baseBalances = gameData?.holdemState?.lastSettledBalances || null;
+        if (!hasHoldemBankrollSnapshot(baseBalances)) {
+          const jayRef = doc(firestore, 'users', fixedPlayerUids.jay);
+          const kimRef = doc(firestore, 'users', fixedPlayerUids.kim);
+          const [jaySnap, kimSnap] = await Promise.all([
+            transaction.get(jayRef),
+            transaction.get(kimRef),
+          ]);
+          baseBalances = {
             jay: Number(jaySnap.exists() ? jaySnap.data()?.lifetimePenaltyPoints || 0 : 0),
             kim: Number(kimSnap.exists() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : 0),
           };
-        const holdemState = buildNextHoldemHandState(gameData?.holdemState || initializeHoldemSessionState(currentSeat || 'jay', true), baseBalances, true);
+        }
+        const sourceState = gameData?.holdemState || initializeHoldemSessionState(actingSeat, true);
+        const currentReadyBySeat = {
+          jay: Boolean(sourceState?.dealReadyBySeat?.jay),
+          kim: Boolean(sourceState?.dealReadyBySeat?.kim),
+        };
+        if (currentReadyBySeat[actingSeat] && !(currentReadyBySeat.jay && currentReadyBySeat.kim)) return 'already-ready';
+        const nextReadyBySeat = {
+          ...currentReadyBySeat,
+          [actingSeat]: true,
+        };
+        if (nextReadyBySeat.jay && nextReadyBySeat.kim) {
+          const holdemState = buildNextHoldemHandState(sourceState, baseBalances, true);
+          transaction.set(gameRef, {
+            holdemState,
+            ...buildHoldemSummaryFields(holdemState, gameData?.holdemStats || defaultHoldemStats()),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+          return 'dealt';
+        }
+        const nextHoldemState = {
+          ...sourceState,
+          dealReadyBySeat: nextReadyBySeat,
+          statusMessage: buildHoldemDealReadyStatusMessage(nextReadyBySeat, actingSeat),
+          updatedAt: new Date().toISOString(),
+        };
         transaction.set(gameRef, {
-          holdemState,
-          ...buildHoldemSummaryFields(holdemState, gameData?.holdemStats || defaultHoldemStats()),
+          holdemState: nextHoldemState,
           updatedAt: serverTimestamp(),
         }, { merge: true });
+        return 'ready';
       });
-      setNotice('Texas Hold’em hand dealt.');
+      setNotice(
+        dealResult === 'dealt'
+          ? 'Texas Hold’em hand dealt.'
+          : dealResult === 'already-live'
+            ? 'The hand is already live.'
+            : dealResult === 'already-ready'
+              ? 'You are already ready. Waiting for the other player.'
+              : 'Hold’em deal ready updated.',
+      );
       return true;
     }, 'Could not start Texas Hold’em.');
 
