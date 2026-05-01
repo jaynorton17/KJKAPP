@@ -19,7 +19,7 @@ export type RoundType =
   | 'ranked'
   | 'rating'
   | 'manual';
-export type QuestionSource = 'starter' | 'manual' | 'imported' | 'googleSheet' | 'googleSheetQuiz' | 'backup';
+export type QuestionSource = 'starter' | 'manual' | 'imported' | 'googleSheet' | 'googleSheetQuiz' | 'googleSheetTrueFalse' | 'backup';
 export type ScoringMode = 'direct_penalty_entry' | 'assisted_numeric' | 'fixed_penalty_outcome' | 'manual_outcome';
 export type ScoringOutcomeType =
   | 'direct_manual'

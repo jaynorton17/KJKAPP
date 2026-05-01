@@ -39,6 +39,7 @@ import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
 import normalGameTileImage from '../Normal Game.png';
 import pokerTileImage from '../Poker.png';
 import quickFireQuizTileImage from '../Quick FIre QUiz.png';
+import trueOrFalseTileImage from '../True or False.png';
 import {
   calculateAnalytics,
   CATEGORY_COLOR_MAP,
@@ -65,6 +66,7 @@ import {
   recalculateRounds,
   ROUND_TYPE_LABEL,
   markQuestionPlayed,
+  normalizeQuestionBankType,
   setQuestionUsed,
   toScore,
 } from './utils/game.js';
@@ -95,10 +97,18 @@ import {
 } from './utils/questionTypes.js';
 import { loadThemeIndex, saveThemeIndex } from './utils/storage.js';
 import { firebaseAuth, firebaseIsConfigured, firestore, storage } from './lib/firebase.js';
-import { parseGoogleSheetImport, parseGoogleSheetQuizImport, parseGoogleSheetReference } from './utils/importers.js';
+import {
+  parseGoogleSheetImport,
+  parseGoogleSheetQuizImport,
+  parseGoogleSheetReference,
+  parseGoogleSheetTrueFalseImport,
+} from './utils/importers.js';
 
 const seats = ['jay', 'kim'];
 const HOLDEM_GAME_MODE = 'holdem';
+const TRUE_FALSE_GAME_MODE = 'trueFalseGame';
+const TRUE_FALSE_WRONG_PENALTY = 10;
+const TRUE_FALSE_TIMER_SECONDS = 8;
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const buildHoldemBankrollsFromAccounts = (accounts = {}) => ({
   jay: Math.max(0, Math.floor(Number(accounts?.jay?.lifetimePenaltyPoints || 0) || 0)),
@@ -150,9 +160,22 @@ const preferredSeatForUser = (user, profile) => inferSeatFromUser(user, profile)
 const buildGameInviteId = (targetGameId = '', invitedForUserId = '') =>
   targetGameId && invitedForUserId ? `game-invite-${targetGameId}-${invitedForUserId}` : '';
 const resolveGameMode = (value = 'standard') =>
-  value === 'quiz' ? 'quiz' : value === HOLDEM_GAME_MODE ? HOLDEM_GAME_MODE : 'standard';
+  value === 'quiz'
+    ? 'quiz'
+    : value === HOLDEM_GAME_MODE
+      ? HOLDEM_GAME_MODE
+      : value === TRUE_FALSE_GAME_MODE
+        ? TRUE_FALSE_GAME_MODE
+        : 'standard';
 const isQuizGameMode = (value = 'standard') => resolveGameMode(value) === 'quiz';
 const isHoldemGameMode = (value = 'standard') => resolveGameMode(value) === HOLDEM_GAME_MODE;
+const isTrueFalseGameMode = (value = 'standard') => resolveGameMode(value) === TRUE_FALSE_GAME_MODE;
+const getQuestionBankTypeForGameMode = (value = 'standard') => {
+  const gameMode = resolveGameMode(value);
+  if (gameMode === 'quiz') return 'quiz';
+  if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalseGame';
+  return 'game';
+};
 const QUIZ_TIMER_SECONDS = 10;
 const QUIZ_WHEEL_SLOT_COUNT = 20;
 const QUIZ_WHEEL_MAX_AMOUNT = 2500;
@@ -1824,7 +1847,42 @@ const isGameSessionJoinable = (entry = {}) =>
   ACTIVE_GAME_STATUSES.includes(entry?.status || 'active')
   && !COMPLETED_GAME_STATUSES.includes(entry?.status || '')
   && !entry?.endedAt;
+const normalizeTrueFalseChoice = (value = '') => {
+  const normalized = normalizeText(value).toLowerCase();
+  if (normalized === 'true') return 'True';
+  if (normalized === 'false') return 'False';
+  return '';
+};
 const hasSubmittedRoundAnswer = (round = {}, seat = '') => Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''));
+const hasCompletedTrueFalseRoundAnswer = (round = {}, seat = '') =>
+  Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.ownAnswer || ''))
+  && Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.guessedOther || ''));
+const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat = '') =>
+  isTrueFalseGameMode(gameMode) ? hasCompletedTrueFalseRoundAnswer(round, seat) : hasSubmittedRoundAnswer(round, seat);
+const buildTrueFalseRoundOutcome = (round = {}) => {
+  const jayGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '');
+  const kimGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '');
+  const jayActual = normalizeTrueFalseChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
+  const kimActual = normalizeTrueFalseChoice(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '');
+  const jayCorrect = Boolean(jayGuess) && Boolean(kimActual) && jayGuess === kimActual;
+  const kimCorrect = Boolean(kimGuess) && Boolean(jayActual) && kimGuess === jayActual;
+  const jayPenalty = Number.isFinite(Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay))
+    ? Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay)
+    : (jayCorrect ? 0 : TRUE_FALSE_WRONG_PENALTY);
+  const kimPenalty = Number.isFinite(Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim))
+    ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
+    : (kimCorrect ? 0 : TRUE_FALSE_WRONG_PENALTY);
+  return {
+    jayGuess,
+    kimGuess,
+    jayActual,
+    kimActual,
+    jayCorrect,
+    kimCorrect,
+    jayPenalty,
+    kimPenalty,
+  };
+};
 const hasReadySeat = (round = {}, seat = '') => Boolean(round?.ready?.[seat]);
 const answerDraftStorageKey = (gameId = '', roundId = '', seat = '') =>
   gameId && roundId && seat ? `kjk-answer-draft:${gameId}:${roundId}:${seat}` : '';
@@ -2161,7 +2219,7 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     currentRoundQuestion: data.currentRound?.question || '',
     currentRoundCategory: data.currentRound?.category || '',
     currentRoundType: data.currentRound?.roundType || '',
-    currentRoundAnswerSeats: Object.keys(data.currentRound?.answers || {}),
+    currentRoundAnswerSeats: seats.filter((seat) => hasRoundAnswerSubmittedForMode(gameMode, data.currentRound || {}, seat)),
     createdAt: data.createdAt || null,
     endedAt: data.endedAt || null,
     endedBy: data.endedBy || '',
@@ -2672,8 +2730,10 @@ function LobbyScreen({
   onDismissGameInvite,
   onSyncQuestionBank,
   onSyncQuizBank,
+  onSyncTrueFalseBank,
   onImportQuestions,
   onImportQuizQuestions,
+  onImportTrueFalseQuestions,
   onResumeGame,
   onViewSummary,
   // Lobby chat props (injected from ProductionApp)
@@ -2701,6 +2761,9 @@ function LobbyScreen({
   quizQuestionCount,
   usedQuizQuestionCount,
   remainingQuizQuestionCount,
+  trueFalseQuestionCount,
+  usedTrueFalseQuestionCount,
+  remainingTrueFalseQuestionCount,
   unusedQuestionCount,
   syncNotice,
   gameInvites,
@@ -2743,11 +2806,14 @@ function LobbyScreen({
   const [createMode, setCreateMode] = useState('random');
   const [quizCreateCodeDraft, setQuizCreateCodeDraft] = useState('');
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
+  const [trueFalseCreateCodeDraft, setTrueFalseCreateCodeDraft] = useState('');
+  const [trueFalseQuestionCountDraft, setTrueFalseQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
   const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
   const [flippedLobbyTiles, setFlippedLobbyTiles] = useState(() => ({
     standard: false,
     quiz: false,
+    trueFalse: false,
     holdem: false,
   }));
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
@@ -2822,6 +2888,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: quizQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateTrueFalseGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: trueFalseCreateCodeDraft,
+      gameName: 'True or False',
+      mode: 'random',
+      gameMode: TRUE_FALSE_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: trueFalseQuestionCountDraft,
       ...(sendInvite ? { sendInvite: true } : {}),
     });
 
@@ -3263,6 +3341,120 @@ function LobbyScreen({
     };
   }, [previousGames]);
 
+  const trueFalseAnalytics = useMemo(() => {
+    const mergedById = new Map();
+    [...(activeGames || []), ...(previousGames || [])].forEach((entry) => {
+      if (!entry?.id || !isTrueFalseGameMode(entry?.gameMode || 'standard')) return;
+      if (!mergedById.has(entry.id)) mergedById.set(entry.id, entry);
+    });
+    const sessions = [...mergedById.values()];
+    const completedSessions = sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || ''));
+    const activeSessions = sessions.filter((entry) => ACTIVE_GAME_STATUSES.includes(entry?.status || ''));
+    const roundsData = sessions.flatMap((entry) =>
+      normalizeStoredRounds(entry?.rounds || []).map((round) => ({
+        ...round,
+        gameId: entry.id,
+        gameName: entry.name || entry.gameName || entry.joinCode || 'True or False',
+      })),
+    );
+    const categoryStats = new Map();
+    const totals = {
+      sessionsTracked: sessions.length,
+      totalGamesPlayed: completedSessions.length,
+      activeGames: activeSessions.length,
+      totalQuestionsAnswered: roundsData.length,
+      jayCorrectGuesses: 0,
+      kimCorrectGuesses: 0,
+      jayWrongGuesses: 0,
+      kimWrongGuesses: 0,
+      jayPenaltyPoints: 0,
+      kimPenaltyPoints: 0,
+    };
+
+    roundsData.forEach((round) => {
+      const outcome = buildTrueFalseRoundOutcome(round);
+      const categoryKey = normalizeText(round?.category) || 'uncategorised';
+      const categoryEntry = categoryStats.get(categoryKey) || {
+        category: round?.category || 'Uncategorised',
+        rounds: 0,
+        jayCorrect: 0,
+        kimCorrect: 0,
+        jayWrong: 0,
+        kimWrong: 0,
+        jayPenalty: 0,
+        kimPenalty: 0,
+      };
+      categoryEntry.rounds += 1;
+
+      if (outcome.jayCorrect) {
+        totals.jayCorrectGuesses += 1;
+        categoryEntry.jayCorrect += 1;
+      } else {
+        totals.jayWrongGuesses += 1;
+        categoryEntry.jayWrong += 1;
+      }
+
+      if (outcome.kimCorrect) {
+        totals.kimCorrectGuesses += 1;
+        categoryEntry.kimCorrect += 1;
+      } else {
+        totals.kimWrongGuesses += 1;
+        categoryEntry.kimWrong += 1;
+      }
+
+      totals.jayPenaltyPoints += Number(outcome.jayPenalty || 0);
+      totals.kimPenaltyPoints += Number(outcome.kimPenalty || 0);
+      categoryEntry.jayPenalty += Number(outcome.jayPenalty || 0);
+      categoryEntry.kimPenalty += Number(outcome.kimPenalty || 0);
+      categoryStats.set(categoryKey, categoryEntry);
+    });
+
+    const jayAttempts = totals.jayCorrectGuesses + totals.jayWrongGuesses;
+    const kimAttempts = totals.kimCorrectGuesses + totals.kimWrongGuesses;
+
+    return {
+      ...totals,
+      jayAccuracy: jayAttempts ? Math.round((totals.jayCorrectGuesses / jayAttempts) * 100) : 0,
+      kimAccuracy: kimAttempts ? Math.round((totals.kimCorrectGuesses / kimAttempts) * 100) : 0,
+      categoryRows: [...categoryStats.values()].sort(
+        (left, right) =>
+          right.rounds - left.rounds
+          || (right.jayCorrect + right.kimCorrect) - (left.jayCorrect + left.kimCorrect),
+      ),
+    };
+  }, [activeGames, previousGames]);
+
+  const questionBankLoadedCount = questionBankSegment === 'quiz'
+    ? quizQuestionCount
+    : questionBankSegment === 'trueFalse'
+      ? trueFalseQuestionCount
+      : questionCount;
+  const questionBankUsedTotal = questionBankSegment === 'quiz'
+    ? usedQuizQuestionCount
+    : questionBankSegment === 'trueFalse'
+      ? usedTrueFalseQuestionCount
+      : usedQuestionCount;
+  const questionBankRemainingTotal = questionBankSegment === 'quiz'
+    ? remainingQuizQuestionCount
+    : questionBankSegment === 'trueFalse'
+      ? remainingTrueFalseQuestionCount
+      : remainingQuestionCount;
+  const questionBankSyncAction = questionBankSegment === 'quiz'
+    ? onSyncQuizBank
+    : questionBankSegment === 'trueFalse'
+      ? onSyncTrueFalseBank
+      : onSyncQuestionBank;
+  const questionBankImportAction = questionBankSegment === 'quiz'
+    ? onImportQuizQuestions
+    : questionBankSegment === 'trueFalse'
+      ? onImportTrueFalseQuestions
+      : onImportQuestions;
+  const questionBankActionLabel = questionBankSegment === 'quiz'
+    ? 'Quiz Question Bank'
+    : questionBankSegment === 'trueFalse'
+      ? 'True or False Bank'
+      : 'Question Bank';
+
   useEffect(() => {
     setProfileNameDraft(normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   }, [profile?.displayName, user?.displayName, user?.email]);
@@ -3275,6 +3467,7 @@ function LobbyScreen({
   const lobbyCarouselCards = [
     { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
     { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
+    { id: 'trueFalse', label: 'True or False', image: trueOrFalseTileImage },
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
 
@@ -3288,7 +3481,8 @@ function LobbyScreen({
     const offset = (index - lobbyCarouselIndex + lobbyCarouselCount) % lobbyCarouselCount;
     if (offset === 0) return 'center';
     if (offset === 1) return 'right';
-    return 'left';
+    if (offset === lobbyCarouselCount - 1) return 'left';
+    return 'hidden';
   };
 
   const handleLobbyCarouselTouchStart = (event) => {
@@ -3322,6 +3516,7 @@ function LobbyScreen({
 
   const isStandardTileFlipped = Boolean(flippedLobbyTiles.standard);
   const isQuizTileFlipped = Boolean(flippedLobbyTiles.quiz);
+  const isTrueFalseTileFlipped = Boolean(flippedLobbyTiles.trueFalse);
   const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
 
   const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, description, footerMeta, onCreateAndInvite }) => {
@@ -3793,6 +3988,97 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(2) !== 'center'}
                   >
                     <section
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--true-false"
+                      style={{ '--lobby-tile-image': `url("${trueOrFalseTileImage}")` }}
+                    >
+                      <div className={`lobby-image-tile-flip ${isTrueFalseTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'trueFalse',
+                          eyebrow: 'Mirror Match',
+                          title: 'True or False',
+                          statusText: `${trueFalseQuestionCount} ready`,
+                          description: 'Eight-second True or False rounds. Pick what you think the other person will answer, then lock your own answer too. Your first choice for each side is final.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={trueFalseQuestionCountDraft}
+                                onChange={(event) => setTrueFalseQuestionCountDraft(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
+                          onCreateAndInvite: () => handleCreateTrueFalseGame(true),
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isTrueFalseTileFlipped} aria-hidden={!isTrueFalseTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('trueFalse', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Mirror Match</p>
+                              <h2>True or False</h2>
+                            </div>
+                            <span className="status-pill">{trueFalseQuestionCount} ready</span>
+                          </div>
+                          <p className="panel-copy">Every round gives both players 8 seconds. Pick what you think the other person will answer, then lock your own answer. The first tap for each answer sticks.</p>
+                          <label className="field">
+                            <span>True or False Code</span>
+                            <input
+                              value={trueFalseCreateCodeDraft}
+                              onChange={(event) => setTrueFalseCreateCodeDraft(normalizeJoinCode(event.target.value))}
+                              placeholder="Optional"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Number of Questions</span>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min="1"
+                              value={trueFalseQuestionCountDraft}
+                              onChange={(event) => setTrueFalseQuestionCountDraft(event.target.value)}
+                              placeholder="10"
+                            />
+                          </label>
+                          <p className="field-note">Wrong guess = +10 penalty points. There is no submit button, and each first True/False tap locks immediately.</p>
+                          <div className="button-row">
+                            <Button
+                              className="primary-button compact"
+                              onClick={() => handleCreateTrueFalseGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create True or False
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateTrueFalseGame(true)}
+                              disabled={isBusy}
+                            >
+                              Create + Invite
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(3)}`}
+                    inert={getLobbyCarouselPosition(3) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(3) !== 'center'}
+                  >
+                    <section
                       className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
                       style={{ '--lobby-tile-image': `url("${pokerTileImage}")` }}
                     >
@@ -3903,7 +4189,7 @@ function LobbyScreen({
                   <p className="eyebrow">Question Bank</p>
                   <h2>Manage Questions</h2>
                 </div>
-                <span className="status-pill">{questionBankSegment === 'quiz' ? quizQuestionCount : questionCount} loaded</span>
+                <span className="status-pill">{questionBankLoadedCount} loaded</span>
               </div>
               <div className="dashboard-subnav" role="tablist" aria-label="Question bank tabs">
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'game' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('game')}>
@@ -3912,22 +4198,25 @@ function LobbyScreen({
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('quiz')}>
                   Quiz Questions
                 </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('trueFalse')}>
+                  True or False
+                </button>
               </div>
 
               <div className="question-bank-status-grid">
                 <article className="stat-tile">
                   <small>Total Loaded</small>
-                  <strong>{questionBankSegment === 'quiz' ? quizQuestionCount : questionCount}</strong>
+                  <strong>{questionBankLoadedCount}</strong>
                   <span>questions currently available</span>
                 </article>
                 <article className="stat-tile">
                   <small>Tracked Used</small>
-                  <strong>{questionBankSegment === 'quiz' ? usedQuizQuestionCount : usedQuestionCount}</strong>
+                  <strong>{questionBankUsedTotal}</strong>
                   <span>already used in games</span>
                 </article>
                 <article className="stat-tile">
                   <small>Remaining</small>
-                  <strong>{questionBankSegment === 'quiz' ? remainingQuizQuestionCount : remainingQuestionCount}</strong>
+                  <strong>{questionBankRemainingTotal}</strong>
                   <span>unused questions left</span>
                 </article>
                 <article className="stat-tile">
@@ -3938,11 +4227,11 @@ function LobbyScreen({
               </div>
 
               <div className="button-row question-bank-actions">
-                <Button className="ghost-button compact" onClick={questionBankSegment === 'quiz' ? onSyncQuizBank : onSyncQuestionBank} disabled={isBusy}>
-                  Sync Question Bank
+                <Button className="ghost-button compact" onClick={questionBankSyncAction} disabled={isBusy}>
+                  {`Sync ${questionBankActionLabel}`}
                 </Button>
-                <Button className="primary-button compact" onClick={questionBankSegment === 'quiz' ? onImportQuizQuestions : onImportQuestions} disabled={isBusy}>
-                  Import New Questions
+                <Button className="primary-button compact" onClick={questionBankImportAction} disabled={isBusy}>
+                  {`Import ${questionBankSegment === 'trueFalse' ? 'True or False Questions' : 'New Questions'}`}
                 </Button>
                 <Button className="ghost-button compact" onClick={onResetQuestionBank} disabled={isBusy}>
                   Re-enter All Questions
@@ -4229,6 +4518,9 @@ function LobbyScreen({
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('quiz')}>
                   Quiz
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('trueFalse')}>
+                  True or False
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'holdem' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('holdem')}>
                   Texas Hold Em
@@ -4520,6 +4812,110 @@ function LobbyScreen({
                       </section>
                     </div>
                   ) : null}
+                </section>
+              ) : analyticsSegment === 'trueFalse' ? (
+                <section className="analytics-questions-panel">
+                  <div className="question-bank-status-grid">
+                    <article className="stat-tile">
+                      <small>Total Games Played</small>
+                      <strong>{trueFalseAnalytics.totalGamesPlayed}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Total Questions</small>
+                      <strong>{trueFalseAnalytics.totalQuestionsAnswered}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Correct</small>
+                      <strong>{trueFalseAnalytics.jayCorrectGuesses}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Correct</small>
+                      <strong>{trueFalseAnalytics.kimCorrectGuesses}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Wrong</small>
+                      <strong>{trueFalseAnalytics.jayWrongGuesses}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Wrong</small>
+                      <strong>{trueFalseAnalytics.kimWrongGuesses}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Penalty</small>
+                      <strong>{formatScore(trueFalseAnalytics.jayPenaltyPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Penalty</small>
+                      <strong>{formatScore(trueFalseAnalytics.kimPenaltyPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Accuracy</small>
+                      <strong>{trueFalseAnalytics.jayAccuracy}%</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Accuracy</small>
+                      <strong>{trueFalseAnalytics.kimAccuracy}%</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Tracked Games</small>
+                      <strong>{trueFalseAnalytics.sessionsTracked}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Active Games</small>
+                      <strong>{trueFalseAnalytics.activeGames}</strong>
+                    </article>
+                  </div>
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>True or False</span>
+                          <h3>Guess Accuracy</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Jay correct guesses</strong><span>{trueFalseAnalytics.jayCorrectGuesses}</span></article>
+                        <article className="mini-list-row"><strong>Jay wrong guesses</strong><span>{trueFalseAnalytics.jayWrongGuesses}</span></article>
+                        <article className="mini-list-row"><strong>Kim correct guesses</strong><span>{trueFalseAnalytics.kimCorrectGuesses}</span></article>
+                        <article className="mini-list-row"><strong>Kim wrong guesses</strong><span>{trueFalseAnalytics.kimWrongGuesses}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Penalty Points</span>
+                          <h3>Auto Scoring</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Jay total penalty</strong><span>{formatScore(trueFalseAnalytics.jayPenaltyPoints)}</span></article>
+                        <article className="mini-list-row"><strong>Kim total penalty</strong><span>{formatScore(trueFalseAnalytics.kimPenaltyPoints)}</span></article>
+                        <article className="mini-list-row"><strong>Questions tracked</strong><span>{trueFalseAnalytics.totalQuestionsAnswered}</span></article>
+                        <article className="mini-list-row"><strong>Completed games</strong><span>{trueFalseAnalytics.totalGamesPlayed}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Categories</span>
+                          <h3>Breakdown</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        {trueFalseAnalytics.categoryRows.length ? (
+                          trueFalseAnalytics.categoryRows.slice(0, 14).map((row) => (
+                            <article className="mini-list-row" key={`true-false-cat-${row.category}`}>
+                              <strong>{row.category}</strong>
+                              <span>{`${row.rounds} rounds`}</span>
+                              <small>{`Jay ${row.jayCorrect}/${row.rounds} · Kim ${row.kimCorrect}/${row.rounds}`}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="empty-copy">No True or False rounds have been recorded yet.</p>
+                        )}
+                      </div>
+                    </section>
+                  </div>
                 </section>
               ) : analyticsSegment === 'holdem' ? (
                 <section className="analytics-questions-panel">
@@ -6019,7 +6415,126 @@ function QuizLiveStatus({ currentRound, revealIsReady }) {
   );
 }
 
-function RoomRevealPlayerCard({ game, viewerSeat, seat, currentRound, totalPenalty, roundPenalty, isQuizGame = false, totalQuizPoints = 0 }) {
+function TrueFalseLiveStatus({ currentRound, revealIsReady }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  const isRoundOpen = (currentRound?.status || 'open') === 'open';
+
+  useEffect(() => {
+    if (revealIsReady || !isRoundOpen) return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [revealIsReady, isRoundOpen, stableRoundIdentityKey(currentRound || {})]);
+
+  const endsAtMs = Date.parse(currentRound?.trueFalseTimerEndsAt || '');
+  const msLeft = Number.isFinite(endsAtMs) ? Math.max(0, endsAtMs - nowMs) : TRUE_FALSE_TIMER_SECONDS * 1000;
+  const secondsLeft = Math.max(0, msLeft / 1000);
+  const displaySeconds = Math.ceil(secondsLeft);
+  const timerProgress = Math.max(0, Math.min(1, msLeft / (TRUE_FALSE_TIMER_SECONDS * 1000)));
+
+  if (revealIsReady) return null;
+
+  return (
+    <div className="quiz-live-status true-false-live-status">
+      <div className="quiz-status-grid">
+        <article className="quiz-status-card">
+          <span>Timer</span>
+          <strong>{displaySeconds}s</strong>
+        </article>
+        <article className="quiz-status-card">
+          <span>Scoring</span>
+          <strong>0 / +10</strong>
+        </article>
+      </div>
+      <div className="quiz-timer-bar" aria-hidden="true">
+        <div className="quiz-timer-bar-fill true-false-timer-bar-fill" style={{ transform: `scaleX(${timerProgress})` }} />
+      </div>
+    </div>
+  );
+}
+
+function TrueFalseAutoAnswerEntryBase({
+  currentRound,
+  viewerSeat,
+  oppositeLabel,
+  onLockAnswerField,
+  isBusy = false,
+  embedded = false,
+}) {
+  const currentPlayer = viewerSeat === 'kim' ? 'kim' : 'jay';
+  const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
+  const ownAnswer = normalizeTrueFalseChoice(currentPlayerAnswer?.ownAnswer || '');
+  const guessedOther = normalizeTrueFalseChoice(currentPlayerAnswer?.guessedOther || '');
+  const options = ['True', 'False'];
+  const isRoundOpen = (currentRound?.status || 'open') === 'open';
+  const lockedChoiceLabel = ownAnswer && guessedOther ? 'Both picks locked' : 'First tap locks each choice';
+
+  const renderChoiceField = (fieldName, value, heading, subheading) => (
+    <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
+      <div className="mini-heading">
+        <div>
+          <span>{heading}</span>
+          <h3>{subheading}</h3>
+        </div>
+      </div>
+      <div className={`choice-grid ${embedded ? 'choice-grid--embedded' : ''}`} role="list" aria-label={subheading}>
+        {options.map((option) => (
+          <button
+            key={`${fieldName}-${option}`}
+            type="button"
+            className={`choice-button ${value === option ? 'is-on' : ''} ${value ? 'is-locked' : ''}`}
+            onClick={() => onLockAnswerField?.(fieldName, option)}
+            disabled={isBusy || !isRoundOpen || Boolean(value)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <p className="field-note true-false-answer-note">
+        {value ? `Locked in: ${value}` : 'Tap one answer. Your first choice locks immediately.'}
+      </p>
+    </section>
+  );
+
+  return (
+    <div className={`room-answer-entry room-answer-entry--true-false ${embedded ? 'room-answer-entry--embedded' : ''}`}>
+      <div className="true-false-answer-header">
+        <p>Guess what the other person will answer, then lock your own answer too.</p>
+        <span className="status-pill">{lockedChoiceLabel}</span>
+      </div>
+      <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''}`}>
+        {renderChoiceField('guessedOther', guessedOther, 'Their Answer', `What I think ${oppositeLabel} will say`)}
+        {renderChoiceField('ownAnswer', ownAnswer, 'Your Answer', 'What I will actually answer')}
+      </div>
+    </div>
+  );
+}
+
+const TrueFalseAutoAnswerEntry = memo(TrueFalseAutoAnswerEntryBase, (previous, next) => {
+  const previousPlayer = previous.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const nextPlayer = next.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const previousAnswer = previous.currentRound?.answers?.[previousPlayer] || {};
+  const nextAnswer = next.currentRound?.answers?.[nextPlayer] || {};
+  return stableRoundIdentityKey(previous.currentRound || {}) === stableRoundIdentityKey(next.currentRound || {})
+    && previous.viewerSeat === next.viewerSeat
+    && previous.oppositeLabel === next.oppositeLabel
+    && previous.isBusy === next.isBusy
+    && previous.embedded === next.embedded
+    && previousAnswer.ownAnswer === nextAnswer.ownAnswer
+    && previousAnswer.guessedOther === nextAnswer.guessedOther
+    && previous.currentRound?.status === next.currentRound?.status;
+});
+
+function RoomRevealPlayerCard({
+  game,
+  viewerSeat,
+  seat,
+  currentRound,
+  totalPenalty,
+  roundPenalty,
+  isQuizGame = false,
+  isTrueFalseGame = false,
+  totalQuizPoints = 0,
+}) {
   const playerSeat = seat === 'kim' ? 'kim' : 'jay';
   const oppositeSeat = playerSeat === 'jay' ? 'kim' : 'jay';
   const playerLabel = gameSeatDisplayName(game, playerSeat, currentRound);
@@ -6088,6 +6603,59 @@ function RoomRevealPlayerCard({ game, viewerSeat, seat, currentRound, totalPenal
       </article>
     );
   }
+  if (isTrueFalseGame) {
+    const outcome = buildTrueFalseRoundOutcome(currentRound || {});
+    const viewerGuess = playerSeat === 'jay' ? outcome.jayGuess : outcome.kimGuess;
+    const actualAnswer = playerSeat === 'jay' ? outcome.jayActual : outcome.kimActual;
+    const targetAnswer = playerSeat === 'jay' ? outcome.kimActual : outcome.jayActual;
+    const wasCorrect = playerSeat === 'jay' ? outcome.jayCorrect : outcome.kimCorrect;
+    const penalty = playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty;
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>{`${playerLabel}'s guess`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{viewerGuess || 'No answer submitted'}</strong>
+            </div>
+          </div>
+
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>{`${oppositeLabel}'s real answer`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{targetAnswer || 'No answer submitted'}</strong>
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${wasCorrect ? 'success' : 'warning'}`}>
+              {wasCorrect ? 'Correct guess' : 'Wrong guess'}
+            </small>
+          </div>
+        </div>
+
+        <div className="room-reveal-score-strip">
+          <div>
+            <span>{`${playerLabel}'s real answer`}</span>
+            <strong>{actualAnswer || 'No answer'}</strong>
+          </div>
+          <div>
+            <span>Round penalty</span>
+            <strong>{formatScore(penalty || roundPenalty || 0)}</strong>
+          </div>
+          <div>
+            <span>Total penalty</span>
+            <strong>{formatScore(totalPenalty || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
   const actualAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
   const guessedAnswerRaw = currentRound?.answers?.[oppositeSeat]?.guessedOther || '';
   const actualAnswer = formatRoundAnswerValue(actualAnswerRaw, currentRound?.roundType);
@@ -6149,6 +6717,7 @@ function RoomActiveFrameBase({
   baseTotals,
   liveTotals,
   onSubmitAnswer,
+  onLockTrueFalseAnswer,
   onMarkReady,
   onRequestQuizOverride,
   onRespondQuizOverride,
@@ -6178,12 +6747,21 @@ function RoomActiveFrameBase({
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
   const otherPlayer = oppositeSeatOf(currentPlayer);
   const roundTypeLabel = ROUND_TYPE_LABEL[currentRound?.roundType] || currentRound?.roundType || 'Question';
+  const isQuizGame = (game?.gameMode || 'standard') === 'quiz' && (game?.questionBankType || 'game') === 'quiz';
+  const isTrueFalseGame =
+    isTrueFalseGameMode(game?.gameMode || 'standard')
+    && normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard')) === 'trueFalseGame';
   const penaltyPreview = useMemo(
-    () => ({
-      jay: parseNumber(penaltyDraft?.jay, 0),
-      kim: parseNumber(penaltyDraft?.kim, 0),
-    }),
-    [penaltyDraft?.jay, penaltyDraft?.kim],
+    () => (isTrueFalseGame
+      ? {
+          jay: parseNumber(currentRound?.penalties?.jay, 0),
+          kim: parseNumber(currentRound?.penalties?.kim, 0),
+        }
+      : {
+          jay: parseNumber(penaltyDraft?.jay, 0),
+          kim: parseNumber(penaltyDraft?.kim, 0),
+        }),
+    [currentRound?.penalties?.jay, currentRound?.penalties?.kim, isTrueFalseGame, penaltyDraft?.jay, penaltyDraft?.kim],
   );
   const previewRoundResult = useMemo(() => {
     if (!revealIsReady || !currentRound) return null;
@@ -6218,13 +6796,13 @@ function RoomActiveFrameBase({
   const viewerLabel = gameSeatDisplayName(game, currentPlayer, currentRound);
   const oppositeLabel = gameSeatDisplayName(game, otherPlayer, currentRound);
   const hostLabel = gameSeatDisplayName(game, seatForUid(game, game?.hostUid) || currentPlayer, currentRound);
-  const isQuizGame = (game?.gameMode || 'standard') === 'quiz' && (game?.questionBankType || 'game') === 'quiz';
   const stageStatusLabel = revealIsReady
     ? 'Results'
     : submissionState === 'submitted'
       ? 'Waiting'
       : 'Answering';
   const showReplayAction = (game?.gameMode || 'standard') === 'standard' && (game?.questionBankType || 'game') === 'game';
+  const showFeedbackActions = !isQuizGame && !isTrueFalseGame;
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
   const viewerOverrideRequest = currentRound?.overrideRequests?.[currentPlayer] || null;
@@ -6257,6 +6835,7 @@ function RoomActiveFrameBase({
           </div>
         </header>
         {isQuizGame ? <QuizLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
+        {isTrueFalseGame ? <TrueFalseLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer ? (
           <div className="quiz-override-strip">
             <span className={`quiz-override-status ${viewerQuizResult === 'correct' ? 'is-correct' : 'is-incorrect'}`}>
@@ -6302,24 +6881,28 @@ function RoomActiveFrameBase({
               {!isQuizGame ? (
                 <div className="question-note-actions">
                   <button type="button" className="ghost-button compact question-flag-button" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
-                  <button
-                    type="button"
-                    className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
-                    onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
-                    disabled={isBusy}
-                    aria-label="Thumbs up this question"
-                  >
-                    👍
-                  </button>
-                  <button
-                    type="button"
-                    className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
-                    onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
-                    disabled={isBusy}
-                    aria-label="Thumbs down this question"
-                  >
-                    👎
-                  </button>
+                  {showFeedbackActions ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
+                        onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
+                        disabled={isBusy}
+                        aria-label="Thumbs up this question"
+                      >
+                        👍
+                      </button>
+                      <button
+                        type="button"
+                        className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
+                        onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
+                        disabled={isBusy}
+                        aria-label="Thumbs down this question"
+                      >
+                        👎
+                      </button>
+                    </>
+                  ) : null}
                   {showReplayAction ? (
                     <button
                       type="button"
@@ -6334,18 +6917,29 @@ function RoomActiveFrameBase({
                 </div>
               ) : null}
             </div>
-            <QuestionAnswerEntry
-              gameId={game?.id || ''}
-              embedded
-              seat={currentPlayer}
-              viewerSeat={currentPlayer}
-              currentRound={currentRound}
-              answerLabel={viewerLabel}
-              oppositeLabel={oppositeLabel}
-              onSubmitAnswer={onSubmitAnswer}
-              submissionState={submissionState}
-              isQuizRound={isQuizGame}
-            />
+            {isTrueFalseGame ? (
+              <TrueFalseAutoAnswerEntry
+                embedded
+                viewerSeat={currentPlayer}
+                currentRound={currentRound}
+                oppositeLabel={oppositeLabel}
+                onLockAnswerField={onLockTrueFalseAnswer}
+                isBusy={isBusy}
+              />
+            ) : (
+              <QuestionAnswerEntry
+                gameId={game?.id || ''}
+                embedded
+                seat={currentPlayer}
+                viewerSeat={currentPlayer}
+                currentRound={currentRound}
+                answerLabel={viewerLabel}
+                oppositeLabel={oppositeLabel}
+                onSubmitAnswer={onSubmitAnswer}
+                submissionState={submissionState}
+                isQuizRound={isQuizGame}
+              />
+            )}
           </div>
         ) : (
           <div className={`room-active-reveal-stack ${isQuizGame ? 'room-active-reveal-stack--quiz' : ''}`}>
@@ -6353,24 +6947,28 @@ function RoomActiveFrameBase({
               <p>{question}</p>
               <div className="question-note-actions">
                 <button type="button" className="ghost-button compact question-flag-button" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
-                <button
-                  type="button"
-                  className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
-                  onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
-                  disabled={isBusy}
-                  aria-label="Thumbs up this question"
-                >
-                  👍
-                </button>
-                <button
-                  type="button"
-                  className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
-                  onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
-                  disabled={isBusy}
-                  aria-label="Thumbs down this question"
-                >
-                  👎
-                </button>
+                {showFeedbackActions ? (
+                  <>
+                    <button
+                      type="button"
+                      className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
+                      onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
+                      disabled={isBusy}
+                      aria-label="Thumbs up this question"
+                    >
+                      👍
+                    </button>
+                    <button
+                      type="button"
+                      className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
+                      onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
+                      disabled={isBusy}
+                      aria-label="Thumbs down this question"
+                    >
+                      👎
+                    </button>
+                  </>
+                ) : null}
                 {showReplayAction ? (
                   <button
                     type="button"
@@ -6394,6 +6992,7 @@ function RoomActiveFrameBase({
                 totalPenalty={liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0}
                 roundPenalty={penaltyPreview[currentPlayer]}
                 isQuizGame={isQuizGame}
+                isTrueFalseGame={isTrueFalseGame}
                 totalQuizPoints={quizRevealTotals[currentPlayer]}
               />
 
@@ -6427,6 +7026,26 @@ function RoomActiveFrameBase({
                       </span>
                     </div>
                   </>
+                ) : isTrueFalseGame ? (
+                  <>
+                    <span>Round Result</span>
+                    <strong>
+                      {buildTrueFalseRoundOutcome(currentRound || {}).jayCorrect && buildTrueFalseRoundOutcome(currentRound || {}).kimCorrect
+                        ? 'Both guessed correctly'
+                        : 'Automatic penalties applied'}
+                    </strong>
+                    <p>
+                      {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])}
+                      {' · '}
+                      {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
+                    </p>
+                    <small>Each wrong guess adds {formatScore(TRUE_FALSE_WRONG_PENALTY)} penalty points automatically.</small>
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
                 ) : (
                   <>
                     <span>Round Result</span>
@@ -6456,6 +7075,7 @@ function RoomActiveFrameBase({
                 totalPenalty={liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0}
                 roundPenalty={penaltyPreview[otherPlayer]}
                 isQuizGame={isQuizGame}
+                isTrueFalseGame={isTrueFalseGame}
                 totalQuizPoints={quizRevealTotals[otherPlayer]}
               />
             </div>
@@ -7278,12 +7898,49 @@ function GameSummaryContent({
   const summaryRounds = useMemo(() => normalizeStoredRounds(gameSummary?.rounds || []), [gameSummary?.rounds]);
   const summaryAnalytics = useMemo(() => calculateAnalytics(summaryRounds), [summaryRounds]);
   const isHoldemGame = isHoldemGameMode(gameSummary?.gameMode || 'standard');
+  const isTrueFalseGame = isTrueFalseGameMode(gameSummary?.gameMode || 'standard');
   const holdemStats = gameSummary?.holdemStats || defaultHoldemStats();
   const holdemState = gameSummary?.holdemState || null;
   const finalScores = isHoldemGame
     ? (gameSummary?.finalScores || gameSummary?.totals || holdemState?.lastSettledBalances || { jay: 0, kim: 0 })
     : (gameSummary?.finalScores || gameSummary?.totals || summaryAnalytics.totals || { jay: 0, kim: 0 });
   const isQuizGame = (gameSummary?.gameMode || 'standard') === 'quiz';
+  const trueFalseRoundRows = useMemo(
+    () => summaryRounds.map((round) => ({ round, outcome: buildTrueFalseRoundOutcome(round) })),
+    [summaryRounds],
+  );
+  const trueFalseCategoryRows = useMemo(() => {
+    const rowsByCategory = new Map();
+    trueFalseRoundRows.forEach(({ round, outcome }) => {
+      const categoryKey = normalizeText(round?.category) || 'uncategorised';
+      const entry = rowsByCategory.get(categoryKey) || {
+        category: round?.category || 'Uncategorised',
+        rounds: 0,
+        jayCorrect: 0,
+        kimCorrect: 0,
+        jayPenalty: 0,
+        kimPenalty: 0,
+      };
+      entry.rounds += 1;
+      entry.jayCorrect += outcome.jayCorrect ? 1 : 0;
+      entry.kimCorrect += outcome.kimCorrect ? 1 : 0;
+      entry.jayPenalty += Number(outcome.jayPenalty || 0);
+      entry.kimPenalty += Number(outcome.kimPenalty || 0);
+      rowsByCategory.set(categoryKey, entry);
+    });
+    return [...rowsByCategory.values()].sort((left, right) => right.rounds - left.rounds);
+  }, [trueFalseRoundRows]);
+  const trueFalseCorrectTotals = useMemo(
+    () =>
+      trueFalseRoundRows.reduce(
+        (totals, entry) => ({
+          jay: totals.jay + (entry.outcome.jayCorrect ? 1 : 0),
+          kim: totals.kim + (entry.outcome.kimCorrect ? 1 : 0),
+        }),
+        { jay: 0, kim: 0 },
+      ),
+    [trueFalseRoundRows],
+  );
   const quizTotals = gameSummary?.quizTotals || { jay: 0, kim: 0 };
   const completedCount = isHoldemGame
     ? Math.max(0, Number(holdemStats?.handsPlayed || gameSummary?.roundsPlayed || 0))
@@ -7396,6 +8053,13 @@ function GameSummaryContent({
                     <div className="stat-tile"><small>Jay Final</small><strong>{formatScore(finalScores.jay || 0)}</strong></div>
                     <div className="stat-tile"><small>Kim Final</small><strong>{formatScore(finalScores.kim || 0)}</strong></div>
                   </>
+                ) : isTrueFalseGame ? (
+                  <>
+                    <div className="stat-tile"><small>Jay Correct</small><strong>{trueFalseCorrectTotals.jay}</strong></div>
+                    <div className="stat-tile"><small>Kim Correct</small><strong>{trueFalseCorrectTotals.kim}</strong></div>
+                    <div className="stat-tile"><small>Jay Penalty</small><strong>{formatScore(finalScores.jay || 0)}</strong></div>
+                    <div className="stat-tile"><small>Kim Penalty</small><strong>{formatScore(finalScores.kim || 0)}</strong></div>
+                  </>
                 ) : isQuizGame ? (
                   <>
                     <div className="stat-tile"><small>Played For</small><strong>{formatScore(sharedWagerAmount || 0)}</strong></div>
@@ -7480,21 +8144,32 @@ function GameSummaryContent({
                   </div>
                   <div className="summary-list">
                     {summaryRounds.length ? (
-                      summaryRounds.map((round, index) => (
-                        <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
-                          <strong>Round {index + 1}</strong>
-                          <span>{round.question}</span>
-                          <small>
-                            Jay {formatScore(round.penaltyAdded?.jay || 0)} · Kim {formatScore(round.penaltyAdded?.kim || 0)} · Winner {round.winner || 'tie'}
-                          </small>
-                          <small>
-                            Jay answered {formatRoundAnswerValue(round.actualAnswers?.jay, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.jay, round.roundType)}
-                          </small>
-                          <small>
-                            Kim answered {formatRoundAnswerValue(round.actualAnswers?.kim, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.kim, round.roundType)}
-                          </small>
-                        </article>
-                      ))
+                      isTrueFalseGame ? (
+                        trueFalseRoundRows.map(({ round, outcome }, index) => (
+                          <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
+                            <strong>Round {index + 1}</strong>
+                            <span>{round.question}</span>
+                            <small>{`Jay guessed ${outcome.jayGuess || 'No answer'} / Kim said ${outcome.kimActual || 'No answer'} · ${outcome.jayCorrect ? 'Jay was correct' : `Jay +${formatScore(outcome.jayPenalty)}`}`}</small>
+                            <small>{`Kim guessed ${outcome.kimGuess || 'No answer'} / Jay said ${outcome.jayActual || 'No answer'} · ${outcome.kimCorrect ? 'Kim was correct' : `Kim +${formatScore(outcome.kimPenalty)}`}`}</small>
+                          </article>
+                        ))
+                      ) : (
+                        summaryRounds.map((round, index) => (
+                          <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
+                            <strong>Round {index + 1}</strong>
+                            <span>{round.question}</span>
+                            <small>
+                              Jay {formatScore(round.penaltyAdded?.jay || 0)} · Kim {formatScore(round.penaltyAdded?.kim || 0)} · Winner {round.winner || 'tie'}
+                            </small>
+                            <small>
+                              Jay answered {formatRoundAnswerValue(round.actualAnswers?.jay, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.jay, round.roundType)}
+                            </small>
+                            <small>
+                              Kim answered {formatRoundAnswerValue(round.actualAnswers?.kim, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.kim, round.roundType)}
+                            </small>
+                          </article>
+                        ))
+                      )
                     ) : (
                       <p className="empty-copy">No rounds were archived for this game.</p>
                     )}
@@ -7509,12 +8184,16 @@ function GameSummaryContent({
                     </div>
                   </div>
                   <div className="summary-list">
-                    {summaryAnalytics.categoryRows?.length ? (
-                      summaryAnalytics.categoryRows.map((row) => (
+                    {(isTrueFalseGame ? trueFalseCategoryRows : summaryAnalytics.categoryRows)?.length ? (
+                      (isTrueFalseGame ? trueFalseCategoryRows : summaryAnalytics.categoryRows).map((row) => (
                         <article className="mini-list-row" key={row.category}>
                           <strong>{row.category}</strong>
                           <span>Rounds {row.rounds}</span>
-                          <small>Jay {formatScore(row.totals.jay)} · Kim {formatScore(row.totals.kim)} · Winner {row.winner}</small>
+                          {isTrueFalseGame ? (
+                            <small>{`Jay correct ${row.jayCorrect}/${row.rounds} · Kim correct ${row.kimCorrect}/${row.rounds} · Jay ${formatScore(row.jayPenalty)} · Kim ${formatScore(row.kimPenalty)}`}</small>
+                          ) : (
+                            <small>Jay {formatScore(row.totals.jay)} · Kim {formatScore(row.totals.kim)} · Winner {row.winner}</small>
+                          )}
                         </article>
                       ))
                     ) : (
@@ -7552,7 +8231,16 @@ function GameSummaryContent({
                     <h3>Post-Game Analytics</h3>
                   </div>
                 </div>
-                <AnalyticsPanel analytics={summaryAnalytics} categoryColorMap={categoryColorMap} variant="summary" summary={gameSummary} />
+                {isTrueFalseGame ? (
+                  <div className="summary-list">
+                    <article className="mini-list-row"><strong>Jay accuracy</strong><span>{completedCount ? Math.round((trueFalseCorrectTotals.jay / completedCount) * 100) : 0}%</span></article>
+                    <article className="mini-list-row"><strong>Kim accuracy</strong><span>{completedCount ? Math.round((trueFalseCorrectTotals.kim / completedCount) * 100) : 0}%</span></article>
+                    <article className="mini-list-row"><strong>Jay total penalty</strong><span>{formatScore(finalScores.jay || 0)}</span></article>
+                    <article className="mini-list-row"><strong>Kim total penalty</strong><span>{formatScore(finalScores.kim || 0)}</span></article>
+                  </div>
+                ) : (
+                  <AnalyticsPanel analytics={summaryAnalytics} categoryColorMap={categoryColorMap} variant="summary" summary={gameSummary} />
+                )}
               </section>
             )}
           </aside>
@@ -9690,12 +10378,17 @@ function GameRoomView({
     : baseTotals;
   const isHoldemGame = isHoldemGameMode(game?.gameMode || 'standard');
   const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-  const bothPlayersSubmitted = Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
+  const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+  const bothPlayersSubmitted = isTrueFalseGame
+    ? Boolean(hasCompletedTrueFalseRoundAnswer(currentRound, 'jay') && hasCompletedTrueFalseRoundAnswer(currentRound, 'kim'))
+    : Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
   const revealIsReady = bothPlayersSubmitted || currentRound?.status === 'reveal';
-  const submissionState = currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft';
+  const submissionState = isTrueFalseGame
+    ? (hasCompletedTrueFalseRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
+    : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
   const submittedBySeat = {
-    jay: hasSubmittedRoundAnswer(currentRound, 'jay'),
-    kim: hasSubmittedRoundAnswer(currentRound, 'kim'),
+    jay: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'jay'),
+    kim: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'kim'),
   };
   const quizSetupReadyBySeat = {
     jay: hasQuizSetupReadySeat(game, 'jay'),
@@ -9978,6 +10671,30 @@ function GameRoomView({
     if (role !== 'host') return null;
 
     if (currentRound && revealIsReady && !isQuizGame) {
+      if (isTrueFalseGame) {
+        return (
+          <section className="mobile-entry-panel mobile-round-panel">
+            <section className="panel room-status-panel room-status-panel--host-mobile">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">True or False</p>
+                  <h2>Next Question</h2>
+                </div>
+              </div>
+              <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
+              <p className="panel-copy">Both answers are locked. Penalties were scored automatically, so you can move straight to the next question.</p>
+              <div className="button-row room-host-sidebar-actions">
+                <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
+                  Next Question
+                </Button>
+                <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
+                  {status === 'paused' ? 'Resume' : 'Pause'}
+                </Button>
+              </div>
+            </section>
+          </section>
+        );
+      }
       return (
         <section className="mobile-entry-panel mobile-round-panel">
           <QuickDesk
@@ -10176,6 +10893,7 @@ function GameRoomView({
 	                  baseTotals={baseTotals}
 	                  liveTotals={liveTotals}
 	                  onSubmitAnswer={onSubmitAnswer}
+	                  onLockTrueFalseAnswer={lockTrueFalseAnswerField}
 	                  onMarkReady={onMarkReady}
 	                  onRequestQuizOverride={onRequestQuizOverride}
 	                  onRespondQuizOverride={onRespondQuizOverride}
@@ -10420,17 +11138,39 @@ function GameRoomView({
             </div>
             {role === 'host' ? (
               isQuizGame ? null : currentRound && revealIsReady ? (
-                <QuickDesk
-                  currentRound={currentRound}
-                  penaltyDraft={penaltyDraft}
-                  setPenaltyDraft={setPenaltyDraft}
-                  onNextQuestion={onNextQuestion}
-                  onPauseToggle={onPauseToggle}
-                  status={status}
-                  isPaused={status === 'paused'}
-                  isCompleted={status === 'completed'}
-                  isBusy={isBusy}
-                />
+                isTrueFalseGame ? (
+                  <section className="panel host-queue-panel room-status-panel">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">True or False</p>
+                        <h2>Automatic Scoring</h2>
+                      </div>
+                    </div>
+                    <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
+                    <p className="panel-copy">Both answers are locked in. Penalties were applied automatically, so you can load the next question.</p>
+                    <div className="button-row room-host-sidebar-actions">
+                      <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
+                        Next Question
+                      </Button>
+                      <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
+                        {status === 'paused' ? 'Resume' : 'Pause'}
+                      </Button>
+                      <span className="quick-desk-status">{currentRound ? `Round ${currentRound.number}` : 'Waiting'}</span>
+                    </div>
+                  </section>
+                ) : (
+                  <QuickDesk
+                    currentRound={currentRound}
+                    penaltyDraft={penaltyDraft}
+                    setPenaltyDraft={setPenaltyDraft}
+                    onNextQuestion={onNextQuestion}
+                    onPauseToggle={onPauseToggle}
+                    status={status}
+                    isPaused={status === 'paused'}
+                    isCompleted={status === 'completed'}
+                    isBusy={isBusy}
+                  />
+                )
               ) : (
                 <section className="panel host-queue-panel room-status-panel">
                   <div className="panel-heading">
@@ -10482,6 +11222,7 @@ function GameRoomView({
 	              baseTotals={baseTotals}
 	              liveTotals={liveTotals}
 	              onSubmitAnswer={onSubmitAnswer}
+	              onLockTrueFalseAnswer={lockTrueFalseAnswerField}
 	              onMarkReady={onMarkReady}
 	              onRequestQuizOverride={onRequestQuizOverride}
 	              onRespondQuizOverride={onRespondQuizOverride}
@@ -11465,13 +12206,23 @@ function ProductionApp() {
   const selectedGameSummary = gameLibrary.find((entry) => entry.id === selectedGameId) || null;
   const selectedLocalGameSummary = localArchivedGames.find((entry) => entry.id === selectedGameId) || null;
   const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || localEndedGameSummary;
-  const lobbyRounds = useMemo(() => gameLibrary.flatMap((entry) => entry.rounds || []), [gameLibrary]);
+  const lobbyRounds = useMemo(
+    () =>
+      gameLibrary
+        .filter((entry) => !isTrueFalseGameMode(entry?.gameMode || 'standard'))
+        .flatMap((entry) => entry.rounds || []),
+    [gameLibrary],
+  );
   const gameBankQuestions = useMemo(
-    () => bankQuestions.filter((question) => (question?.bankType || 'game') !== 'quiz'),
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'game'),
     [bankQuestions],
   );
   const quizBankQuestions = useMemo(
-    () => bankQuestions.filter((question) => question?.bankType === 'quiz'),
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'quiz'),
+    [bankQuestions],
+  );
+  const trueFalseBankQuestions = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
     [bankQuestions],
   );
   const standardSelectableQuestions = useMemo(
@@ -11511,6 +12262,7 @@ function ProductionApp() {
   );
   const bankCount = gameBankQuestions.length;
   const quizBankCount = quizBankQuestions.length;
+  const trueFalseBankCount = trueFalseBankQuestions.length;
   const trackedGameEntries = useMemo(() => {
     if (!game?.id || isLocalTestGame(game)) return gameLibrary;
     const currentGameSummary = {
@@ -11534,6 +12286,10 @@ function ProductionApp() {
   const quizQuestionIds = useMemo(
     () => new Set(quizBankQuestions.map((question) => question.id).filter(Boolean)),
     [quizBankQuestions],
+  );
+  const trueFalseQuestionIds = useMemo(
+    () => new Set(trueFalseBankQuestions.map((question) => question.id).filter(Boolean)),
+    [trueFalseBankQuestions],
   );
   const pairPlayedQuestionIds = useMemo(
     () => mergeUniqueIds(pairHistory?.playedQuestionIds || []),
@@ -11584,7 +12340,7 @@ function ProductionApp() {
   const playedStandardQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
-        .filter((entry) => (entry?.questionBankType || 'game') !== 'quiz' && (entry?.gameMode || 'standard') !== 'quiz')
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'game')
         .map((entry) => getPlayedQuestionIdsForGame(entry)),
     );
     if (!bankQuestionIds.size) return new Set(playedIds);
@@ -11608,7 +12364,7 @@ function ProductionApp() {
   const playedQuizQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
-        .filter((entry) => (entry?.questionBankType || 'game') === 'quiz' || (entry?.gameMode || 'standard') === 'quiz')
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'quiz')
         .map((entry) => getPlayedQuestionIdsForGame(entry)),
     );
     if (!quizQuestionIds.size) return new Set(playedIds);
@@ -11616,6 +12372,25 @@ function ProductionApp() {
   }, [trackedGameEntries, quizQuestionIds]);
   const usedQuizQuestionCount = playedQuizQuestionIds.size;
   const remainingQuizQuestionCount = Math.max(0, quizBankCount - usedQuizQuestionCount);
+  const trackedUsedTrueFalseQuestionIds = useMemo(() => {
+    const trackedIds = mergeUniqueIds(
+      pairPlayedQuestionIds,
+      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!trueFalseQuestionIds.size) return new Set(trackedIds);
+    return new Set(trackedIds.filter((questionId) => trueFalseQuestionIds.has(questionId)));
+  }, [pairPlayedQuestionIds, trackedGameEntries, trueFalseQuestionIds]);
+  const playedTrueFalseQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'trueFalseGame')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!trueFalseQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => trueFalseQuestionIds.has(questionId)));
+  }, [trackedGameEntries, trueFalseQuestionIds]);
+  const usedTrueFalseQuestionCount = playedTrueFalseQuestionIds.size;
+  const remainingTrueFalseQuestionCount = Math.max(0, trueFalseBankCount - usedTrueFalseQuestionCount);
   const usedQuestionIds = useMemo(() => new Set(rounds.map((round) => round.questionId).filter(Boolean)), [rounds]);
   const availableQuestions = useMemo(() => {
     const bank = standardSelectableQuestions.filter(
@@ -11628,8 +12403,8 @@ function ProductionApp() {
   }, [standardSelectableQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
   const allPlayedQuestionIds = useMemo(
-    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds]),
-    [playedStandardQuestionIds, playedQuizQuestionIds],
+    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedTrueFalseQuestionIds]),
+    [playedStandardQuestionIds, playedQuizQuestionIds, playedTrueFalseQuestionIds],
   );
   const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
@@ -11637,12 +12412,13 @@ function ProductionApp() {
       persistedPreviousGames.filter(
         (entry) =>
           (entry.status === 'completed' || entry.status === 'ended')
-          && !isHoldemGameMode(entry?.gameMode || 'standard'),
+          && !isHoldemGameMode(entry?.gameMode || 'standard')
+          && !isTrueFalseGameMode(entry?.gameMode || 'standard'),
       ),
     [persistedPreviousGames],
   );
   const analyticsActiveGames = useMemo(
-    () => activeGames.filter((entry) => !isHoldemGameMode(entry?.gameMode || 'standard')),
+    () => activeGames.filter((entry) => !isHoldemGameMode(entry?.gameMode || 'standard') && !isTrueFalseGameMode(entry?.gameMode || 'standard')),
     [activeGames],
   );
   const holdemAnalytics = useMemo(() => {
@@ -11703,12 +12479,16 @@ function ProductionApp() {
 
   const buildQuestionQueue = async (requestedCount = 10, filters = {}) => {
     const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
-    const requestedBankType = filters.bankType === 'quiz' ? 'quiz' : 'game';
+    const requestedBankType = normalizeQuestionBankType(filters.bankType);
     const allQuestions = bankSnapshot.empty
       ? STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))
       : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
     const questionBankPool = allQuestions.filter((question) => ((question?.bankType || 'game') === requestedBankType));
-    const retiredQuestionIds = requestedBankType === 'quiz' ? trackedUsedQuizQuestionIds : effectiveRetiredQuestionIds;
+    const retiredQuestionIds = requestedBankType === 'quiz'
+      ? trackedUsedQuizQuestionIds
+      : requestedBankType === 'trueFalseGame'
+        ? trackedUsedTrueFalseQuestionIds
+        : effectiveRetiredQuestionIds;
     const unavailableQuestionIds = new Set(mergeUniqueIds([...retiredQuestionIds], [...reservedQuestionIds], [lastQuestionId]));
     const typeSet = new Set((filters.roundTypes || []).filter(Boolean));
     const categorySet = new Set((filters.categories || []).map((category) => normalizeText(category)).filter(Boolean));
@@ -13441,14 +14221,19 @@ function ProductionApp() {
   }) => {
     const reference = parseGoogleSheetReference(sheetValue);
     if (!reference) throw new Error('Enter a valid Google Sheet URL or ID.');
-    const sheetName = targetBankType === 'quiz' ? 'Quiz' : 'Questions';
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    const sheetName = normalizedTargetBankType === 'quiz'
+      ? 'Quiz'
+      : normalizedTargetBankType === 'trueFalseGame'
+        ? 'True or False'
+        : 'Questions';
     const targets = [{
       gid: '',
       csvUrl: `https://docs.google.com/spreadsheets/d/${reference.id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`,
       sheetName,
     }];
     const nextExistingQuestions = [...existingQuestions].filter(
-      (question) => ((question?.bankType || 'game') === (targetBankType === 'quiz' ? 'quiz' : 'game')),
+      (question) => normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType,
     );
     const importedQuestions = [];
     const updatedQuestions = [];
@@ -13462,14 +14247,7 @@ function ProductionApp() {
       const response = await fetch(target.csvUrl);
       if (!response.ok) throw new Error(`Google Sheet tab fetch failed (${response.status}) for gid ${target.gid || 'default'}.`);
       const rawText = await response.text();
-      const result = parseGoogleSheetImport({
-        rawText,
-        existingQuestions: nextExistingQuestions,
-        overwriteExisting,
-        importedAt: new Date().toISOString(),
-        sourceLabel: `${reference.id}:${target.sheetName || target.gid || 'Questions'}`,
-      });
-      const parsedResult = targetBankType === 'quiz'
+      const parsedResult = normalizedTargetBankType === 'quiz'
         ? parseGoogleSheetQuizImport({
             rawText,
             existingQuestions: nextExistingQuestions.filter((question) => (question?.bankType || 'game') === 'quiz'),
@@ -13477,7 +14255,21 @@ function ProductionApp() {
             importedAt: new Date().toISOString(),
             sourceLabel: `${reference.id}:${target.sheetName || 'Quiz'}`,
           })
-        : result;
+        : normalizedTargetBankType === 'trueFalseGame'
+          ? parseGoogleSheetTrueFalseImport({
+              rawText,
+              existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'True or False'}`,
+            })
+          : parseGoogleSheetImport({
+              rawText,
+              existingQuestions: nextExistingQuestions,
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || target.gid || 'Questions'}`,
+            });
 
       importedQuestions.push(...parsedResult.imports);
       updatedQuestions.push(...parsedResult.updates);
@@ -13532,10 +14324,11 @@ function ProductionApp() {
     setGameId(nextGameId);
   };
 
-  const seedBankIfNeeded = async () => {
+  const seedBankIfNeeded = async (targetBankType = 'game') => {
     if (!firestore || !user) return;
     const snap = await getDocs(collection(firestore, 'questionBank'));
     const existingQuestions = snap.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
+    if (normalizeQuestionBankType(targetBankType) !== 'game') return existingQuestions;
     const needsTopUp = snap.empty || isStarterOnlyQuestionBank(existingQuestions);
     if (!needsTopUp) return existingQuestions;
     try {
@@ -14304,9 +15097,18 @@ function ProductionApp() {
       if (!firestore || !user) throw new Error('Firebase is not configured.');
       const gameMode = resolveGameMode(options.gameMode || 'standard');
       const isHoldemGame = isHoldemGameMode(gameMode);
+      const isTrueFalseGame = isTrueFalseGameMode(gameMode);
       const requestedCreateCode = normalizeJoinCode(options.createCode ?? lobbyCode);
       const trimmedGameName = normalizeText(options.gameName ?? lobbyGameName);
-      const effectiveGameName = trimmedGameName || (gameMode === 'quiz' ? 'Quick Fire Quiz' : isHoldemGame ? 'Texas Hold’em' : 'Jay vs Kim');
+      const effectiveGameName = trimmedGameName || (
+        gameMode === 'quiz'
+          ? 'Quick Fire Quiz'
+          : isHoldemGame
+            ? 'Texas Hold’em'
+            : isTrueFalseGame
+              ? 'True or False'
+              : 'Jay vs Kim'
+      );
       console.debug('Create New Game clicked', {
         gameName: effectiveGameName || lobbyGameName,
         requestedQuestionCount: options.requestedQuestionCount ?? lobbyQuestionCount,
@@ -14325,7 +15127,7 @@ function ProductionApp() {
       const previousRounds = rounds;
       const previousChatMessages = chatMessages;
       const selectionMode = options.mode === 'custom' ? 'custom' : 'random';
-      const targetBankType = gameMode === 'quiz' ? 'quiz' : isHoldemGame ? 'holdem' : 'game';
+      const targetBankType = isHoldemGame ? 'holdem' : getQuestionBankTypeForGameMode(gameMode);
       const selectedRoundTypes = !isHoldemGame && selectionMode === 'custom' ? options.roundTypes || [] : [];
       const selectedCategories = !isHoldemGame && selectionMode === 'custom' ? options.categories || [] : [];
       const creatorSeat = preferredSeatForUser(user, profile);
@@ -15351,7 +16153,9 @@ function ProductionApp() {
   const quizRevealSettleRef = useRef('');
   const quizTimeoutRevealRef = useRef('');
   const standardRevealSettleRef = useRef('');
-  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, startOpen = false } = {}) => {
+  const trueFalseRevealSettleRef = useRef('');
+  const trueFalseTimeoutRevealRef = useRef('');
+  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isTrueFalseGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
     const quizRoundKey = sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question';
@@ -15383,9 +16187,19 @@ function ProductionApp() {
       quizTimerSeconds: isQuizGame && startOpen ? QUIZ_TIMER_SECONDS : 0,
       quizTimerStartedAt: isQuizGame && startOpen ? nowIso : '',
       quizTimerEndsAt: isQuizGame && startOpen ? new Date(now + (QUIZ_TIMER_SECONDS * 1000)).toISOString() : '',
+      trueFalseTimerSeconds: isTrueFalseGame && startOpen ? TRUE_FALSE_TIMER_SECONDS : 0,
+      trueFalseTimerStartedAt: isTrueFalseGame && startOpen ? nowIso : '',
+      trueFalseTimerEndsAt: isTrueFalseGame && startOpen ? new Date(now + (TRUE_FALSE_TIMER_SECONDS * 1000)).toISOString() : '',
       createdAt: nowIso,
     };
   };
+  const getTrueFalsePenaltyMap = useCallback((round = null) => {
+    const outcome = buildTrueFalseRoundOutcome(round || {});
+    return {
+      jay: outcome.jayCorrect ? 0 : TRUE_FALSE_WRONG_PENALTY,
+      kim: outcome.kimCorrect ? 0 : TRUE_FALSE_WRONG_PENALTY,
+    };
+  }, []);
 
   const markReady = async (seatToReady = '') =>
     withBusy(async () => {
@@ -15623,6 +16437,132 @@ function ProductionApp() {
       return true;
     }, 'Could not mark ready.');
 
+  const lockTrueFalseAnswerField = async (fieldName = '', value = '') => {
+    const targetField = fieldName === 'guessedOther' ? 'guessedOther' : fieldName === 'ownAnswer' ? 'ownAnswer' : '';
+    let previousLocalAnswer = null;
+    let optimisticRoundKey = '';
+    if (!targetField) return null;
+    try {
+      if (!game?.currentRound || !currentSeat) throw new Error('No active True or False round.');
+      if (!isTrueFalseGameMode(game?.gameMode || 'standard')) throw new Error('Auto-lock answers are only available in True or False games.');
+      if (game.currentRound.status !== 'open') return true;
+      const currentAnswer = game.currentRound.answers?.[currentSeat] || {};
+      if (normalizeTrueFalseChoice(currentAnswer?.[targetField] || '')) return true;
+
+      const lockedValue = normalizeTrueFalseChoice(serialiseAnswerForQuestionType('trueFalse', value));
+      if (!lockedValue) throw new Error('Choose True or False.');
+
+      const lockedAtIso = new Date().toISOString();
+      const otherField = targetField === 'ownAnswer' ? 'guessedOther' : 'ownAnswer';
+      const completedAt = normalizeTrueFalseChoice(currentAnswer?.[otherField] || '') ? lockedAtIso : (currentAnswer?.completedAt || '');
+      const displayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[currentSeat] || 'Player';
+
+      if (isCurrentLocalTestGame) {
+        setGame((current) => {
+          if (!current?.currentRound || current.currentRound.status !== 'open') return current;
+          const defaultChoices = ['True', 'False'];
+          const otherSeat = oppositeSeatOf(currentSeat);
+          const currentSeatAnswer = current.currentRound.answers?.[currentSeat] || {};
+          const nextAnswer = {
+            ...currentSeatAnswer,
+            [targetField]: lockedValue,
+            submittedBy: user?.uid || '',
+            displayName,
+            [`${targetField}LockedAt`]: lockedAtIso,
+            ...(normalizeTrueFalseChoice(currentSeatAnswer?.[otherField] || '') ? { completedAt } : {}),
+            updatedAt: lockedAtIso,
+          };
+          const otherSeatAnswer = current.currentRound.answers?.[otherSeat] || {};
+          const autoOtherAnswer = {
+            ...otherSeatAnswer,
+            ownAnswer: normalizeTrueFalseChoice(otherSeatAnswer?.ownAnswer || '') || defaultChoices[0] || 'True',
+            guessedOther: normalizeTrueFalseChoice(otherSeatAnswer?.guessedOther || '') || defaultChoices[1] || defaultChoices[0] || 'False',
+            submittedBy: 'editing-mode',
+            displayName: otherSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)',
+            ownAnswerLockedAt: otherSeatAnswer?.ownAnswerLockedAt || lockedAtIso,
+            guessedOtherLockedAt: otherSeatAnswer?.guessedOtherLockedAt || lockedAtIso,
+            completedAt: otherSeatAnswer?.completedAt || lockedAtIso,
+            autoSubmitted: true,
+            updatedAt: lockedAtIso,
+          };
+          return {
+            ...current,
+            currentRound: {
+              ...current.currentRound,
+              answers: {
+                ...(current.currentRound.answers || {}),
+                [currentSeat]: nextAnswer,
+                [otherSeat]: autoOtherAnswer,
+              },
+              updatedAt: lockedAtIso,
+            },
+            updatedAt: lockedAtIso,
+          };
+        });
+        return true;
+      }
+
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) throw new Error('Room is missing.');
+      previousLocalAnswer = game.currentRound.answers?.[currentSeat] || null;
+      const roundKey = stableRoundIdentityKey(game.currentRound || {});
+      optimisticRoundKey = roundKey;
+      setGame((current) =>
+        current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                answers: {
+                  ...(current.currentRound.answers || {}),
+                  [currentSeat]: {
+                    ...(current.currentRound.answers?.[currentSeat] || {}),
+                    [targetField]: lockedValue,
+                    submittedBy: user?.uid || '',
+                    displayName,
+                    [`${targetField}LockedAt`]: lockedAtIso,
+                    ...(normalizeTrueFalseChoice((current.currentRound.answers?.[currentSeat] || {})?.[otherField] || '') ? { completedAt } : {}),
+                    updatedAt: lockedAtIso,
+                  },
+                },
+              },
+            }
+          : current,
+      );
+      await updateDoc(gameRef, {
+        [`currentRound.answers.${currentSeat}.${targetField}`]: lockedValue,
+        [`currentRound.answers.${currentSeat}.submittedBy`]: user?.uid || '',
+        [`currentRound.answers.${currentSeat}.displayName`]: displayName,
+        [`currentRound.answers.${currentSeat}.${targetField}LockedAt`]: lockedAtIso,
+        ...(completedAt ? { [`currentRound.answers.${currentSeat}.completedAt`]: completedAt } : {}),
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return true;
+    } catch (error) {
+      if (optimisticRoundKey && currentSeat) {
+        setGame((current) =>
+          current?.currentRound && stableRoundIdentityKey(current.currentRound) === optimisticRoundKey
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  answers: (() => {
+                    const nextAnswers = { ...(current.currentRound.answers || {}) };
+                    if (previousLocalAnswer && Object.keys(previousLocalAnswer).length) nextAnswers[currentSeat] = previousLocalAnswer;
+                    else delete nextAnswers[currentSeat];
+                    return nextAnswers;
+                  })(),
+                },
+              }
+            : current,
+        );
+      }
+      setNotice(String(error?.message || 'Could not lock that True or False answer.'));
+      return null;
+    }
+  };
+
   const submitAnswer = async (draftOverride = null) => {
     let previousLocalAnswer;
     let optimisticPayload = null;
@@ -15837,11 +16777,13 @@ function ProductionApp() {
 
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
     const round = game?.currentRound || null;
     const roundKey = stableRoundIdentityKey(round || {});
     const settleKey = `${game?.id || ''}:${roundKey}:standard-reveal`;
     if (
       isQuizGame
+      || isTrueFalseGame
       || !round
       || round.status !== 'open'
       || !hasSubmittedRoundAnswer(round, 'jay')
@@ -15871,6 +16813,130 @@ function ProductionApp() {
     game?.currentRound?.number,
     game?.currentRound?.answers?.jay?.ownAnswer,
     game?.currentRound?.answers?.kim?.ownAnswer,
+  ]);
+
+  useEffect(() => {
+    const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const bothPlayersCompleted = hasCompletedTrueFalseRoundAnswer(round, 'jay') && hasCompletedTrueFalseRoundAnswer(round, 'kim');
+    const settleKey = `${game?.id || ''}:${roundKey}:truefalse-reveal:answers-complete`;
+    if (
+      !isTrueFalseGame
+      || !round
+      || round.status !== 'open'
+      || !bothPlayersCompleted
+      || (!isCurrentLocalTestGame && currentSeat !== coordinatorSeat)
+    ) {
+      if (trueFalseRevealSettleRef.current === settleKey) trueFalseRevealSettleRef.current = '';
+      return undefined;
+    }
+    if (trueFalseRevealSettleRef.current === settleKey) return undefined;
+    const penalties = getTrueFalsePenaltyMap(round);
+    trueFalseRevealSettleRef.current = settleKey;
+    if (isCurrentLocalTestGame) {
+      setGame((current) =>
+        current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'open'
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                penalties,
+                status: 'reveal',
+                updatedAt: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      return undefined;
+    }
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return undefined;
+    updateDoc(gameRef, {
+      'currentRound.penalties': penalties,
+      'currentRound.status': 'reveal',
+      'currentRound.updatedAt': serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {
+      trueFalseRevealSettleRef.current = '';
+    });
+    return undefined;
+  }, [
+    currentSeat,
+    firestore,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.answers?.jay?.ownAnswer,
+    game?.currentRound?.answers?.jay?.guessedOther,
+    game?.currentRound?.answers?.kim?.ownAnswer,
+    game?.currentRound?.answers?.kim?.guessedOther,
+    getTrueFalsePenaltyMap,
+    isCurrentLocalTestGame,
+  ]);
+
+  useEffect(() => {
+    const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    if (!isTrueFalseGame || !round || round.status !== 'open' || (!isCurrentLocalTestGame && currentSeat !== coordinatorSeat)) {
+      trueFalseTimeoutRevealRef.current = '';
+      return undefined;
+    }
+    const endsAtMs = Date.parse(round?.trueFalseTimerEndsAt || '');
+    if (!Number.isFinite(endsAtMs)) return undefined;
+    const timeoutKey = `${game?.id || ''}:${roundKey}:${round?.trueFalseTimerEndsAt || ''}`;
+    const remainingMs = Math.max(0, endsAtMs - Date.now());
+    const timeout = window.setTimeout(() => {
+      if (trueFalseTimeoutRevealRef.current === timeoutKey) return;
+      trueFalseTimeoutRevealRef.current = timeoutKey;
+      const penalties = getTrueFalsePenaltyMap(game?.currentRound || round || {});
+      if (isCurrentLocalTestGame) {
+        setGame((current) =>
+          current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'open'
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  penalties,
+                  status: 'reveal',
+                  updatedAt: new Date().toISOString(),
+                },
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        return;
+      }
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) return;
+      updateDoc(gameRef, {
+        'currentRound.penalties': penalties,
+        'currentRound.status': 'reveal',
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }).catch(() => null);
+    }, remainingMs + 10);
+    return () => window.clearTimeout(timeout);
+  }, [
+    currentSeat,
+    firestore,
+    game,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.trueFalseTimerEndsAt,
+    getTrueFalsePenaltyMap,
+    isCurrentLocalTestGame,
   ]);
 
   useEffect(() => {
@@ -15916,9 +16982,17 @@ function ProductionApp() {
   ]);
 
   const drawQuestion = (sourceGame = game, sourceRounds = rounds) => {
-    const sourceBankType = sourceGame?.questionBankType === 'quiz' ? 'quiz' : 'game';
-    const sourcePool = sourceBankType === 'quiz' ? quizBankQuestions : gameBankQuestions;
-    const retiredQuestionIds = sourceBankType === 'quiz' ? trackedUsedQuizQuestionIds : effectiveRetiredQuestionIds;
+    const sourceBankType = normalizeQuestionBankType(sourceGame?.questionBankType || getQuestionBankTypeForGameMode(sourceGame?.gameMode || 'standard'));
+    const sourcePool = sourceBankType === 'quiz'
+      ? quizBankQuestions
+      : sourceBankType === 'trueFalseGame'
+        ? trueFalseBankQuestions
+        : gameBankQuestions;
+    const retiredQuestionIds = sourceBankType === 'quiz'
+      ? trackedUsedQuizQuestionIds
+      : sourceBankType === 'trueFalseGame'
+        ? trackedUsedTrueFalseQuestionIds
+        : effectiveRetiredQuestionIds;
     const localUsedQuestionIds = mergeUniqueIds(
       sourceGame?.usedQuestionIds || [],
       (sourceRounds || []).map((round) => round.questionId),
@@ -15933,7 +17007,7 @@ function ProductionApp() {
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
-    const starterFallbackPool = sourceBankType === 'quiz'
+    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame'
       ? []
       : standardSelectableQuestions.filter(
           (question) =>
@@ -15972,12 +17046,13 @@ function ProductionApp() {
     withBusy(async () => {
       if (!game) throw new Error('No room open.');
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+      const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
       if (
         game.currentRound
         && game.currentRound.status !== 'reveal'
         && !(
-          hasSubmittedRoundAnswer(game.currentRound, 'jay')
-          && hasSubmittedRoundAnswer(game.currentRound, 'kim')
+          hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', game.currentRound, 'jay')
+          && hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', game.currentRound, 'kim')
         )
       ) {
         throw new Error('Both players must submit their answers before loading the next question.');
@@ -16000,7 +17075,14 @@ function ProductionApp() {
         let savedCurrentRound = false;
 
         if (game.currentRound) {
-          const penalties = isQuizGame ? { jay: 0, kim: 0 } : toPenaltyScores(penaltyDraft);
+          const penalties = isQuizGame
+            ? { jay: 0, kim: 0 }
+            : isTrueFalseGame
+              ? {
+                  jay: Number(game.currentRound.penalties?.jay || 0),
+                  kim: Number(game.currentRound.penalties?.kim || 0),
+                }
+              : toPenaltyScores(penaltyDraft);
           const roundResult = createRoundResult(
             {
               ...game.currentRound,
@@ -16011,8 +17093,12 @@ function ProductionApp() {
                 kim: game.currentRound.answers?.kim?.ownAnswer || '',
               },
               guessedAnswers: {
-                jay: game.currentRound.answers?.jay?.guessedOther || '',
-                kim: game.currentRound.answers?.kim?.guessedOther || '',
+                jay: isTrueFalseGame
+                  ? (game.currentRound.answers?.jay?.guessedOther || '')
+                  : (game.currentRound.answers?.jay?.guessedOther || ''),
+                kim: isTrueFalseGame
+                  ? (game.currentRound.answers?.kim?.guessedOther || '')
+                  : (game.currentRound.answers?.kim?.guessedOther || ''),
               },
               actualList: {
                 jay: parseAnswerList(game.currentRound.answers?.jay?.ownAnswer || ''),
@@ -16081,7 +17167,7 @@ function ProductionApp() {
             Number(nextGameState.currentRound?.number || 0) + 1,
             1,
           );
-          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, startOpen: true });
+          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, startOpen: true });
           nextGameState = {
             ...nextGameState,
             totals: nextTotals,
@@ -16118,7 +17204,14 @@ function ProductionApp() {
       let savedCurrentRound = false;
 
       if (game.currentRound) {
-        const penalties = isQuizGame ? { jay: 0, kim: 0 } : toPenaltyScores(penaltyDraft);
+        const penalties = isQuizGame
+          ? { jay: 0, kim: 0 }
+          : isTrueFalseGame
+            ? {
+                jay: Number(game.currentRound.penalties?.jay || 0),
+                kim: Number(game.currentRound.penalties?.kim || 0),
+              }
+            : toPenaltyScores(penaltyDraft);
 
         const roundResult = createRoundResult(
           {
@@ -16229,7 +17322,7 @@ function ProductionApp() {
           Number(game.currentRound?.number || 0) + 1,
           1,
         );
-        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, startOpen: true });
+        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, startOpen: true });
         const gamePatch = {
           ...(savedCurrentRound
             ? {
@@ -16939,6 +18032,38 @@ function ProductionApp() {
       setNotice('Quiz bank synced from Google Sheet.');
     }, 'Could not sync the quiz bank.');
 
+  const importTrueFalseSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'trueFalseGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = trueFalseBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new True or False questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. True or False bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice(`True or False import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import True or False questions from the Google Sheet.');
+
+  const syncTrueFalseSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: true,
+        targetBankType: 'trueFalseGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = trueFalseBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Synced True or False bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. True or False bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice('True or False bank synced from Google Sheet.');
+    }, 'Could not sync the True or False bank.');
+
   if (authLoading) {
     return (
       <main className="app production-app">
@@ -17101,8 +18226,10 @@ function ProductionApp() {
         onDismissGameInvite={dismissGameInviteAction}
         onSyncQuestionBank={syncSheet}
         onSyncQuizBank={syncQuizSheet}
+        onSyncTrueFalseBank={syncTrueFalseSheet}
         onImportQuestions={importSheet}
         onImportQuizQuestions={importQuizSheet}
+        onImportTrueFalseQuestions={importTrueFalseSheet}
         onResumeGame={resumeGame}
         onViewSummary={setSelectedGameId}
         onEndGame={requestEndGame}
@@ -17123,6 +18250,9 @@ function ProductionApp() {
         quizQuestionCount={quizBankCount}
         usedQuizQuestionCount={usedQuizQuestionCount}
         remainingQuizQuestionCount={remainingQuizQuestionCount}
+        trueFalseQuestionCount={trueFalseBankCount}
+        usedTrueFalseQuestionCount={usedTrueFalseQuestionCount}
+        remainingTrueFalseQuestionCount={remainingTrueFalseQuestionCount}
         unusedQuestionCount={unusedQuestionCount}
         syncNotice={syncNotice}
         gameInvites={incomingGameInvites}

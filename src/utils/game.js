@@ -573,6 +573,17 @@ export const normalizeRoundingMode = (value) => {
   return 'nearest';
 };
 
+export const normalizeQuestionBankType = (value = 'game') => {
+  const normalized = normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z]/g, '');
+  if (normalized === 'quiz') return 'quiz';
+  if (normalized === 'truefalsegame' || normalized === 'truefalse' || normalized === 'trueorfalse') {
+    return 'trueFalseGame';
+  }
+  return 'game';
+};
+
 export const createQuestionTemplate = (input = {}) => {
   const now = new Date().toISOString();
   const question = normalizeText(input.question ?? input.text ?? input.title);
@@ -581,7 +592,7 @@ export const createQuestionTemplate = (input = {}) => {
   const defaultAnswerType = normalizeAnswerType(input.defaultAnswerType, roundType);
   const multipleChoiceOptions = parseAnswerList(input.multipleChoiceOptions ?? input.options);
   const normalizedOptions = roundType === 'trueFalse' && !multipleChoiceOptions.length ? DEFAULT_TRUE_FALSE_OPTIONS : multipleChoiceOptions;
-  const bankType = normalizeText(input.bankType).toLowerCase() === 'quiz' ? 'quiz' : 'game';
+  const bankType = normalizeQuestionBankType(input.bankType);
   const correctAnswer = normalizeText(input.correctAnswer || '');
   const normalizedCorrectAnswer = normalizeText(input.normalizedCorrectAnswer || '')
     || normalizeText(correctAnswer).toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
