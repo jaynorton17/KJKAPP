@@ -934,8 +934,7 @@ const inferChoiceOptions = (round = {}) => {
   });
 };
 const isThisOrThatQuestionCompatible = (question = {}) =>
-  normalizeQuestionType(question?.roundType, 'text') === 'preference'
-  && getThisOrThatOptions(question).length >= 2;
+  getThisOrThatOptions(question).length >= 2;
 
 const decodeRankedAnswer = (value, count = 3) => {
   const rawValue = Array.isArray(value) ? value : String(value || '').split(/\n|,|;/);
