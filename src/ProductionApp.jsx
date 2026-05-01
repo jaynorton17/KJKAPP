@@ -13926,21 +13926,54 @@ function ProductionApp() {
           return true;
         }
         const gameRef = makeGameRef();
-        if (!gameRef) return null;
-        await runTransaction(firestore, async (transaction) => {
-          const snap = await transaction.get(gameRef);
-          if (!snap.exists()) throw new Error('Room not found.');
-          const data = snap.data() || {};
-          const round = data.currentRound || null;
-          if (!round || round.status !== 'reveal') return;
-          const liveSeat = seatForUid(data, user?.uid) || seat;
-          if (!liveSeat) throw new Error('Could not determine your player seat.');
-          transaction.update(gameRef, {
+        if (!gameRef || !firestore) return null;
+        const liveSeat = seatForUid(game, user?.uid) || seat;
+        if (!liveSeat) throw new Error('Could not determine your player seat.');
+        const previousNextReady = {
+          jay: Boolean(game.currentRound?.nextReady?.jay),
+          kim: Boolean(game.currentRound?.nextReady?.kim),
+        };
+        if (previousNextReady[liveSeat]) return true;
+        const roundKey = stableRoundIdentityKey(game.currentRound || {});
+        const optimisticNextReady = {
+          ...previousNextReady,
+          [liveSeat]: true,
+        };
+        setGame((current) =>
+          current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'reveal'
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  nextReady: optimisticNextReady,
+                  updatedAt: new Date().toISOString(),
+                },
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        try {
+          await updateDoc(gameRef, {
             [`currentRound.nextReady.${liveSeat}`]: true,
             'currentRound.updatedAt': serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
-        });
+        } catch (error) {
+          setGame((current) =>
+            current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'reveal'
+              ? {
+                  ...current,
+                  currentRound: {
+                    ...current.currentRound,
+                    nextReady: previousNextReady,
+                    updatedAt: new Date().toISOString(),
+                  },
+                  updatedAt: new Date().toISOString(),
+                }
+              : current,
+          );
+          throw error;
+        }
         return true;
       }
 
@@ -14934,10 +14967,11 @@ function ProductionApp() {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
     const roundKey = stableRoundIdentityKey(game?.currentRound || {});
     const ready = game?.currentRound?.nextReady || {};
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
     const advanceKey = `${game?.id || ''}:${roundKey}:${Boolean(ready.jay)}:${Boolean(ready.kim)}`;
     if (
       !isQuizGame
-      || inferredRole !== 'host'
+      || currentSeat !== coordinatorSeat
       || !game?.currentRound
       || game.currentRound.status !== 'reveal'
       || !ready.jay
@@ -14961,7 +14995,8 @@ function ProductionApp() {
     game?.currentRound?.number,
     game?.currentRound?.nextReady?.jay,
     game?.currentRound?.nextReady?.kim,
-    inferredRole,
+    game?.hostUid,
+    currentSeat,
     isBusy,
   ]);
 
