@@ -11010,7 +11010,7 @@ function GameRoomView({
 	                  baseTotals={baseTotals}
 	                  liveTotals={liveTotals}
 	                  onSubmitAnswer={onSubmitAnswer}
-	                  onLockTrueFalseAnswer={lockTrueFalseAnswerField}
+	                  onLockTrueFalseAnswer={onLockTrueFalseAnswer}
 	                  onMarkReady={onMarkReady}
 	                  onRequestQuizOverride={onRequestQuizOverride}
 	                  onRespondQuizOverride={onRespondQuizOverride}
@@ -11339,7 +11339,7 @@ function GameRoomView({
 	              baseTotals={baseTotals}
 	              liveTotals={liveTotals}
 	              onSubmitAnswer={onSubmitAnswer}
-	              onLockTrueFalseAnswer={lockTrueFalseAnswerField}
+	              onLockTrueFalseAnswer={onLockTrueFalseAnswer}
 	              onMarkReady={onMarkReady}
 	              onRequestQuizOverride={onRequestQuizOverride}
 	              onRespondQuizOverride={onRespondQuizOverride}
