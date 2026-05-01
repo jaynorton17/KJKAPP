@@ -2717,7 +2717,6 @@ function LobbyScreen({
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
   const [selectedRoundTypes, setSelectedRoundTypes] = useState([]);
   const [selectedCategories, setSelectedCategories] = useState([]);
-  const [activeCreateGameMode, setActiveCreateGameMode] = useState('classic');
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isBalanceEditorOpen, setIsBalanceEditorOpen] = useState(false);
   const [balanceDrafts, setBalanceDrafts] = useState({ jay: '0', kim: '0' });
@@ -2726,7 +2725,6 @@ function LobbyScreen({
   const [editingNoteDraft, setEditingNoteDraft] = useState('');
   const [mobileLobbyChatOpen, setMobileLobbyChatOpen] = useState(false);
   const dashboardMenuRef = useRef(null);
-  const createModeTouchStartXRef = useRef(null);
   const isMobileDashboardNav = useMediaQuery('(max-width: 900px)');
   const pendingInviteCount = useMemo(() => {
     if (!Array.isArray(gameInvites)) return 0;
@@ -2742,14 +2740,6 @@ function LobbyScreen({
   ];
   const typeOptions = ROUND_TYPES.map((type) => ({ value: type.id, label: type.shortLabel }));
   const categoryOptions = questionCategories?.length ? questionCategories : DEFAULT_CATEGORIES.map((category) => category.name);
-  const createGameModeCards = [
-    { id: 'classic', label: 'Classic Game Mode', statusText: `${questionCount} ready` },
-    { id: 'quiz', label: 'Quick Fire Quiz', statusText: `${quizQuestionCount} quiz ready` },
-  ];
-  const activeCreateGameModeIndex = Math.max(0, createGameModeCards.findIndex((card) => card.id === activeCreateGameMode));
-  const activeCreateGameModeCard = createGameModeCards[activeCreateGameModeIndex] || createGameModeCards[0];
-  const requiredCreateCode = normalizeJoinCode(createCode);
-  const canCreateGame = Boolean(requiredCreateCode);
   const currentBalanceDrafts = useMemo(() => ({
     jay: String(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0)),
     kim: String(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0)),
@@ -2768,7 +2758,6 @@ function LobbyScreen({
 
   const handleCreateGame = () =>
     onCreateGame({
-      createCode: requiredCreateCode,
       mode: createMode,
       gameMode: 'standard',
       roundTypes: createMode === 'custom' ? selectedRoundTypes : [],
@@ -2777,36 +2766,12 @@ function LobbyScreen({
 
   const handleCreateAndInviteGame = () =>
     onCreateGame({
-      createCode: requiredCreateCode,
       mode: createMode,
       gameMode: 'standard',
       roundTypes: createMode === 'custom' ? selectedRoundTypes : [],
       categories: createMode === 'custom' ? selectedCategories : [],
       sendInvite: true,
     });
-
-  const setCreateGameMode = (nextMode) => {
-    if (!createGameModeCards.some((card) => card.id === nextMode)) return;
-    setActiveCreateGameMode(nextMode);
-  };
-
-  const shiftCreateGameMode = (direction = 1) => {
-    const nextIndex = (activeCreateGameModeIndex + direction + createGameModeCards.length) % createGameModeCards.length;
-    setActiveCreateGameMode(createGameModeCards[nextIndex]?.id || createGameModeCards[0].id);
-  };
-
-  const handleCreateModeTouchStart = (event) => {
-    createModeTouchStartXRef.current = event.changedTouches?.[0]?.clientX ?? null;
-  };
-
-  const handleCreateModeTouchEnd = (event) => {
-    if (createModeTouchStartXRef.current === null) return;
-    const endX = event.changedTouches?.[0]?.clientX ?? createModeTouchStartXRef.current;
-    const deltaX = endX - createModeTouchStartXRef.current;
-    createModeTouchStartXRef.current = null;
-    if (Math.abs(deltaX) < 40) return;
-    shiftCreateGameMode(deltaX < 0 ? 1 : -1);
-  };
 
   const closeDashboardMenu = () => {
     dashboardMenuRef.current?.removeAttribute('open');
@@ -3356,234 +3321,94 @@ function LobbyScreen({
               </section>
             ) : null}
             <div className="game-lobby-grid">
-              <section className="panel lobby-panel lobby-panel--lobby create-game-card create-game-card--carousel">
+              <section className="panel lobby-panel lobby-panel--lobby create-game-card">
                 <div className="panel-heading">
                   <div>
                     <p className="eyebrow">Game Lobby</p>
                     <h2>Create New Game</h2>
                   </div>
-                  <span className="status-pill">{activeCreateGameModeCard.statusText}</span>
+                  <span className="status-pill">{questionCount} ready</span>
+                </div>
+
+                <div className="create-mode-row">
+                  <Button className={`ghost-button compact ${createMode === 'random' ? 'is-on' : ''}`} onClick={() => setCreateMode('random')}>
+                    Pick X Random Questions
+                  </Button>
+                  <Button className={`ghost-button compact ${createMode === 'custom' ? 'is-on' : ''}`} onClick={() => setCreateMode('custom')}>
+                    Select My Own
+                  </Button>
                 </div>
 
                 <div className="lobby-actions lobby-actions--stack">
                   <label className="field">
-                    <span>Game Code</span>
-                    <input value={createCode} onChange={(event) => onCreateCodeChange(normalizeJoinCode(event.target.value))} placeholder="ABCD12" />
+                    <span>Game Name</span>
+                    <input value={gameName} onChange={(event) => onGameNameChange(event.target.value)} placeholder="Jay vs Kim showdown" />
+                  </label>
+                  <label className="field">
+                    <span>Number of Questions</span>
+                    <input type="number" inputMode="numeric" min="1" value={gameQuestionCount} onChange={(event) => onGameQuestionCountChange(event.target.value)} placeholder="10" />
+                  </label>
+                  <label className="field">
+                    <span>Host Code Seed</span>
+                    <input value={createCode} onChange={(event) => onCreateCodeChange(normalizeJoinCode(event.target.value))} placeholder="Optional" />
                   </label>
                 </div>
-                <p className="field-note">Enter a game code before creating a Classic Game Mode or Quick Fire Quiz room.</p>
 
-                <div className="create-game-carousel-shell">
-                  <div className="create-game-carousel-toolbar">
-                    <Button
-                      type="button"
-                      className="ghost-button compact create-game-carousel-arrow"
-                      onClick={() => shiftCreateGameMode(-1)}
-                      aria-label="Show previous game mode"
-                    >
-                      {'<'}
-                    </Button>
-                    <div className="create-game-carousel-tabs" role="tablist" aria-label="Create game modes">
-                      {createGameModeCards.map((card) => (
-                        <button
-                          key={card.id}
-                          type="button"
-                          role="tab"
-                          aria-selected={activeCreateGameMode === card.id}
-                          className={`dashboard-pill tab-button create-game-carousel-tab ${activeCreateGameMode === card.id ? 'is-active' : ''}`}
-                          onClick={() => setCreateGameMode(card.id)}
-                        >
-                          {card.label}
-                        </button>
-                      ))}
-                    </div>
-                    <Button
-                      type="button"
-                      className="ghost-button compact create-game-carousel-arrow"
-                      onClick={() => shiftCreateGameMode(1)}
-                      aria-label="Show next game mode"
-                    >
-                      {'>'}
-                    </Button>
-                  </div>
-                  <p className="field-note create-game-carousel-note">Swipe left or right, or use the arrows, to switch between game modes.</p>
-
-                  <div
-                    className="create-game-carousel-stage"
-                    onTouchStart={handleCreateModeTouchStart}
-                    onTouchEnd={handleCreateModeTouchEnd}
-                    onTouchCancel={() => {
-                      createModeTouchStartXRef.current = null;
-                    }}
-                  >
-                    {activeCreateGameMode === 'quiz' ? (
-                      <div className="create-game-mode-panel">
-                        <div className="mini-heading">
-                          <div>
-                            <span>Quick Fire</span>
-                            <h3>Quick Fire Quiz</h3>
-                          </div>
-                          <span className="status-pill">{quizQuestionCount} ready</span>
-                        </div>
-                        <p className="panel-copy">Start a speed quiz game from the Quiz sheet question set.</p>
-                        <div className="quiz-card-hero" aria-hidden="true">
-                          <div className="quiz-card-hero-main">
-                            <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
-                              <defs>
-                                <linearGradient id="quiz-card-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                                  <stop offset="0%" stopColor="#7ad8ff" />
-                                  <stop offset="100%" stopColor="#4f7bff" />
-                                </linearGradient>
-                              </defs>
-                              <circle cx="60" cy="60" r="52" fill="rgba(6,16,34,0.72)" stroke="url(#quiz-card-gradient)" strokeWidth="4" />
-                              <path d="M34 56h52M34 70h36" stroke="#bfe1ff" strokeWidth="4" strokeLinecap="round" />
-                              <circle cx="86" cy="70" r="7" fill="#9be5a6" />
-                              <path d="M83.5 70.2 85.5 72.4 89 67.8" stroke="#0f3117" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                          </div>
-                          <div className="quiz-card-hero-meta">
-                            <strong>10s Timer</strong>
-                            <small>Fast answers score higher</small>
-                          </div>
-                          <div className="quiz-card-hero-meta">
-                            <strong>Live Quiz</strong>
-                            <small>Separate from classic game points</small>
-                          </div>
-                        </div>
-                        <label className="field">
-                          <span>Number of Quiz Questions</span>
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            min="1"
-                            value={quizQuestionCountDraft}
-                            onChange={(event) => setQuizQuestionCountDraft(event.target.value)}
-                            placeholder="10"
-                          />
-                        </label>
-                        <div className="button-row lobby-create-actions">
-                          <Button
-                            className="primary-button lobby-primary-button"
-                            onClick={() =>
-                              onCreateGame({
-                                createCode: requiredCreateCode,
-                                mode: 'random',
-                                gameMode: 'quiz',
-                                roundTypes: [],
-                                categories: [],
-                                requestedQuestionCount: quizQuestionCountDraft,
-                              })}
-                            disabled={isBusy || !canCreateGame}
-                          >
-                            Create Quick Fire Quiz
-                          </Button>
-                          <Button
-                            className="ghost-button lobby-secondary-button"
-                            onClick={() =>
-                              onCreateGame({
-                                createCode: requiredCreateCode,
-                                mode: 'random',
-                                gameMode: 'quiz',
-                                roundTypes: [],
-                                categories: [],
-                                sendInvite: true,
-                                requestedQuestionCount: quizQuestionCountDraft,
-                              })}
-                            disabled={isBusy || !canCreateGame}
-                          >
-                            Create + Invite
-                          </Button>
+                {createMode === 'custom' ? (
+                  <div className="create-filters-grid">
+                    <section className="filter-card">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Question Types</span>
+                          <h3>Choose formats</h3>
                         </div>
                       </div>
-                    ) : (
-                      <div className="create-game-mode-panel">
-                        <div className="mini-heading">
-                          <div>
-                            <span>Classic</span>
-                            <h3>Classic Game Mode</h3>
-                          </div>
-                          <span className="status-pill">{questionCount} ready</span>
-                        </div>
-                        <p className="panel-copy">Create the standard Jay vs Kim room with penalty points, answer panels, and guess panels.</p>
-                        <div className="create-mode-row">
-                          <Button className={`ghost-button compact ${createMode === 'random' ? 'is-on' : ''}`} onClick={() => setCreateMode('random')}>
-                            Pick X Random Questions
-                          </Button>
-                          <Button className={`ghost-button compact ${createMode === 'custom' ? 'is-on' : ''}`} onClick={() => setCreateMode('custom')}>
-                            Select My Own
-                          </Button>
-                        </div>
+                      <div className="filter-chip-grid">
+                        {typeOptions.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={`filter-chip ${selectedRoundTypes.includes(option.value) ? 'is-on' : ''}`}
+                            onClick={() => toggleFilterValue(option.value, selectedRoundTypes, setSelectedRoundTypes)}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
 
-                        <div className="lobby-actions lobby-actions--stack">
-                          <label className="field">
-                            <span>Game Name</span>
-                            <input value={gameName} onChange={(event) => onGameNameChange(event.target.value)} placeholder="Jay vs Kim showdown" />
-                          </label>
-                          <label className="field">
-                            <span>Number of Questions</span>
-                            <input type="number" inputMode="numeric" min="1" value={gameQuestionCount} onChange={(event) => onGameQuestionCountChange(event.target.value)} placeholder="10" />
-                          </label>
-                        </div>
-
-                        {createMode === 'custom' ? (
-                          <div className="create-filters-grid">
-                            <section className="filter-card">
-                              <div className="mini-heading">
-                                <div>
-                                  <span>Question Types</span>
-                                  <h3>Choose formats</h3>
-                                </div>
-                              </div>
-                              <div className="filter-chip-grid">
-                                {typeOptions.map((option) => (
-                                  <button
-                                    key={option.value}
-                                    type="button"
-                                    className={`filter-chip ${selectedRoundTypes.includes(option.value) ? 'is-on' : ''}`}
-                                    onClick={() => toggleFilterValue(option.value, selectedRoundTypes, setSelectedRoundTypes)}
-                                  >
-                                    {option.label}
-                                  </button>
-                                ))}
-                              </div>
-                            </section>
-
-                            <section className="filter-card">
-                              <div className="mini-heading">
-                                <div>
-                                  <span>Categories</span>
-                                  <h3>Choose themes</h3>
-                                </div>
-                              </div>
-                              <div className="filter-chip-grid filter-chip-grid--categories">
-                                {categoryOptions.map((category) => (
-                                  <button
-                                    key={category}
-                                    type="button"
-                                    className={`filter-chip ${selectedCategories.includes(category) ? 'is-on' : ''}`}
-                                    onClick={() => toggleFilterValue(category, selectedCategories, setSelectedCategories)}
-                                  >
-                                    {category}
-                                  </button>
-                                ))}
-                              </div>
-                            </section>
-                          </div>
-                        ) : (
-                          <p className="panel-copy">Create instantly with a random pack of unused questions for Jay vs Kim.</p>
-                        )}
-
-                        <div className="button-row lobby-create-actions">
-                          <Button type="button" className="primary-button lobby-primary-button" onClick={handleCreateGame} disabled={isBusy || !canCreateGame}>
-                            Create Classic Game
-                          </Button>
-                          <Button type="button" className="ghost-button lobby-secondary-button" onClick={handleCreateAndInviteGame} disabled={isBusy || !canCreateGame}>
-                            Create + Send Game Request
-                          </Button>
+                    <section className="filter-card">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Categories</span>
+                          <h3>Choose themes</h3>
                         </div>
                       </div>
-                    )}
+                      <div className="filter-chip-grid filter-chip-grid--categories">
+                        {categoryOptions.map((category) => (
+                          <button
+                            key={category}
+                            type="button"
+                            className={`filter-chip ${selectedCategories.includes(category) ? 'is-on' : ''}`}
+                            onClick={() => toggleFilterValue(category, selectedCategories, setSelectedCategories)}
+                          >
+                            {category}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
                   </div>
+                ) : (
+                  <p className="panel-copy">Create instantly with a random pack of unused questions for Jay vs Kim.</p>
+                )}
+
+                <div className="button-row lobby-create-actions">
+                  <Button type="button" className="primary-button lobby-primary-button" onClick={handleCreateGame} disabled={isBusy}>
+                    Create New Game
+                  </Button>
+                  <Button type="button" className="ghost-button lobby-secondary-button" onClick={handleCreateAndInviteGame} disabled={isBusy}>
+                    Create + Send Game Request
+                  </Button>
                 </div>
 
                 <div className="lobby-join-inline">
@@ -3599,6 +3424,83 @@ function LobbyScreen({
                   </div>
                 </div>
               </section>
+
+	              <section className="panel lobby-panel lobby-panel--lobby join-game-card">
+	                <div className="panel-heading">
+	                  <div>
+	                    <p className="eyebrow">Quick Fire</p>
+	                    <h2>Quiz Mode</h2>
+	                  </div>
+	                </div>
+	                <p className="panel-copy">Start a speed quiz game from the Quiz sheet question set.</p>
+                <div className="quiz-card-hero" aria-hidden="true">
+                  <div className="quiz-card-hero-main">
+                    <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
+                      <defs>
+                        <linearGradient id="quiz-card-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor="#7ad8ff" />
+                          <stop offset="100%" stopColor="#4f7bff" />
+                        </linearGradient>
+                      </defs>
+                      <circle cx="60" cy="60" r="52" fill="rgba(6,16,34,0.72)" stroke="url(#quiz-card-gradient)" strokeWidth="4" />
+                      <path d="M34 56h52M34 70h36" stroke="#bfe1ff" strokeWidth="4" strokeLinecap="round" />
+                      <circle cx="86" cy="70" r="7" fill="#9be5a6" />
+                      <path d="M83.5 70.2 85.5 72.4 89 67.8" stroke="#0f3117" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                  <div className="quiz-card-hero-meta">
+                    <strong>10s Timer</strong>
+                    <small>Fast answers score higher</small>
+                  </div>
+                  <div className="quiz-card-hero-meta">
+                    <strong>Live Quiz</strong>
+                    <small>Separate from normal game points</small>
+	                  </div>
+	                </div>
+	                <label className="field">
+	                  <span>Number of Quiz Questions</span>
+	                  <input
+	                    type="number"
+	                    inputMode="numeric"
+	                    min="1"
+	                    value={quizQuestionCountDraft}
+	                    onChange={(event) => setQuizQuestionCountDraft(event.target.value)}
+	                    placeholder="10"
+	                  />
+	                </label>
+	                <div className="button-row">
+	                  <Button
+	                    className="primary-button compact"
+	                    onClick={() =>
+	                      onCreateGame({
+	                        mode: 'random',
+	                        gameMode: 'quiz',
+	                        roundTypes: [],
+	                        categories: [],
+	                        requestedQuestionCount: quizQuestionCountDraft,
+	                      })}
+	                    disabled={isBusy}
+	                  >
+	                    Create Quiz Game
+	                  </Button>
+	                  <Button
+	                    className="ghost-button compact"
+	                    onClick={() =>
+	                      onCreateGame({
+	                        mode: 'random',
+	                        gameMode: 'quiz',
+	                        roundTypes: [],
+	                        categories: [],
+	                        sendInvite: true,
+	                        requestedQuestionCount: quizQuestionCountDraft,
+	                      })}
+	                    disabled={isBusy}
+	                  >
+	                    Create + Invite
+	                  </Button>
+	                </div>
+	              </section>
+            
 
                 {!isMobileDashboardNav ? (
                   <section className="panel lobby-panel lobby-panel--lobby lobby-chat-card">
@@ -13108,14 +13010,12 @@ function ProductionApp() {
       setLocalEndedGameSummary(null);
       if (!firestore || !user) throw new Error('Firebase is not configured.');
       const gameMode = options.gameMode === 'quiz' ? 'quiz' : 'standard';
-      const requestedCreateCode = normalizeJoinCode(options.createCode ?? lobbyCode);
-      if (!requestedCreateCode) throw new Error('Enter a game code before creating a game.');
       const trimmedGameName = normalizeText(lobbyGameName);
       const effectiveGameName = trimmedGameName || (gameMode === 'quiz' ? 'Quick Fire Quiz' : 'Jay vs Kim');
       console.debug('Create New Game clicked', {
         gameName: effectiveGameName || lobbyGameName,
         requestedQuestionCount: options.requestedQuestionCount ?? lobbyQuestionCount,
-        createCode: requestedCreateCode,
+        createCode: lobbyCode,
         mode: options.mode || 'random',
         gameMode,
         roundTypes: options.roundTypes || [],
@@ -13163,7 +13063,7 @@ function ProductionApp() {
           }
         }
         const localGameId = `${TEST_GAME_PREFIX}${makeId('local')}`;
-        const localJoinCode = requestedCreateCode;
+        const localJoinCode = `TEST${makeJoinCode().slice(0, 2)}`;
         const hostName = profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player';
         const localOtherPlayerName = inviteTargetSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)';
         const createdAt = new Date().toISOString();
@@ -13241,7 +13141,7 @@ function ProductionApp() {
       }
 
       const gameRef = doc(firestore, 'games', makeId('game'));
-      const joinCode = await makeUniqueJoinCode(requestedCreateCode);
+      const joinCode = await makeUniqueJoinCode(lobbyCode);
       const openingGameState = {
         id: gameRef.id,
         joinCode,
