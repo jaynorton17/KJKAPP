@@ -2969,6 +2969,10 @@ function LobbyScreen({
     });
 
   const setLobbyTileFlipped = (cardId, nextValue) => {
+    if (typeof document !== 'undefined') {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLElement) activeElement.blur();
+    }
     setFlippedLobbyTiles((current) => {
       if (current?.[cardId] === nextValue) return current;
       return {
@@ -16243,7 +16247,13 @@ function ProductionApp() {
         if (!joined) throw new Error('Both players need to join before the first Hold’em hand can start.');
         const actingSeat = seatForUid(gameData, user?.uid) || currentSeat;
         if (!actingSeat) throw new Error('Could not determine your Hold’em seat.');
-        if ((gameData?.holdemState?.sessionStatus || '') === 'hand_live') return 'already-live';
+        if ((gameData?.holdemState?.sessionStatus || '') === 'hand_live') {
+          return {
+            status: 'already-live',
+            holdemState: gameData?.holdemState || null,
+            holdemStats: gameData?.holdemStats || defaultHoldemStats(),
+          };
+        }
         let baseBalances = gameData?.holdemState?.lastSettledBalances || null;
         if (!hasHoldemBankrollSnapshot(baseBalances)) {
           const jayRef = doc(firestore, 'users', fixedPlayerUids.jay);
@@ -16262,7 +16272,17 @@ function ProductionApp() {
           jay: Boolean(sourceState?.dealReadyBySeat?.jay),
           kim: Boolean(sourceState?.dealReadyBySeat?.kim),
         };
-        if (currentReadyBySeat[actingSeat] && !(currentReadyBySeat.jay && currentReadyBySeat.kim)) return 'already-ready';
+        if (currentReadyBySeat[actingSeat] && !(currentReadyBySeat.jay && currentReadyBySeat.kim)) {
+          return {
+            status: 'already-ready',
+            holdemState: {
+              ...sourceState,
+              dealReadyBySeat: currentReadyBySeat,
+              statusMessage: buildHoldemDealReadyStatusMessage(currentReadyBySeat, actingSeat),
+            },
+            holdemStats: gameData?.holdemStats || defaultHoldemStats(),
+          };
+        }
         const nextReadyBySeat = {
           ...currentReadyBySeat,
           [actingSeat]: true,
@@ -16274,7 +16294,11 @@ function ProductionApp() {
             ...buildHoldemSummaryFields(holdemState, gameData?.holdemStats || defaultHoldemStats()),
             updatedAt: serverTimestamp(),
           }, { merge: true });
-          return 'dealt';
+          return {
+            status: 'dealt',
+            holdemState,
+            holdemStats: gameData?.holdemStats || defaultHoldemStats(),
+          };
         }
         const nextHoldemState = {
           ...sourceState,
@@ -16286,14 +16310,33 @@ function ProductionApp() {
           holdemState: nextHoldemState,
           updatedAt: serverTimestamp(),
         }, { merge: true });
-        return 'ready';
+        return {
+          status: 'ready',
+          holdemState: nextHoldemState,
+          holdemStats: gameData?.holdemStats || defaultHoldemStats(),
+        };
       });
+      if (dealResult?.holdemState) {
+        const committedAtIso = new Date().toISOString();
+        setGame((current) => {
+          if (!current || current.id !== game.id) return current;
+          return {
+            ...current,
+            holdemState: {
+              ...dealResult.holdemState,
+              updatedAt: committedAtIso,
+            },
+            ...buildHoldemSummaryFields(dealResult.holdemState, dealResult.holdemStats || current.holdemStats || defaultHoldemStats()),
+            updatedAt: committedAtIso,
+          };
+        });
+      }
       setNotice(
-        dealResult === 'dealt'
+        dealResult?.status === 'dealt'
           ? 'Texas Hold’em hand dealt.'
-          : dealResult === 'already-live'
+          : dealResult?.status === 'already-live'
             ? 'The hand is already live.'
-            : dealResult === 'already-ready'
+            : dealResult?.status === 'already-ready'
               ? 'You are already ready. Waiting for the other player.'
               : 'Hold’em deal ready updated.',
       );
