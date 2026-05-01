@@ -12981,7 +12981,13 @@ function ProductionApp() {
       ? query(collection(firestore, 'gameInvites'), where('invitedForUserId', '==', inviteTargetIds[0]))
       : query(collection(firestore, 'gameInvites'), where('invitedForUserId', 'in', inviteTargetIds));
     const unsubscribe = onSnapshot(inviteRef, (snapshot) => {
-      setGameInvites(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })).sort(sortByNewest));
+      setGameInvites(snapshot.docs.map((entry) => ({
+        id: entry.id,
+        source: 'collection',
+        collectionInviteId: entry.id,
+        roomInviteId: '',
+        ...entry.data(),
+      })).sort(sortByNewest));
     }, (error) => debugRoom('gameInvitesSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
   }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession]);
@@ -13010,9 +13016,12 @@ function ProductionApp() {
         const data = entry.data() || {};
         const inviteSeat = data.pendingInviteForSeat || inferredInviteSeat || 'jay';
         const inviteUserId = data.pendingInviteForUserId || playerIdForSeat(inviteSeat);
+        const roomInviteId = `room-invite:${buildGameRoomInviteKey(entry.id, inviteUserId, inviteSeat)}`;
         return {
-          id: `room-invite:${buildGameRoomInviteKey(entry.id, inviteUserId, inviteSeat)}`,
+          id: roomInviteId,
           source: 'room',
+          roomInviteId,
+          collectionInviteId: '',
           gameId: entry.id,
           roomCode: gameRoomCodeForLookup(data) || normalizeJoinCode(data?.joinCode || data?.code || ''),
           joinCode: gameRoomCodeForLookup(data) || normalizeJoinCode(data?.joinCode || data?.code || ''),
@@ -13367,15 +13376,28 @@ function ProductionApp() {
   const incomingGameInvites = useMemo(
     () => {
       const mergedInvites = new Map();
-      [...roomGameInvites, ...gameInvites].forEach((invite) => {
+      roomGameInvites.forEach((invite) => {
+        const key = invite.gameId || invite.id || '';
+        if (!key) return;
+        mergedInvites.set(key, {
+          ...invite,
+          id: invite.roomInviteId || invite.id || '',
+          source: 'room',
+          roomInviteId: invite.roomInviteId || invite.id || '',
+          collectionInviteId: invite.collectionInviteId || '',
+        });
+      });
+      gameInvites.forEach((invite) => {
         const key = invite.gameId || invite.id || '';
         if (!key) return;
         const existing = mergedInvites.get(key) || {};
         mergedInvites.set(key, {
           ...existing,
           ...invite,
-          id: existing.id || invite.id,
-          source: existing.source === 'collection' ? existing.source : (invite.source || existing.source || 'collection'),
+          id: invite.collectionInviteId || invite.id || existing.id || '',
+          source: 'collection',
+          roomInviteId: existing.roomInviteId || invite.roomInviteId || '',
+          collectionInviteId: invite.collectionInviteId || invite.id || existing.collectionInviteId || '',
         });
       });
       return [...mergedInvites.values()]
@@ -14737,18 +14759,28 @@ function ProductionApp() {
     const gameDoc = { id: snapshot.id, ...snapshot.data() };
     const pairId = gameDoc.pairId || buildPairKey();
     const rollback = getLifetimeRollbackForGame(gameDoc);
+    const shouldRollbackLifetimePoints = Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0;
     const deletedPlayedQuestionIds = getPlayedQuestionIdsForGame(gameDoc);
+    const cachedPairGames = gameLibrary.filter((entry) => entry?.id && !isLocalTestGameId(entry.id));
     const [allPairGamesSnap, jaySnap, kimSnap, roundDocs, chatDocs, playerDocs, inviteDocs] = await Promise.all([
-      getDocs(query(collection(firestore, 'games'), where('pairId', '==', pairId))),
-      getDoc(doc(firestore, 'users', fixedPlayerUids.jay)),
-      getDoc(doc(firestore, 'users', fixedPlayerUids.kim)),
+      cachedPairGames.length
+        ? Promise.resolve(null)
+        : getDocs(query(collection(firestore, 'games'), where('pairId', '==', pairId))),
+      shouldRollbackLifetimePoints
+        ? getDoc(doc(firestore, 'users', fixedPlayerUids.jay))
+        : Promise.resolve(null),
+      shouldRollbackLifetimePoints
+        ? getDoc(doc(firestore, 'users', fixedPlayerUids.kim))
+        : Promise.resolve(null),
       getDocs(collection(gameRef, 'rounds')),
       getDocs(collection(gameRef, 'chatMessages')),
       getDocs(collection(gameRef, 'players')),
       getDocs(query(collection(firestore, 'gameInvites'), where('gameId', '==', targetGameId))),
     ]);
-    const remainingGames = (allPairGamesSnap?.docs || [])
-      .map((entry) => ({ id: entry.id, ...entry.data() }))
+    const pairGames = cachedPairGames.length
+      ? cachedPairGames
+      : (allPairGamesSnap?.docs || []).map((entry) => ({ id: entry.id, ...entry.data() }));
+    const remainingGames = pairGames
       .filter((entry) => entry.id !== targetGameId);
     const remainingPairPlayedQuestionIds = mergeUniqueIds(
       ...remainingGames.map((entry) => getTrueFalseRetiredQuestionIdsForGame(entry)),
@@ -14762,8 +14794,8 @@ function ProductionApp() {
       (questionId) => questionId && !remainingPairPlayedQuestionIds.includes(questionId),
     );
     const questionsToRestore = bankQuestions.filter((question) => deletedQuestionRestoreIds.includes(question.id));
-    const currentJayBalance = Number(jaySnap.exists() ? jaySnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.jay?.lifetimePenaltyPoints || 0);
-    const currentKimBalance = Number(kimSnap.exists() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.kim?.lifetimePenaltyPoints || 0);
+    const currentJayBalance = Number(jaySnap?.exists?.() ? jaySnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.jay?.lifetimePenaltyPoints || 0);
+    const currentKimBalance = Number(kimSnap?.exists?.() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.kim?.lifetimePenaltyPoints || 0);
     const nextJayBalance = Math.max(0, currentJayBalance + Number(rollback.jay || 0));
     const nextKimBalance = Math.max(0, currentKimBalance + Number(rollback.kim || 0));
     const batch = writeBatch(firestore);
@@ -15462,6 +15494,8 @@ function ProductionApp() {
         liveGameId: game?.id || '',
         profileActiveGameId: profile?.activeGameId || '',
       });
+      setConfirmAction(null);
+      setNotice('Could not find that game.');
       return;
     }
 
@@ -15490,6 +15524,7 @@ function ProductionApp() {
 
     const preserveBusyState = isBusy;
     if (!preserveBusyState) setIsBusy(true);
+    setConfirmAction(null);
     try {
       if (isLocalTestGameTarget(actionToConfirm.gameId)) {
         const endingCurrentRoom = isCurrentGameSession(actionToConfirm.gameId);
@@ -15512,7 +15547,6 @@ function ProductionApp() {
           localStorage.removeItem(activeGameKey);
           setNotice('Test game cleared locally.');
         }
-        setConfirmAction(null);
         console.info('[KJK ROOM] Confirm game action completed for local test game', actionToConfirm);
         return;
       }
@@ -15554,16 +15588,14 @@ function ProductionApp() {
           setNotice('Game ended. It has moved to Previous Games.');
         }
       } else if (actionToConfirm.type === 'delete') {
-        const target = gameLibrary.find((entry) => entry.id === actionToConfirm.gameId);
-        if (target?.status === 'active' || target?.status === 'paused') {
-          await endGameById(actionToConfirm.gameId, user?.uid || '');
-        }
         await deleteGameById(actionToConfirm.gameId);
         setGameLibrary((current) => current.filter((entry) => entry?.id !== actionToConfirm.gameId));
         setLocalArchivedGames((current) => current.filter((entry) => entry?.id !== actionToConfirm.gameId));
         setGameInvites((current) => current.filter((entry) => entry?.gameId !== actionToConfirm.gameId));
         setRoomGameInvites((current) => current.filter((entry) => entry?.gameId !== actionToConfirm.gameId));
         if (isCurrentGameSession(actionToConfirm.gameId)) {
+          autoResumedGameIdRef.current = '';
+          leavePendingGameRef.current = '';
           setGameId('');
           localStorage.removeItem(activeGameKey);
           setGame(null);
@@ -15571,18 +15603,34 @@ function ProductionApp() {
           setChatMessages([]);
           resetRoomLoadState();
           setProfile((current) => (current ? { ...current, activeGameId: '' } : current));
+          if (firestore && user?.uid && profile?.activeGameId === actionToConfirm.gameId) {
+            void setDoc(
+              doc(firestore, 'users', user.uid),
+              { uid: user.uid, activeGameId: '', updatedAt: serverTimestamp() },
+              { merge: true },
+            ).catch((error) => {
+              console.warn('Could not clear active game profile after deleting room.', error);
+            });
+          }
         }
         if (actionToConfirm.gameId === selectedGameId) setSelectedGameId('');
         if (localEndedGameSummary?.id === actionToConfirm.gameId) setLocalEndedGameSummary(null);
         setNotice('Game deleted permanently.');
       }
 
-      setConfirmAction(null);
       console.info('[KJK ROOM] Confirm game action completed successfully', actionToConfirm);
     } catch (error) {
       console.error('END GAME FAILED', error);
       console.error('[KJK ROOM] Confirm game action failed', error, actionToConfirm);
-      setNotice(error?.message || 'Could not update game.');
+      if (isFirestoreRateLimitedError(error)) {
+        setNotice(
+          actionToConfirm?.type === 'delete'
+            ? 'Firebase is rate-limiting the app right now. Wait a moment, then try deleting the game again.'
+            : 'Firebase is rate-limiting the app right now. Please wait a moment and try again.',
+        );
+      } else {
+        setNotice(error?.message || 'Could not update game.');
+      }
     } finally {
       if (!preserveBusyState) setIsBusy(false);
     }
@@ -17155,9 +17203,20 @@ function ProductionApp() {
                 pendingInviteGameStatus: '',
               }),
         };
+        const inviteRecord = options.sendInvite
+          ? buildGameInviteRecord({
+              targetGameId: gameRef.id,
+              targetUserId: inviteTargetUserId,
+              targetSeat: inviteTargetSeat,
+              sourceGame: createdGameState,
+            })
+          : null;
         const trueFalseQueueIds = isTrueFalseGame ? mergeUniqueIds(queue.map((question) => question.id)) : [];
         const batch = writeBatch(firestore);
         batch.set(gameRef, createdGameDoc, { merge: true });
+        if (inviteRecord) {
+          batch.set(inviteRecord.inviteRef, inviteRecord.inviteDoc, { merge: true });
+        }
         batch.set(
           doc(firestore, 'games', gameRef.id, 'players', user.uid),
           {
@@ -17418,7 +17477,7 @@ function ProductionApp() {
       if (!invite?.gameId) throw new Error('This invite is missing a live game session.');
       await joinGameSessionById(invite.gameId, {
         fallbackCode: invite.roomCode || invite.joinCode || '',
-        inviteId: invite.source === 'collection' ? invite.id || '' : '',
+        inviteId: invite.collectionInviteId || (invite.source === 'collection' ? invite.id || '' : ''),
       });
     }, 'Could not join invited game.');
 
@@ -17427,8 +17486,11 @@ function ProductionApp() {
       if (!invite?.id) throw new Error('This invite could not be dismissed.');
       const inviteStatus = invite.displayStatus || invite.status || 'pending';
       if (inviteStatus === 'pending') throw new Error('Active invites can only be joined, not dismissed.');
-      if (invite.source === 'room' && invite.gameId) {
-        await setDoc(
+      const collectionInviteId = invite.collectionInviteId || (invite.source === 'collection' ? invite.id || '' : '');
+      const shouldClearRoomInvite = Boolean(invite.gameId && (invite.roomInviteId || invite.source === 'room'));
+      const updates = [];
+      if (shouldClearRoomInvite) {
+        updates.push(setDoc(
           doc(firestore, 'games', invite.gameId),
           {
             pendingInviteTargets: [],
@@ -17439,18 +17501,21 @@ function ProductionApp() {
             pendingInviteGameStatus: invite.gameStatus || 'unavailable',
           },
           { merge: true },
-        );
-      } else {
-        await setGameInviteStatus(invite.id, {
+        ));
+      }
+      if (collectionInviteId) {
+        updates.push(setGameInviteStatus(collectionInviteId, {
           status: 'dismissed',
           gameStatus: invite.gameStatus || 'unavailable',
           dismissedAt: serverTimestamp(),
           dismissedByUserId: user?.uid || '',
-        });
+        }));
       }
+      if (!updates.length) throw new Error('This invite could not be dismissed.');
+      await Promise.all(updates);
       setGameInvites((current) => current.filter((entry) => entry.id !== invite.id));
-      if (invite.source === 'room') {
-        setRoomGameInvites((current) => current.filter((entry) => entry.id !== invite.id));
+      if (shouldClearRoomInvite) {
+        setRoomGameInvites((current) => current.filter((entry) => entry.id !== (invite.roomInviteId || invite.id)));
       }
       setNotice('Invite dismissed.');
     }, 'Could not dismiss invite.');
