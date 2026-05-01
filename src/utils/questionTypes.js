@@ -223,6 +223,13 @@ export const buildEitherOrOptions = (question = '') => {
   return [];
 };
 
+export const extractEitherOrOptions = (question = '', options = []) => {
+  const providedOptions = parseDelimitedItems(options);
+  if (providedOptions.length >= 2) return providedOptions.slice(0, 2);
+  const parsedOptions = buildEitherOrOptions(question);
+  return parsedOptions.length >= 2 ? parsedOptions.slice(0, 2) : [];
+};
+
 export const getDefaultOptionsForQuestionType = (type, { question = '', options = [] } = {}) => {
   const normalizedType = normalizeQuestionType(type, 'text');
   const providedOptions = parseDelimitedItems(options);
@@ -235,7 +242,7 @@ export const getDefaultOptionsForQuestionType = (type, { question = '', options 
     return [...DEFAULT_PLAYER_CHOICE_OPTIONS];
   }
   if (normalizedType === 'preference') {
-    const eitherOrOptions = buildEitherOrOptions(question);
+    const eitherOrOptions = extractEitherOrOptions(question, options);
     return eitherOrOptions.length ? eitherOrOptions : ['Option A', 'Option B'];
   }
   return [];

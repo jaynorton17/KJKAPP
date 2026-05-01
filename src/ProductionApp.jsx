@@ -84,6 +84,7 @@ import {
   mergeHoldemStats,
 } from './utils/holdem.js';
 import {
+  extractEitherOrOptions,
   formatAnswerForDisplay,
   getDefaultOptionsForQuestionType,
   getQuestionTypeListCount,
@@ -108,9 +109,12 @@ import {
 const seats = ['jay', 'kim'];
 const HOLDEM_GAME_MODE = 'holdem';
 const TRUE_FALSE_GAME_MODE = 'trueFalseGame';
+const THIS_OR_THAT_GAME_MODE = 'thisOrThatGame';
 const TRUE_FALSE_WRONG_PENALTY = 10;
 const TRUE_FALSE_UNANSWERED_PENALTY = 10;
 const TRUE_FALSE_TIMER_SECONDS = 8;
+const THIS_OR_THAT_WRONG_PENALTY = 10;
+const THIS_OR_THAT_UNANSWERED_PENALTY = 10;
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const HOLDEM_READY_SESSION_STATUSES = new Set(['ready_to_deal', 'hand_complete']);
@@ -259,10 +263,15 @@ const resolveGameMode = (value = 'standard') =>
       ? HOLDEM_GAME_MODE
       : value === TRUE_FALSE_GAME_MODE
         ? TRUE_FALSE_GAME_MODE
+        : value === THIS_OR_THAT_GAME_MODE
+          ? THIS_OR_THAT_GAME_MODE
         : 'standard';
 const isQuizGameMode = (value = 'standard') => resolveGameMode(value) === 'quiz';
 const isHoldemGameMode = (value = 'standard') => resolveGameMode(value) === HOLDEM_GAME_MODE;
 const isTrueFalseGameMode = (value = 'standard') => resolveGameMode(value) === TRUE_FALSE_GAME_MODE;
+const isThisOrThatGameMode = (value = 'standard') => resolveGameMode(value) === THIS_OR_THAT_GAME_MODE;
+const isAutoScoredChoiceGameMode = (value = 'standard') =>
+  isTrueFalseGameMode(value) || isThisOrThatGameMode(value);
 const getQuestionBankTypeForGameMode = (value = 'standard') => {
   const gameMode = resolveGameMode(value);
   if (gameMode === 'quiz') return 'quiz';
@@ -924,6 +933,9 @@ const inferChoiceOptions = (round = {}) => {
     options: round?.multipleChoiceOptions || [],
   });
 };
+const isThisOrThatQuestionCompatible = (question = {}) =>
+  normalizeQuestionType(question?.roundType, 'text') === 'preference'
+  && getThisOrThatOptions(question).length >= 2;
 
 const decodeRankedAnswer = (value, count = 3) => {
   const rawValue = Array.isArray(value) ? value : String(value || '').split(/\n|,|;/);
@@ -1946,12 +1958,33 @@ const normalizeTrueFalseChoice = (value = '') => {
   if (normalized === 'false') return 'False';
   return '';
 };
+const getThisOrThatOptions = (round = {}) => {
+  const providedOptions = extractEitherOrOptions(
+    round?.question || '',
+    round?.multipleChoiceOptions || round?.options || [],
+  );
+  return providedOptions.length >= 2 ? providedOptions.slice(0, 2) : [];
+};
+const normalizeThisOrThatChoice = (value = '', round = {}) => {
+  const normalized = normalizeText(serialiseAnswerForQuestionType('preference', value)).toLowerCase();
+  if (!normalized) return '';
+  const options = getThisOrThatOptions(round);
+  const matched = options.find((option) => normalizeText(option).toLowerCase() === normalized);
+  return matched || '';
+};
 const hasSubmittedRoundAnswer = (round = {}, seat = '') => Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''));
 const hasCompletedTrueFalseRoundAnswer = (round = {}, seat = '') =>
   Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.ownAnswer || ''))
   && Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.guessedOther || ''));
+const hasCompletedThisOrThatRoundAnswer = (round = {}, seat = '') =>
+  Boolean(normalizeThisOrThatChoice(round?.answers?.[seat]?.ownAnswer || '', round))
+  && Boolean(normalizeThisOrThatChoice(round?.answers?.[seat]?.guessedOther || '', round));
 const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat = '') =>
-  isTrueFalseGameMode(gameMode) ? hasCompletedTrueFalseRoundAnswer(round, seat) : hasSubmittedRoundAnswer(round, seat);
+  isTrueFalseGameMode(gameMode)
+    ? hasCompletedTrueFalseRoundAnswer(round, seat)
+    : isThisOrThatGameMode(gameMode)
+      ? hasCompletedThisOrThatRoundAnswer(round, seat)
+      : hasSubmittedRoundAnswer(round, seat);
 const buildTrueFalseRoundOutcome = (round = {}) => {
   const jayGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '');
   const kimGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '');
@@ -1978,6 +2011,52 @@ const buildTrueFalseRoundOutcome = (round = {}) => {
     ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
     : kimDefaultPenalty;
   return {
+    jayGuess,
+    kimGuess,
+    jayActual,
+    kimActual,
+    jayGuessScorable,
+    kimGuessScorable,
+    jayCorrect,
+    kimCorrect,
+    jayMissingGuess,
+    kimMissingGuess,
+    jayMissingOwnAnswer,
+    kimMissingOwnAnswer,
+    jayMissingResponse,
+    kimMissingResponse,
+    jayPenalty,
+    kimPenalty,
+  };
+};
+const buildThisOrThatRoundOutcome = (round = {}) => {
+  const options = getThisOrThatOptions(round);
+  const jayGuess = normalizeThisOrThatChoice(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '', round);
+  const kimGuess = normalizeThisOrThatChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '', round);
+  const jayActual = normalizeThisOrThatChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '', round);
+  const kimActual = normalizeThisOrThatChoice(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '', round);
+  const jayGuessScorable = Boolean(jayGuess) && Boolean(kimActual);
+  const kimGuessScorable = Boolean(kimGuess) && Boolean(jayActual);
+  const jayCorrect = jayGuessScorable && jayGuess === kimActual;
+  const kimCorrect = kimGuessScorable && kimGuess === jayActual;
+  const jayMissingGuess = !Boolean(jayGuess);
+  const kimMissingGuess = !Boolean(kimGuess);
+  const jayMissingOwnAnswer = !Boolean(jayActual);
+  const kimMissingOwnAnswer = !Boolean(kimActual);
+  const jayMissingResponse = jayMissingGuess || jayMissingOwnAnswer;
+  const kimMissingResponse = kimMissingGuess || kimMissingOwnAnswer;
+  const jayDefaultPenalty = (jayGuessScorable && !jayCorrect ? THIS_OR_THAT_WRONG_PENALTY : 0)
+    + (jayMissingResponse ? THIS_OR_THAT_UNANSWERED_PENALTY : 0);
+  const kimDefaultPenalty = (kimGuessScorable && !kimCorrect ? THIS_OR_THAT_WRONG_PENALTY : 0)
+    + (kimMissingResponse ? THIS_OR_THAT_UNANSWERED_PENALTY : 0);
+  const jayPenalty = Number.isFinite(Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay))
+    ? Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay)
+    : jayDefaultPenalty;
+  const kimPenalty = Number.isFinite(Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim))
+    ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
+    : kimDefaultPenalty;
+  return {
+    options,
     jayGuess,
     kimGuess,
     jayActual,
@@ -3004,6 +3083,15 @@ function LobbyScreen({
     jay: String(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0)),
     kim: String(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0)),
   }), [playerAccounts?.jay?.lifetimePenaltyPoints, playerAccounts?.kim?.lifetimePenaltyPoints]);
+  const thisOrThatReadyCount = useMemo(
+    () =>
+      (bankQuestions || []).filter(
+        (question) =>
+          normalizeQuestionBankType(question?.bankType) === 'game'
+          && isThisOrThatQuestionCompatible(question),
+      ).length,
+    [bankQuestions],
+  );
   const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
   const lobbyChatUnreadCount = useChatUnreadCount(
     lobbyChatMessages,
@@ -3056,6 +3144,18 @@ function LobbyScreen({
       ...(sendInvite ? { sendInvite: true } : {}),
     });
 
+  const handleCreateThisOrThatGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: thisOrThatCreateCodeDraft,
+      gameName: 'This or That',
+      mode: 'random',
+      gameMode: THIS_OR_THAT_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: thisOrThatQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
   const handleCreateHoldemGame = (sendInvite = false) =>
     onCreateGame({
       createCode: holdemCreateCodeDraft,
@@ -3066,10 +3166,6 @@ function LobbyScreen({
       categories: [],
       ...(sendInvite ? { sendInvite: true } : {}),
     });
-
-  const handleOpenThisOrThatPreview = () => {
-    setLobbyTileFlipped('thisOrThat', true);
-  };
 
   const setLobbyTileFlipped = (cardId, nextValue) => {
     if (typeof document !== 'undefined') {
@@ -3927,7 +4023,7 @@ function LobbyScreen({
                           cardId: 'standard',
                           eyebrow: 'Game Lobby',
                           title: 'Normal Game',
-                          statusText: `${questionCount} ready`,
+                          statusText: `${thisOrThatReadyCount} ready`,
                           description: 'Penalty-point rounds, question reveals, and all the usual Jay vs Kim game flow.',
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
@@ -3960,7 +4056,7 @@ function LobbyScreen({
                               <p className="eyebrow">Game Lobby</p>
                               <h2>Create New Game</h2>
                             </div>
-                            <span className="status-pill">{questionCount} ready</span>
+                            <span className="status-pill">{thisOrThatReadyCount} ready</span>
                           </div>
 
                           <div className="create-mode-row">
@@ -4277,9 +4373,9 @@ function LobbyScreen({
                       <div className={`lobby-image-tile-flip ${isThisOrThatTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
                           cardId: 'thisOrThat',
-                          eyebrow: 'Planned',
+                          eyebrow: 'Prediction Match',
                           title: 'This or That',
-                          statusText: 'Coming Soon',
+                          statusText: `${questionCount} ready`,
                           description: 'A prediction-first mode where both players choose between two options, lock what they would pick, and also guess which option the other person will choose.',
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
@@ -4294,11 +4390,11 @@ function LobbyScreen({
                               />
                             </label>
                           ),
-                          onCreateAndInvite: handleOpenThisOrThatPreview,
+                          onCreateAndInvite: () => handleCreateThisOrThatGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isThisOrThatTileFlipped} aria-hidden={!isThisOrThatTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
-                            <span className="status-pill">Planned</span>
+                            <span className="status-pill">Setup</span>
                             <Button
                               type="button"
                               className="ghost-button compact lobby-image-tile-back-button"
@@ -4309,12 +4405,12 @@ function LobbyScreen({
                           </div>
                           <div className="panel-heading">
                             <div>
-                              <p className="eyebrow">Planned</p>
+                              <p className="eyebrow">Prediction Match</p>
                               <h2>This or That</h2>
                             </div>
-                            <span className="status-pill">Artwork Pending</span>
+                            <span className="status-pill">{questionCount} ready</span>
                           </div>
-                          <p className="panel-copy">This tile is now in the lobby and ready for final artwork. The game flow is still being locked before it gets a live create flow.</p>
+                          <p className="panel-copy">Each player locks what they think the other person will pick and what they would really choose. Wrong guesses add +10 penalty automatically.</p>
                           <label className="field">
                             <span>This or That Code</span>
                             <input
@@ -4334,12 +4430,20 @@ function LobbyScreen({
                               placeholder="10"
                             />
                           </label>
-                          <p className="field-note">Planned shape: both players lock their own pick and their guess for the other person, then the reveal scores prediction accuracy automatically.</p>
+                          <p className="field-note">The first pick for each answer locks immediately. Missing a guess or your own pick adds +10, and correct guesses stay at 0.</p>
                           <div className="button-row">
-                            <Button className="primary-button compact" disabled>
+                            <Button
+                              className="primary-button compact"
+                              onClick={() => handleCreateThisOrThatGame(false)}
+                              disabled={isBusy}
+                            >
                               Create This or That
                             </Button>
-                            <Button className="ghost-button compact" disabled>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateThisOrThatGame(true)}
+                              disabled={isBusy}
+                            >
                               Create + Invite
                             </Button>
                           </div>
@@ -6727,6 +6831,32 @@ function TrueFalseLiveStatus({ currentRound, revealIsReady }) {
   );
 }
 
+function ThisOrThatLiveStatus({ currentRound, revealIsReady }) {
+  const options = getThisOrThatOptions(currentRound);
+
+  if (revealIsReady) return null;
+
+  return (
+    <div className="quiz-live-status true-false-live-status">
+      <div className="quiz-status-grid">
+        <article className="quiz-status-card">
+          <span>Mode</span>
+          <strong>This or That</strong>
+        </article>
+        <article className="quiz-status-card">
+          <span>Scoring</span>
+          <strong>0 / +10</strong>
+        </article>
+      </div>
+      <p className="field-note true-false-answer-note">
+        {options.length >= 2
+          ? `Choose between ${options[0]} and ${options[1]}. First tap locks each answer.`
+          : 'Pick your side, then predict the other player. First tap locks each answer.'}
+      </p>
+    </div>
+  );
+}
+
 function TrueFalseAutoAnswerEntryBase({
   currentRound,
   viewerSeat,
@@ -6799,6 +6929,80 @@ const TrueFalseAutoAnswerEntry = memo(TrueFalseAutoAnswerEntryBase, (previous, n
     && previous.currentRound?.status === next.currentRound?.status;
 });
 
+function ThisOrThatAutoAnswerEntryBase({
+  currentRound,
+  viewerSeat,
+  oppositeLabel,
+  onLockAnswerField,
+  isBusy = false,
+  embedded = false,
+}) {
+  const currentPlayer = viewerSeat === 'kim' ? 'kim' : 'jay';
+  const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
+  const ownAnswer = normalizeThisOrThatChoice(currentPlayerAnswer?.ownAnswer || '', currentRound);
+  const guessedOther = normalizeThisOrThatChoice(currentPlayerAnswer?.guessedOther || '', currentRound);
+  const options = getThisOrThatOptions(currentRound);
+  const renderedOptions = options.length >= 2 ? options : ['Option A', 'Option B'];
+  const isRoundOpen = (currentRound?.status || 'open') === 'open';
+  const lockedChoiceLabel = ownAnswer && guessedOther ? 'Both picks locked' : 'First tap locks each pick';
+
+  const renderChoiceField = (fieldName, value, heading, subheading) => (
+    <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
+      <div className="mini-heading">
+        <div>
+          <span>{heading}</span>
+          <h3>{subheading}</h3>
+        </div>
+      </div>
+      <div className={`choice-grid ${embedded ? 'choice-grid--embedded' : ''}`} role="list" aria-label={subheading}>
+        {renderedOptions.map((option) => (
+          <button
+            key={`${fieldName}-${option}`}
+            type="button"
+            className={`choice-button ${value === option ? 'is-on' : ''} ${value ? 'is-locked' : ''}`}
+            onClick={() => onLockAnswerField?.(fieldName, option)}
+            disabled={isBusy || !isRoundOpen || Boolean(value)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <p className="field-note true-false-answer-note">
+        {value ? `Locked: ${value}` : 'First tap locks instantly.'}
+      </p>
+    </section>
+  );
+
+  return (
+    <div className={`room-answer-entry room-answer-entry--true-false ${embedded ? 'room-answer-entry--embedded' : ''}`}>
+      <div className="true-false-answer-header">
+        <p>Pick your answer, then guess what the other person will choose.</p>
+        <span className="status-pill">{lockedChoiceLabel}</span>
+      </div>
+      <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''}`}>
+        {renderChoiceField('guessedOther', guessedOther, 'Their Pick', `What I think ${oppositeLabel} will choose`)}
+        {renderChoiceField('ownAnswer', ownAnswer, 'Your Pick', 'What I would actually choose')}
+      </div>
+    </div>
+  );
+}
+
+const ThisOrThatAutoAnswerEntry = memo(ThisOrThatAutoAnswerEntryBase, (previous, next) => {
+  const previousPlayer = previous.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const nextPlayer = next.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const previousAnswer = previous.currentRound?.answers?.[previousPlayer] || {};
+  const nextAnswer = next.currentRound?.answers?.[nextPlayer] || {};
+  return stableRoundIdentityKey(previous.currentRound || {}) === stableRoundIdentityKey(next.currentRound || {})
+    && previous.viewerSeat === next.viewerSeat
+    && previous.oppositeLabel === next.oppositeLabel
+    && previous.isBusy === next.isBusy
+    && previous.embedded === next.embedded
+    && previousAnswer.ownAnswer === nextAnswer.ownAnswer
+    && previousAnswer.guessedOther === nextAnswer.guessedOther
+    && previous.currentRound?.status === next.currentRound?.status
+    && JSON.stringify(getThisOrThatOptions(previous.currentRound || {})) === JSON.stringify(getThisOrThatOptions(next.currentRound || {}));
+});
+
 function RoomRevealPlayerCard({
   game,
   viewerSeat,
@@ -6808,6 +7012,7 @@ function RoomRevealPlayerCard({
   roundPenalty,
   isQuizGame = false,
   isTrueFalseGame = false,
+  isThisOrThatGame = false,
   totalQuizPoints = 0,
 }) {
   const playerSeat = seat === 'kim' ? 'kim' : 'jay';
@@ -6946,6 +7151,74 @@ function RoomRevealPlayerCard({
       </article>
     );
   }
+  if (isThisOrThatGame) {
+    const outcome = buildThisOrThatRoundOutcome(currentRound || {});
+    const viewerGuess = playerSeat === 'jay' ? outcome.jayGuess : outcome.kimGuess;
+    const actualAnswer = playerSeat === 'jay' ? outcome.jayActual : outcome.kimActual;
+    const targetAnswer = playerSeat === 'jay' ? outcome.kimActual : outcome.jayActual;
+    const guessScorable = playerSeat === 'jay' ? outcome.jayGuessScorable : outcome.kimGuessScorable;
+    const missingGuess = playerSeat === 'jay' ? outcome.jayMissingGuess : outcome.kimMissingGuess;
+    const missingOwnAnswer = playerSeat === 'jay' ? outcome.jayMissingOwnAnswer : outcome.kimMissingOwnAnswer;
+    const wasCorrect = playerSeat === 'jay' ? outcome.jayCorrect : outcome.kimCorrect;
+    const penalty = playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty;
+    const matchTone = missingGuess || missingOwnAnswer || !guessScorable
+      ? 'neutral'
+      : wasCorrect
+        ? 'success'
+        : 'warning';
+    const matchLabel = missingGuess
+      ? `No guess locked: +${formatScore(THIS_OR_THAT_UNANSWERED_PENALTY)}`
+      : !guessScorable
+        ? 'Other player gave no real answer, so this guess was not charged'
+        : wasCorrect
+          ? 'Correct guess'
+          : 'Wrong guess';
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>{`${playerLabel}'s guess`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{viewerGuess || 'No answer submitted'}</strong>
+            </div>
+          </div>
+
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>{`${oppositeLabel}'s real pick`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{targetAnswer || 'No answer submitted'}</strong>
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
+              {matchLabel}
+            </small>
+          </div>
+        </div>
+
+        <div className="room-reveal-score-strip">
+          <div>
+            <span>{`${playerLabel}'s real pick`}</span>
+            <strong>{actualAnswer || 'No answer'}</strong>
+          </div>
+          <div>
+            <span>Round penalty</span>
+            <strong>{formatScore(penalty || roundPenalty || 0)}</strong>
+          </div>
+          <div>
+            <span>{missingOwnAnswer ? 'Missed-answer penalty included' : 'Total penalty'}</span>
+            <strong>{formatScore(totalPenalty || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
   const actualAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
   const guessedAnswerRaw = currentRound?.answers?.[oppositeSeat]?.guessedOther || '';
   const actualAnswer = formatRoundAnswerValue(actualAnswerRaw, currentRound?.roundType);
@@ -7008,6 +7281,7 @@ function RoomActiveFrameBase({
   liveTotals,
   onSubmitAnswer,
   onLockTrueFalseAnswer,
+  onLockThisOrThatAnswer,
   onMarkReady,
   onRequestQuizOverride,
   onRespondQuizOverride,
@@ -7041,8 +7315,9 @@ function RoomActiveFrameBase({
   const isTrueFalseGame =
     isTrueFalseGameMode(game?.gameMode || 'standard')
     && normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard')) === 'trueFalseGame';
+  const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
   const penaltyPreview = useMemo(
-    () => (isTrueFalseGame
+    () => ((isTrueFalseGame || isThisOrThatGame)
       ? {
           jay: parseNumber(currentRound?.penalties?.jay, 0),
           kim: parseNumber(currentRound?.penalties?.kim, 0),
@@ -7051,7 +7326,7 @@ function RoomActiveFrameBase({
           jay: parseNumber(penaltyDraft?.jay, 0),
           kim: parseNumber(penaltyDraft?.kim, 0),
         }),
-    [currentRound?.penalties?.jay, currentRound?.penalties?.kim, isTrueFalseGame, penaltyDraft?.jay, penaltyDraft?.kim],
+    [currentRound?.penalties?.jay, currentRound?.penalties?.kim, isTrueFalseGame, isThisOrThatGame, penaltyDraft?.jay, penaltyDraft?.kim],
   );
   const previewRoundResult = useMemo(() => {
     if (!revealIsReady || !currentRound) return null;
@@ -7092,7 +7367,7 @@ function RoomActiveFrameBase({
       ? 'Waiting'
       : 'Answering';
   const showReplayAction = (game?.gameMode || 'standard') === 'standard' && (game?.questionBankType || 'game') === 'game';
-  const showFeedbackActions = !isQuizGame && !isTrueFalseGame;
+  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame;
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
   const viewerOverrideRequest = currentRound?.overrideRequests?.[currentPlayer] || null;
@@ -7112,6 +7387,10 @@ function RoomActiveFrameBase({
     () => (isTrueFalseGame ? buildTrueFalseRoundOutcome(currentRound || {}) : null),
     [currentRound, isTrueFalseGame],
   );
+  const thisOrThatOutcome = useMemo(
+    () => (isThisOrThatGame ? buildThisOrThatRoundOutcome(currentRound || {}) : null),
+    [currentRound, isThisOrThatGame],
+  );
   const trueFalseSummaryLabel = !trueFalseOutcome
     ? ''
     : trueFalseOutcome.jayCorrect && trueFalseOutcome.kimCorrect
@@ -7119,11 +7398,18 @@ function RoomActiveFrameBase({
       : trueFalseOutcome.jayMissingResponse || trueFalseOutcome.kimMissingResponse
         ? 'Missed answers triggered penalties'
         : 'Automatic penalties applied';
+  const thisOrThatSummaryLabel = !thisOrThatOutcome
+    ? ''
+    : thisOrThatOutcome.jayCorrect && thisOrThatOutcome.kimCorrect
+      ? 'Both guessed correctly'
+      : thisOrThatOutcome.jayMissingResponse || thisOrThatOutcome.kimMissingResponse
+        ? 'Missed answers triggered penalties'
+        : 'Automatic penalties applied';
 
   return (
-    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''}`} aria-label="Active round scoreboard">
+    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''}`} aria-label="Active round scoreboard">
       <div className="scoreboard-sheen" aria-hidden="true" />
-      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''}`}>
+      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''}`}>
         <header className="room-active-header">
           <div>
             <span className="scoreboard-kicker">{revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
@@ -7137,6 +7423,7 @@ function RoomActiveFrameBase({
         </header>
         {isQuizGame ? <QuizLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isTrueFalseGame ? <TrueFalseLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
+        {isThisOrThatGame ? <ThisOrThatLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer ? (
           <div className="quiz-override-strip">
             <span className={`quiz-override-status ${viewerQuizResult === 'correct' ? 'is-correct' : 'is-incorrect'}`}>
@@ -7227,6 +7514,15 @@ function RoomActiveFrameBase({
                 onLockAnswerField={onLockTrueFalseAnswer}
                 isBusy={isBusy}
               />
+            ) : isThisOrThatGame ? (
+              <ThisOrThatAutoAnswerEntry
+                embedded
+                viewerSeat={currentPlayer}
+                currentRound={currentRound}
+                oppositeLabel={oppositeLabel}
+                onLockAnswerField={onLockThisOrThatAnswer}
+                isBusy={isBusy}
+              />
             ) : (
               <QuestionAnswerEntry
                 gameId={game?.id || ''}
@@ -7294,6 +7590,7 @@ function RoomActiveFrameBase({
                 roundPenalty={penaltyPreview[currentPlayer]}
                 isQuizGame={isQuizGame}
                 isTrueFalseGame={isTrueFalseGame}
+                isThisOrThatGame={isThisOrThatGame}
                 totalQuizPoints={quizRevealTotals[currentPlayer]}
               />
 
@@ -7345,6 +7642,24 @@ function RoomActiveFrameBase({
                       {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
                     </small>
                   </>
+                ) : isThisOrThatGame ? (
+                  <>
+                    <span>Round Result</span>
+                    <strong>{thisOrThatSummaryLabel}</strong>
+                    <p>
+                      {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])}
+                      {' · '}
+                      {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
+                    </p>
+                    <small>
+                      Wrong guesses add {formatScore(THIS_OR_THAT_WRONG_PENALTY)}. Missing either locked answer adds another {formatScore(THIS_OR_THAT_UNANSWERED_PENALTY)}.
+                    </small>
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
                 ) : (
                   <>
                     <span>Round Result</span>
@@ -7375,6 +7690,7 @@ function RoomActiveFrameBase({
                 roundPenalty={penaltyPreview[otherPlayer]}
                 isQuizGame={isQuizGame}
                 isTrueFalseGame={isTrueFalseGame}
+                isThisOrThatGame={isThisOrThatGame}
                 totalQuizPoints={quizRevealTotals[otherPlayer]}
               />
             </div>
@@ -10724,6 +11040,7 @@ function GameRoomView({
   onTakeHoldemAction,
   onSubmitAnswer,
   onLockTrueFalseAnswer,
+  onLockThisOrThatAnswer,
   onMarkReady,
   onAddQuestion,
   onSyncSheet,
@@ -10803,12 +11120,17 @@ function GameRoomView({
   const isHoldemGame = isHoldemGameMode(game?.gameMode || 'standard');
   const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
   const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+  const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
   const bothPlayersSubmitted = isTrueFalseGame
     ? Boolean(hasCompletedTrueFalseRoundAnswer(currentRound, 'jay') && hasCompletedTrueFalseRoundAnswer(currentRound, 'kim'))
+    : isThisOrThatGame
+      ? Boolean(hasCompletedThisOrThatRoundAnswer(currentRound, 'jay') && hasCompletedThisOrThatRoundAnswer(currentRound, 'kim'))
     : Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
   const revealIsReady = bothPlayersSubmitted || currentRound?.status === 'reveal';
   const submissionState = isTrueFalseGame
     ? (hasCompletedTrueFalseRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
+    : isThisOrThatGame
+      ? (hasCompletedThisOrThatRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
     : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
   const submittedBySeat = {
     jay: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'jay'),
@@ -11095,13 +11417,14 @@ function GameRoomView({
     if (role !== 'host') return null;
 
     if (currentRound && revealIsReady && !isQuizGame) {
-      if (isTrueFalseGame) {
+      if (isTrueFalseGame || isThisOrThatGame) {
+        const modeLabel = isThisOrThatGame ? 'This or That' : 'True or False';
         return (
           <section className="mobile-entry-panel mobile-round-panel">
             <section className="panel room-status-panel room-status-panel--host-mobile">
               <div className="panel-heading">
                 <div>
-                  <p className="eyebrow">True or False</p>
+                  <p className="eyebrow">{modeLabel}</p>
                   <h2>Next Question</h2>
                 </div>
               </div>
@@ -11319,6 +11642,7 @@ function GameRoomView({
 	                  liveTotals={liveTotals}
 	                  onSubmitAnswer={onSubmitAnswer}
 	                  onLockTrueFalseAnswer={onLockTrueFalseAnswer}
+                    onLockThisOrThatAnswer={onLockThisOrThatAnswer}
 	                  onMarkReady={onMarkReady}
 	                  onRequestQuizOverride={onRequestQuizOverride}
 	                  onRespondQuizOverride={onRespondQuizOverride}
@@ -11563,11 +11887,11 @@ function GameRoomView({
             </div>
             {role === 'host' ? (
               isQuizGame ? null : currentRound && revealIsReady ? (
-                isTrueFalseGame ? (
+                isTrueFalseGame || isThisOrThatGame ? (
                   <section className="panel host-queue-panel room-status-panel">
                     <div className="panel-heading">
                       <div>
-                        <p className="eyebrow">True or False</p>
+                        <p className="eyebrow">{isThisOrThatGame ? 'This or That' : 'True or False'}</p>
                         <h2>Automatic Scoring</h2>
                       </div>
                     </div>
@@ -11646,9 +11970,10 @@ function GameRoomView({
               currentRound={currentRound}
 	              baseTotals={baseTotals}
 	              liveTotals={liveTotals}
-	              onSubmitAnswer={onSubmitAnswer}
-	              onLockTrueFalseAnswer={onLockTrueFalseAnswer}
-	              onMarkReady={onMarkReady}
+                  onSubmitAnswer={onSubmitAnswer}
+                  onLockTrueFalseAnswer={onLockTrueFalseAnswer}
+                  onLockThisOrThatAnswer={onLockThisOrThatAnswer}
+                  onMarkReady={onMarkReady}
 	              onRequestQuizOverride={onRequestQuizOverride}
 	              onRespondQuizOverride={onRespondQuizOverride}
               submissionState={submissionState}
@@ -12972,6 +13297,8 @@ function ProductionApp() {
   const buildQuestionQueue = async (requestedCount = 10, filters = {}) => {
     const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
     const requestedBankType = normalizeQuestionBankType(filters.bankType);
+    const requestedGameMode = resolveGameMode(filters.gameMode || 'standard');
+    const isThisOrThatQueue = isThisOrThatGameMode(requestedGameMode);
     const allQuestions = bankSnapshot.empty
       ? STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))
       : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
@@ -12986,6 +13313,7 @@ function ProductionApp() {
     const categorySet = new Set((filters.categories || []).map((category) => normalizeText(category)).filter(Boolean));
     const eligible = dedupeQuestionsById(questionBankPool).filter((question) => {
       if (unavailableQuestionIds.has(question.id)) return false;
+      if (isThisOrThatQueue && !isThisOrThatQuestionCompatible(question)) return false;
       if (typeSet.size && !typeSet.has(question.roundType)) return false;
       if (categorySet.size && !categorySet.has(normalizeText(question.category))) return false;
       return true;
@@ -13015,9 +13343,13 @@ function ProductionApp() {
           ? queue.length
             ? requestedBankType === 'trueFalseGame'
               ? `Only ${queue.length} unrepeated True or False questions are available for this player pair. This mode does not repeat questions.`
+              : isThisOrThatQueue
+                ? `Only ${queue.length} This or That questions with clear either/or options are available right now.`
               : `Only ${queue.length} unique questions are available for this player pair.`
             : requestedBankType === 'trueFalseGame'
               ? 'No unused True or False questions remain for this player pair. This mode does not repeat questions.'
+              : isThisOrThatQueue
+                ? 'No This or That questions with clear either/or options are available right now.'
               : 'No unused questions remain for this player pair.'
           : '',
     };
@@ -15731,6 +16063,7 @@ function ProductionApp() {
       const gameMode = resolveGameMode(options.gameMode || 'standard');
       const isHoldemGame = isHoldemGameMode(gameMode);
       const isTrueFalseGame = isTrueFalseGameMode(gameMode);
+      const isThisOrThatGame = isThisOrThatGameMode(gameMode);
       const requestedCreateCode = normalizeJoinCode(options.createCode ?? lobbyCode);
       const trimmedGameName = normalizeText(options.gameName ?? lobbyGameName);
       const effectiveGameName = trimmedGameName || (
@@ -15740,6 +16073,8 @@ function ProductionApp() {
             ? 'Texas Hold’em'
             : isTrueFalseGame
               ? 'True or False'
+              : isThisOrThatGame
+                ? 'This or That'
               : 'Jay vs Kim'
       );
       console.debug('Create New Game clicked', {
@@ -15787,6 +16122,7 @@ function ProductionApp() {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
             bankType: targetBankType,
+            gameMode,
           });
           queue = queueResult.queue;
           warning = queueResult.warning;
@@ -15977,6 +16313,7 @@ function ProductionApp() {
               roundTypes: selectedRoundTypes,
               categories: selectedCategories,
               bankType: targetBankType,
+              gameMode,
             });
             queue = queueResult.queue;
             warning = queueResult.warning;
@@ -16967,6 +17304,7 @@ function ProductionApp() {
   const standardRevealSettleRef = useRef('');
   const trueFalseRevealSettleRef = useRef('');
   const trueFalseTimeoutRevealRef = useRef('');
+  const thisOrThatRevealSettleRef = useRef('');
   const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isTrueFalseGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
@@ -17007,6 +17345,13 @@ function ProductionApp() {
   };
   const getTrueFalsePenaltyMap = useCallback((round = null) => {
     const outcome = buildTrueFalseRoundOutcome(round || {});
+    return {
+      jay: outcome.jayPenalty,
+      kim: outcome.kimPenalty,
+    };
+  }, []);
+  const getThisOrThatPenaltyMap = useCallback((round = null) => {
+    const outcome = buildThisOrThatRoundOutcome(round || {});
     return {
       jay: outcome.jayPenalty,
       kim: outcome.kimPenalty,
@@ -17249,30 +17594,48 @@ function ProductionApp() {
       return true;
     }, 'Could not mark ready.');
 
-  const lockTrueFalseAnswerField = async (fieldName = '', value = '') => {
+  const lockAutoChoiceAnswerField = async ({ fieldName = '', value = '', gameMode = TRUE_FALSE_GAME_MODE } = {}) => {
     const targetField = fieldName === 'guessedOther' ? 'guessedOther' : fieldName === 'ownAnswer' ? 'ownAnswer' : '';
     let previousLocalAnswer = null;
     let optimisticRoundKey = '';
     if (!targetField) return null;
+
+    const isTrueFalseMode = gameMode === TRUE_FALSE_GAME_MODE;
+    const choiceModeLabel = isTrueFalseMode ? 'True or False' : 'This or That';
+    const normalizeChoice = (rawValue, round) =>
+      isTrueFalseMode ? normalizeTrueFalseChoice(rawValue) : normalizeThisOrThatChoice(rawValue, round);
+    const resolveDefaultChoices = (round) => {
+      if (isTrueFalseMode) return ['True', 'False'];
+      const options = getThisOrThatOptions(round);
+      return options.length >= 2 ? options : ['Option A', 'Option B'];
+    };
+
     try {
-      if (!game?.currentRound || !currentSeat) throw new Error('No active True or False round.');
-      if (!isTrueFalseGameMode(game?.gameMode || 'standard')) throw new Error('Auto-lock answers are only available in True or False games.');
+      if (!game?.currentRound || !currentSeat) throw new Error(`No active ${choiceModeLabel} round.`);
+      if (resolveGameMode(game?.gameMode || 'standard') !== gameMode) {
+        throw new Error(`Auto-lock answers are only available in ${choiceModeLabel} games.`);
+      }
       if (game.currentRound.status !== 'open') return true;
       const currentAnswer = game.currentRound.answers?.[currentSeat] || {};
-      if (normalizeTrueFalseChoice(currentAnswer?.[targetField] || '')) return true;
+      if (normalizeChoice(currentAnswer?.[targetField] || '', game.currentRound)) return true;
 
-      const lockedValue = normalizeTrueFalseChoice(serialiseAnswerForQuestionType('trueFalse', value));
-      if (!lockedValue) throw new Error('Choose True or False.');
+      const rawLockedValue = isTrueFalseMode
+        ? serialiseAnswerForQuestionType('trueFalse', value)
+        : serialiseAnswerForQuestionType('preference', value);
+      const lockedValue = normalizeChoice(rawLockedValue, game.currentRound);
+      if (!lockedValue) {
+        throw new Error(isTrueFalseMode ? 'Choose True or False.' : 'Choose one of the two options.');
+      }
 
       const lockedAtIso = new Date().toISOString();
       const otherField = targetField === 'ownAnswer' ? 'guessedOther' : 'ownAnswer';
-      const completedAt = normalizeTrueFalseChoice(currentAnswer?.[otherField] || '') ? lockedAtIso : (currentAnswer?.completedAt || '');
+      const completedAt = normalizeChoice(currentAnswer?.[otherField] || '', game.currentRound) ? lockedAtIso : (currentAnswer?.completedAt || '');
       const displayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[currentSeat] || 'Player';
 
       if (isCurrentLocalTestGame) {
         setGame((current) => {
           if (!current?.currentRound || current.currentRound.status !== 'open') return current;
-          const defaultChoices = ['True', 'False'];
+          const defaultChoices = resolveDefaultChoices(current.currentRound);
           const otherSeat = oppositeSeatOf(currentSeat);
           const currentSeatAnswer = current.currentRound.answers?.[currentSeat] || {};
           const nextAnswer = {
@@ -17281,14 +17644,14 @@ function ProductionApp() {
             submittedBy: user?.uid || '',
             displayName,
             [`${targetField}LockedAt`]: lockedAtIso,
-            ...(normalizeTrueFalseChoice(currentSeatAnswer?.[otherField] || '') ? { completedAt } : {}),
+            ...(normalizeChoice(currentSeatAnswer?.[otherField] || '', current.currentRound) ? { completedAt } : {}),
             updatedAt: lockedAtIso,
           };
           const otherSeatAnswer = current.currentRound.answers?.[otherSeat] || {};
           const autoOtherAnswer = {
             ...otherSeatAnswer,
-            ownAnswer: normalizeTrueFalseChoice(otherSeatAnswer?.ownAnswer || '') || defaultChoices[0] || 'True',
-            guessedOther: normalizeTrueFalseChoice(otherSeatAnswer?.guessedOther || '') || defaultChoices[1] || defaultChoices[0] || 'False',
+            ownAnswer: normalizeChoice(otherSeatAnswer?.ownAnswer || '', current.currentRound) || defaultChoices[0] || '',
+            guessedOther: normalizeChoice(otherSeatAnswer?.guessedOther || '', current.currentRound) || defaultChoices[1] || defaultChoices[0] || '',
             submittedBy: 'editing-mode',
             displayName: otherSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)',
             ownAnswerLockedAt: otherSeatAnswer?.ownAnswerLockedAt || lockedAtIso,
@@ -17333,7 +17696,7 @@ function ProductionApp() {
                     submittedBy: user?.uid || '',
                     displayName,
                     [`${targetField}LockedAt`]: lockedAtIso,
-                    ...(normalizeTrueFalseChoice((current.currentRound.answers?.[currentSeat] || {})?.[otherField] || '') ? { completedAt } : {}),
+                    ...(normalizeChoice((current.currentRound.answers?.[currentSeat] || {})?.[otherField] || '', current.currentRound) ? { completedAt } : {}),
                     updatedAt: lockedAtIso,
                   },
                 },
@@ -17370,10 +17733,16 @@ function ProductionApp() {
             : current,
         );
       }
-      setNotice(String(error?.message || 'Could not lock that True or False answer.'));
+      setNotice(String(error?.message || `Could not lock that ${choiceModeLabel} answer.`));
       return null;
     }
   };
+
+  const lockTrueFalseAnswerField = async (fieldName = '', value = '') =>
+    lockAutoChoiceAnswerField({ fieldName, value, gameMode: TRUE_FALSE_GAME_MODE });
+
+  const lockThisOrThatAnswerField = async (fieldName = '', value = '') =>
+    lockAutoChoiceAnswerField({ fieldName, value, gameMode: THIS_OR_THAT_GAME_MODE });
 
   const submitAnswer = async (draftOverride = null) => {
     let previousLocalAnswer;
@@ -17590,12 +17959,14 @@ function ProductionApp() {
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
     const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+    const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
     const round = game?.currentRound || null;
     const roundKey = stableRoundIdentityKey(round || {});
     const settleKey = `${game?.id || ''}:${roundKey}:standard-reveal`;
     if (
       isQuizGame
       || isTrueFalseGame
+      || isThisOrThatGame
       || !round
       || round.status !== 'open'
       || !hasSubmittedRoundAnswer(round, 'jay')
@@ -17689,6 +18060,71 @@ function ProductionApp() {
     game?.currentRound?.answers?.kim?.ownAnswer,
     game?.currentRound?.answers?.kim?.guessedOther,
     getTrueFalsePenaltyMap,
+    isCurrentLocalTestGame,
+  ]);
+
+  useEffect(() => {
+    const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const bothPlayersCompleted = hasCompletedThisOrThatRoundAnswer(round, 'jay') && hasCompletedThisOrThatRoundAnswer(round, 'kim');
+    const settleKey = `${game?.id || ''}:${roundKey}:this-or-that-reveal`;
+    if (
+      !isThisOrThatGame
+      || !round
+      || round.status !== 'open'
+      || !bothPlayersCompleted
+      || (!isCurrentLocalTestGame && currentSeat !== coordinatorSeat)
+    ) {
+      if (thisOrThatRevealSettleRef.current === settleKey) thisOrThatRevealSettleRef.current = '';
+      return undefined;
+    }
+    if (thisOrThatRevealSettleRef.current === settleKey) return undefined;
+    const penalties = getThisOrThatPenaltyMap(round);
+    thisOrThatRevealSettleRef.current = settleKey;
+    if (isCurrentLocalTestGame) {
+      setGame((current) =>
+        current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'open'
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                penalties,
+                status: 'reveal',
+                updatedAt: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      return undefined;
+    }
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return undefined;
+    updateDoc(gameRef, {
+      'currentRound.penalties': penalties,
+      'currentRound.status': 'reveal',
+      'currentRound.updatedAt': serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {
+      thisOrThatRevealSettleRef.current = '';
+    });
+    return undefined;
+  }, [
+    currentSeat,
+    firestore,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.answers?.jay?.ownAnswer,
+    game?.currentRound?.answers?.jay?.guessedOther,
+    game?.currentRound?.answers?.kim?.ownAnswer,
+    game?.currentRound?.answers?.kim?.guessedOther,
+    getThisOrThatPenaltyMap,
     isCurrentLocalTestGame,
   ]);
 
@@ -17795,6 +18231,7 @@ function ProductionApp() {
 
   const drawQuestion = (sourceGame = game, sourceRounds = rounds) => {
     const sourceBankType = normalizeQuestionBankType(sourceGame?.questionBankType || getQuestionBankTypeForGameMode(sourceGame?.gameMode || 'standard'));
+    const sourceIsThisOrThatGame = isThisOrThatGameMode(sourceGame?.gameMode || 'standard');
     const sourcePool = sourceBankType === 'quiz'
       ? quizBankQuestions
       : sourceBankType === 'trueFalseGame'
@@ -17815,7 +18252,8 @@ function ProductionApp() {
     const questionQueueIds = Array.isArray(sourceGame?.questionQueueIds) ? sourceGame.questionQueueIds.filter(Boolean) : [];
     const availablePool = sourcePool.filter(
       (question) =>
-        !retiredQuestionIds.has(question.id)
+        (!sourceIsThisOrThatGame || isThisOrThatQuestionCompatible(question))
+        && !retiredQuestionIds.has(question.id)
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
@@ -17823,7 +18261,8 @@ function ProductionApp() {
       ? []
       : standardSelectableQuestions.filter(
           (question) =>
-            !retiredQuestionIds.has(question.id)
+            (!sourceIsThisOrThatGame || isThisOrThatQuestionCompatible(question))
+            && !retiredQuestionIds.has(question.id)
             && !reservedQuestionIds.has(question.id)
             && !usedIds.has(question.id),
         );
@@ -17834,7 +18273,7 @@ function ProductionApp() {
         : starterFallbackPool;
     const queuePool = questionQueueIds
       .map((id) => sourcePool.find((question) => question.id === id))
-      .filter((question) => question && !usedIds.has(question.id) && question.id !== previousQuestionId);
+      .filter((question) => question && (!sourceIsThisOrThatGame || isThisOrThatQuestionCompatible(question)) && !usedIds.has(question.id) && question.id !== previousQuestionId);
     if (queuePool.length) {
       return { question: queuePool[0], remainingQueueIds: questionQueueIds.filter((id) => id !== queuePool[0].id) };
     }
@@ -17859,6 +18298,7 @@ function ProductionApp() {
       if (!game) throw new Error('No room open.');
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
       const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+      const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
       if (
         game.currentRound
         && game.currentRound.status !== 'reveal'
@@ -17889,7 +18329,7 @@ function ProductionApp() {
         if (game.currentRound) {
           const penalties = isQuizGame
             ? { jay: 0, kim: 0 }
-            : isTrueFalseGame
+            : isTrueFalseGame || isThisOrThatGame
               ? {
                   jay: Number(game.currentRound.penalties?.jay || 0),
                   kim: Number(game.currentRound.penalties?.kim || 0),
@@ -17905,12 +18345,8 @@ function ProductionApp() {
                 kim: game.currentRound.answers?.kim?.ownAnswer || '',
               },
               guessedAnswers: {
-                jay: isTrueFalseGame
-                  ? (game.currentRound.answers?.jay?.guessedOther || '')
-                  : (game.currentRound.answers?.jay?.guessedOther || ''),
-                kim: isTrueFalseGame
-                  ? (game.currentRound.answers?.kim?.guessedOther || '')
-                  : (game.currentRound.answers?.kim?.guessedOther || ''),
+                jay: game.currentRound.answers?.jay?.guessedOther || '',
+                kim: game.currentRound.answers?.kim?.guessedOther || '',
               },
               actualList: {
                 jay: parseAnswerList(game.currentRound.answers?.jay?.ownAnswer || ''),
@@ -18018,7 +18454,7 @@ function ProductionApp() {
       if (game.currentRound) {
         const penalties = isQuizGame
           ? { jay: 0, kim: 0 }
-          : isTrueFalseGame
+          : isTrueFalseGame || isThisOrThatGame
             ? {
                 jay: Number(game.currentRound.penalties?.jay || 0),
                 kim: Number(game.currentRound.penalties?.kim || 0),
@@ -19136,6 +19572,7 @@ function ProductionApp() {
       onTakeHoldemAction={takeHoldemAction}
 	      onSubmitAnswer={submitAnswer}
       onLockTrueFalseAnswer={lockTrueFalseAnswerField}
+      onLockThisOrThatAnswer={lockThisOrThatAnswerField}
 	      onMarkReady={markReady}
 	      onAddQuestion={addQuestion}
       onSyncSheet={syncSheet}

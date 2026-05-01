@@ -7557,69 +7557,84 @@ button:disabled {
   grid-template-rows: auto;
 }
 
-.room-active-frame--true-false .room-active-stage {
+.room-active-frame--true-false .room-active-stage,
+.room-active-frame--this-or-that .room-active-stage {
   gap: clamp(8px, 1.2vw, 12px);
 }
 
-.room-active-frame--true-false .true-false-live-status {
+.room-active-frame--true-false .true-false-live-status,
+.room-active-frame--this-or-that .true-false-live-status {
   gap: 6px;
 }
 
-.room-active-frame--true-false .room-active-question--answering {
+.room-active-frame--true-false .room-active-question--answering,
+.room-active-frame--this-or-that .room-active-question--answering {
   min-height: clamp(96px, 18vh, 170px);
   max-height: clamp(118px, 24vh, 210px);
   padding: clamp(10px, 1.5vw, 16px);
 }
 
-.room-active-frame--true-false .room-active-question--answering p {
+.room-active-frame--true-false .room-active-question--answering p,
+.room-active-frame--this-or-that .room-active-question--answering p {
   max-width: 30ch;
   font-size: clamp(1.3rem, 2.9vw, 2.45rem);
   line-height: 1.12;
 }
 
-.room-active-frame--true-false .room-active-question--answering.is-medium p {
+.room-active-frame--true-false .room-active-question--answering.is-medium p,
+.room-active-frame--this-or-that .room-active-question--answering.is-medium p {
   font-size: clamp(1.16rem, 2.45vw, 2rem);
 }
 
 .room-active-frame--true-false .room-active-question--answering.is-long p,
-.room-active-frame--true-false .room-active-question--answering.is-dense p {
+.room-active-frame--true-false .room-active-question--answering.is-dense p,
+.room-active-frame--this-or-that .room-active-question--answering.is-long p,
+.room-active-frame--this-or-that .room-active-question--answering.is-dense p {
   max-width: 33ch;
   font-size: clamp(0.98rem, 2.05vw, 1.55rem);
   line-height: 1.14;
 }
 
-.room-active-frame--true-false .room-answer-entry--true-false {
+.room-active-frame--true-false .room-answer-entry--true-false,
+.room-active-frame--this-or-that .room-answer-entry--true-false {
   gap: 10px;
 }
 
-.room-active-frame--true-false .true-false-answer-header {
+.room-active-frame--true-false .true-false-answer-header,
+.room-active-frame--this-or-that .true-false-answer-header {
   gap: 8px;
   padding: 8px 10px;
 }
 
-.room-active-frame--true-false .true-false-answer-header p {
+.room-active-frame--true-false .true-false-answer-header p,
+.room-active-frame--this-or-that .true-false-answer-header p {
   font-size: 0.78rem;
   line-height: 1.24;
 }
 
-.room-active-frame--true-false .answer-section--embedded {
+.room-active-frame--true-false .answer-section--embedded,
+.room-active-frame--this-or-that .answer-section--embedded {
   gap: 8px;
   padding: 10px;
 }
 
-.room-active-frame--true-false .answer-section--embedded .mini-heading {
+.room-active-frame--true-false .answer-section--embedded .mini-heading,
+.room-active-frame--this-or-that .answer-section--embedded .mini-heading {
   min-height: 56px;
 }
 
-.room-active-frame--true-false .choice-grid--embedded {
+.room-active-frame--true-false .choice-grid--embedded,
+.room-active-frame--this-or-that .choice-grid--embedded {
   gap: 8px;
 }
 
-.room-active-frame--true-false .choice-button {
+.room-active-frame--true-false .choice-button,
+.room-active-frame--this-or-that .choice-button {
   min-height: 46px;
 }
 
-.room-active-frame--true-false .true-false-answer-note {
+.room-active-frame--true-false .true-false-answer-note,
+.room-active-frame--this-or-that .true-false-answer-note {
   min-height: 18px;
   font-size: 0.75rem;
 }
@@ -12904,30 +12919,36 @@ select:focus-visible {
     padding: 8px;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .room-active-stage {
+  .mobile-board-panel .room-active-frame--true-false .room-active-stage,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-stage {
     padding: 8px;
     gap: 6px;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .room-active-header {
+  .mobile-board-panel .room-active-frame--true-false .room-active-header,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-header {
     gap: 6px;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .room-active-header h2 {
+  .mobile-board-panel .room-active-frame--true-false .room-active-header h2,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-header h2 {
     font-size: clamp(0.98rem, 4.8vw, 1.2rem);
   }
 
-  .mobile-board-panel .room-active-frame--true-false .room-active-pills {
+  .mobile-board-panel .room-active-frame--true-false .room-active-pills,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-pills {
     gap: 4px;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .room-active-question--answering {
+  .mobile-board-panel .room-active-frame--true-false .room-active-question--answering,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering {
     min-height: clamp(72px, 18svh, 132px);
     max-height: clamp(92px, 22svh, 160px);
     padding: 8px;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .room-active-question--answering p {
+  .mobile-board-panel .room-active-frame--true-false .room-active-question--answering p,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering p {
     max-width: 31ch;
     font-size: clamp(0.96rem, 3.8vw, 1.18rem);
     line-height: 1.14;
@@ -12935,7 +12956,10 @@ select:focus-visible {
 
   .mobile-board-panel .room-active-frame--true-false .room-active-question--answering.is-medium p,
   .mobile-board-panel .room-active-frame--true-false .room-active-question--answering.is-long p,
-  .mobile-board-panel .room-active-frame--true-false .room-active-question--answering.is-dense p {
+  .mobile-board-panel .room-active-frame--true-false .room-active-question--answering.is-dense p,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering.is-medium p,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering.is-long p,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering.is-dense p {
     max-width: 32ch;
     font-size: clamp(0.84rem, 3.3vw, 1.02rem);
     line-height: 1.16;
@@ -13144,36 +13168,43 @@ select:focus-visible {
     min-height: 42px;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .true-false-answer-header {
+  .mobile-board-panel .room-active-frame--true-false .true-false-answer-header,
+  .mobile-board-panel .room-active-frame--this-or-that .true-false-answer-header {
     align-items: flex-start;
     padding: 7px 9px;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .true-false-answer-header p {
+  .mobile-board-panel .room-active-frame--true-false .true-false-answer-header p,
+  .mobile-board-panel .room-active-frame--this-or-that .true-false-answer-header p {
     font-size: 0.72rem;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .answer-section--embedded {
+  .mobile-board-panel .room-active-frame--true-false .answer-section--embedded,
+  .mobile-board-panel .room-active-frame--this-or-that .answer-section--embedded {
     gap: 8px;
     padding: 8px;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .answer-section--embedded .mini-heading {
+  .mobile-board-panel .room-active-frame--true-false .answer-section--embedded .mini-heading,
+  .mobile-board-panel .room-active-frame--this-or-that .answer-section--embedded .mini-heading {
     min-height: 0;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .choice-grid--embedded {
+  .mobile-board-panel .room-active-frame--true-false .choice-grid--embedded,
+  .mobile-board-panel .room-active-frame--this-or-that .choice-grid--embedded {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .choice-button {
+  .mobile-board-panel .room-active-frame--true-false .choice-button,
+  .mobile-board-panel .room-active-frame--this-or-that .choice-button {
     min-height: 42px;
     padding: 8px 10px;
     font-size: 0.74rem;
   }
 
-  .mobile-board-panel .room-active-frame--true-false .true-false-answer-note {
+  .mobile-board-panel .room-active-frame--true-false .true-false-answer-note,
+  .mobile-board-panel .room-active-frame--this-or-that .true-false-answer-note {
     min-height: 0;
     font-size: 0.7rem;
   }
