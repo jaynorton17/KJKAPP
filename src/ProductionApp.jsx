@@ -11591,6 +11591,7 @@ function ProductionApp() {
   const autoSheetImportAttemptedRef = useRef(false);
   const autoTrueFalseSheetSyncInFlightRef = useRef(false);
   const roomLoadTimeoutRef = useRef(null);
+  const gameListenerRetryRef = useRef({ timer: null, gameId: '', attempts: 0 });
   const amaStoreSeededRef = useRef({ jay: false, kim: false });
   const autoResumedGameIdRef = useRef(gameId || '');
   const lastAuthUserIdRef = useRef(firebaseAuth?.currentUser?.uid || '');
@@ -11613,8 +11614,15 @@ function ProductionApp() {
     }
   };
 
+  const clearGameListenerRetry = () => {
+    const retryTimer = gameListenerRetryRef.current?.timer || null;
+    if (retryTimer) window.clearTimeout(retryTimer);
+    gameListenerRetryRef.current = { timer: null, gameId: '', attempts: 0 };
+  };
+
   const resetRoomLoadState = () => {
     clearRoomLoadTimer();
+    clearGameListenerRetry();
     setRoomLoadState({ status: 'idle', gameId: '', reason: '', message: '' });
   };
 
@@ -11645,6 +11653,7 @@ function ProductionApp() {
     if (!nextGameId) return;
     debugRoom('resolveRoomLoad', { nextGameId, source });
     clearRoomLoadTimer();
+    if (gameListenerRetryRef.current.gameId === nextGameId) clearGameListenerRetry();
     setRoomLoadState((current) => {
       if (current.gameId && current.gameId !== nextGameId) return current;
       return { status: 'idle', gameId: '', reason: '', message: '' };
@@ -12116,7 +12125,10 @@ function ProductionApp() {
     const gameRef = doc(firestore, 'games', gameId);
     const roundsRef = query(collection(gameRef, 'rounds'), orderBy('number', 'asc'));
     const chatRef = query(collection(gameRef, 'chatMessages'), orderBy('createdAt', 'asc'));
-    const unsubscribeGame = onSnapshot(gameRef, (snapshot) => {
+    let unsubscribeGame = () => {};
+    let unsubscribeRounds = () => {};
+    let unsubscribeChat = () => {};
+    unsubscribeGame = onSnapshot(gameRef, (snapshot) => {
       const snapshotData = snapshot.exists() ? snapshot.data() || {} : null;
       debugRoom('gameSnapshot', {
         gameId,
@@ -12135,12 +12147,39 @@ function ProductionApp() {
       });
     }, (error) => {
       setConnectionState((current) => ({ ...current, lastError: error?.message || String(error) }));
+      if (isFirestoreRateLimitedError(error)) {
+        const previousRetry = gameListenerRetryRef.current || { timer: null, gameId: '', attempts: 0 };
+        const attempts = previousRetry.gameId === gameId ? Number(previousRetry.attempts || 0) + 1 : 1;
+        const delayMs = Math.min(15000, 2000 * attempts);
+        if (previousRetry.timer) window.clearTimeout(previousRetry.timer);
+        gameListenerRetryRef.current = {
+          gameId,
+          attempts,
+          timer: window.setTimeout(() => {
+            if (gameListenerRetryRef.current.gameId !== gameId) return;
+            gameListenerRetryRef.current = {
+              ...gameListenerRetryRef.current,
+              timer: null,
+            };
+            setListenerRefreshKey((current) => current + 1);
+          }, delayMs),
+        };
+        unsubscribeGame();
+        unsubscribeRounds();
+        unsubscribeChat();
+        failRoomLoad(
+          gameId,
+          `Firestore is rate-limiting this room right now. Retrying in ${Math.ceil(delayMs / 1000)}s.`,
+          'game-listener-rate-limited',
+        );
+        return;
+      }
       failRoomLoad(gameId, `Could not load the game board: ${error?.message || error}`, 'game-listener');
     });
-    const unsubscribeRounds = onSnapshot(roundsRef, (snapshot) => {
+    unsubscribeRounds = onSnapshot(roundsRef, (snapshot) => {
       setRounds(normalizeStoredRounds(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))));
     }, (error) => debugRoom('roundsSnapshotError', { gameId, message: error?.message || String(error) }));
-    const unsubscribeChat = onSnapshot(chatRef, (snapshot) => {
+    unsubscribeChat = onSnapshot(chatRef, (snapshot) => {
       setChatMessages(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('chatSnapshotError', { gameId, message: error?.message || String(error) }));
     return () => {
