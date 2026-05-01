@@ -12418,6 +12418,7 @@ function ProductionApp() {
   const staleCompletedRestoreRef = useRef(new Set());
   const completedLiveRoomHandledRef = useRef(new Set());
   const gameLibraryRoundsCacheRef = useRef(new Map());
+  const gameLibrarySnapshotRequestRef = useRef(0);
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
   const shouldLoadQuestionBankData = Boolean(
@@ -12475,6 +12476,20 @@ function ProductionApp() {
     && deferredLobbyDataReady
     && !hasOpenRoomSession
     && dashboardTabState === 'questionBank',
+  );
+  const shouldLoadAllCompletedGameRounds = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && ['analytics', 'ai', 'diary', 'forfeitStore'].includes(dashboardTabState),
+  );
+  const shouldLoadSelectedCompletedGameRoundHistory = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (selectedGameId || localEndedGameSummary?.id),
   );
   const localTestGameForId = (targetGameId = '') => {
     if (!targetGameId) return null;
@@ -12786,6 +12801,7 @@ function ProductionApp() {
   }, [user, gameId, firestore, listenerRefreshKey]);
 
   useEffect(() => {
+    gameLibrarySnapshotRequestRef.current += 1;
     if (!user || !firestore) {
       setGameLibrary([]);
       return undefined;
@@ -12793,49 +12809,78 @@ function ProductionApp() {
     if (hasOpenRoomSession) return undefined;
     const gamesRef = query(collection(firestore, 'games'), where('playerUids', 'array-contains', user.uid));
     let isListenerActive = true;
-    const unsubscribe = onSnapshot(gamesRef, async (snapshot) => {
-      const visibleGameIds = new Set(snapshot.docs.map((entry) => entry.id));
-      [...gameLibraryRoundsCacheRef.current.keys()].forEach((cacheKey) => {
-        const cachedGameId = cacheKey.split(':')[0] || '';
-        if (!visibleGameIds.has(cachedGameId)) gameLibraryRoundsCacheRef.current.delete(cacheKey);
-      });
-      const summaries = await Promise.all(
-        snapshot.docs.map(async (entry) => {
-          const data = entry.data();
-          const status = data.status || 'active';
-          const shouldLoadRounds = COMPLETED_GAME_STATUSES.includes(status);
-          let roundsData = [];
-          if (shouldLoadRounds) {
-            const cacheKey = [
-              entry.id,
-              Number(data.roundsPlayed || 0),
-              getRecordTime(data.endedAt || data.updatedAt || data.createdAt || 0),
-            ].join(':');
-            const cachedRounds = gameLibraryRoundsCacheRef.current.get(cacheKey);
-            if (cachedRounds) {
-              roundsData = cachedRounds;
-            } else {
-              const roundsSnap = await getDocs(query(collection(doc(firestore, 'games', entry.id), 'rounds'), orderBy('number', 'asc')));
-              roundsData = normalizeStoredRounds(roundsSnap.docs.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() })));
-              gameLibraryRoundsCacheRef.current.set(cacheKey, roundsData);
+    const unsubscribe = onSnapshot(gamesRef, (snapshot) => {
+      const requestId = gameLibrarySnapshotRequestRef.current + 1;
+      gameLibrarySnapshotRequestRef.current = requestId;
+      const isStaleRequest = () =>
+        !isListenerActive || gameLibrarySnapshotRequestRef.current !== requestId;
+
+      void (async () => {
+        const visibleGameIds = new Set(snapshot.docs.map((entry) => entry.id));
+        if (isStaleRequest()) return;
+
+        [...gameLibraryRoundsCacheRef.current.keys()].forEach((cacheKey) => {
+          const cachedGameId = cacheKey.split(':')[0] || '';
+          if (!visibleGameIds.has(cachedGameId)) gameLibraryRoundsCacheRef.current.delete(cacheKey);
+        });
+
+        const summaries = await Promise.all(
+          snapshot.docs.map(async (entry) => {
+            const data = entry.data();
+            const status = data.status || 'active';
+            const shouldLoadRounds = COMPLETED_GAME_STATUSES.includes(status) && (
+              shouldLoadAllCompletedGameRounds
+              || (
+                shouldLoadSelectedCompletedGameRoundHistory
+                && (entry.id === selectedGameId || entry.id === localEndedGameSummary?.id)
+              )
+            );
+            let roundsData = [];
+            if (shouldLoadRounds) {
+              const cacheKey = [
+                entry.id,
+                Number(data.roundsPlayed || 0),
+                getRecordTime(data.endedAt || data.updatedAt || data.createdAt || 0),
+              ].join(':');
+              const cachedRounds = gameLibraryRoundsCacheRef.current.get(cacheKey);
+              if (cachedRounds) {
+                roundsData = cachedRounds;
+              } else {
+                const roundsSnap = await getDocs(query(collection(doc(firestore, 'games', entry.id), 'rounds'), orderBy('number', 'asc')));
+                roundsData = normalizeStoredRounds(roundsSnap.docs.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() })));
+                if (!isStaleRequest()) gameLibraryRoundsCacheRef.current.set(cacheKey, roundsData);
+              }
             }
-          }
-          return buildGameLibraryEntry(entry.id, data, roundsData);
-        }),
-      );
-      if (!snapshot.empty) {
-        summaries.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      }
-      if (!isListenerActive) return;
-      setGameLibrary(summaries.filter(Boolean));
+            return buildGameLibraryEntry(entry.id, data, roundsData);
+          }),
+        );
+
+        if (isStaleRequest()) return;
+        if (!snapshot.empty) summaries.sort(sortByNewestGameSession);
+        if (isStaleRequest()) return;
+        setGameLibrary(summaries.filter(Boolean));
+      })().catch((error) => {
+        if (!isStaleRequest()) {
+          debugRoom('gameLibrarySnapshotLoadError', { message: error?.message || String(error) });
+        }
+      });
     }, (error) => {
       debugRoom('gameLibrarySnapshotError', { message: error?.message || String(error) });
     });
     return () => {
       isListenerActive = false;
+      gameLibrarySnapshotRequestRef.current += 1;
       unsubscribe();
     };
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [
+    user,
+    firestore,
+    hasOpenRoomSession,
+    selectedGameId,
+    localEndedGameSummary?.id,
+    shouldLoadAllCompletedGameRounds,
+    shouldLoadSelectedCompletedGameRoundHistory,
+  ]);
 
   useEffect(() => {
     if (!firestore || !user) {
