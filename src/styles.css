@@ -418,6 +418,45 @@ button:disabled {
   align-items: flex-start;
 }
 
+.lobby-image-tile-front-heading-side {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.lobby-image-tile-info-button {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 999px;
+  border-color: rgba(255, 255, 255, 0.22);
+  background:
+    linear-gradient(135deg, rgba(19, 33, 61, 0.92), rgba(8, 16, 30, 0.96)),
+    rgba(8, 15, 28, 0.86);
+  color: #f7fbff;
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow:
+    0 10px 20px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.lobby-image-tile-info-button.is-active {
+  border-color: rgba(255, 223, 140, 0.52);
+  background:
+    linear-gradient(135deg, rgba(255, 218, 122, 0.28), rgba(45, 102, 255, 0.2)),
+    rgba(9, 18, 34, 0.94);
+}
+
+.lobby-image-tile-info-copy {
+  margin: 0;
+  width: min(100%, 28rem);
+}
+
 .lobby-image-tile-front-spacer {
   flex: 1 1 auto;
 }
@@ -449,6 +488,39 @@ button:disabled {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.lobby-image-tile-front-control {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-width: min(100%, 150px);
+}
+
+.lobby-image-tile-front-control span {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(231, 238, 251, 0.82);
+}
+
+.lobby-image-tile-front-control input {
+  width: min(140px, 100%);
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(8, 15, 28, 0.82);
+  color: #fff;
+  font-size: 0.98rem;
+  font-weight: 800;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.lobby-image-tile-front-control input:focus-visible {
+  outline: 2px solid rgba(255, 223, 140, 0.68);
+  outline-offset: 2px;
 }
 
 .lobby-image-tile-front-actions {
@@ -618,7 +690,9 @@ button:disabled {
     align-items: stretch;
   }
   .lobby-image-tile-front-meta {
-    justify-content: center;
+    width: 100%;
+  }
+  .lobby-image-tile-front-control input {
     width: 100%;
   }
   .lobby-image-tile-action {

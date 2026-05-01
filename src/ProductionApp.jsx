@@ -2750,6 +2750,7 @@ function LobbyScreen({
     quiz: false,
     holdem: false,
   }));
+  const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
@@ -2843,6 +2844,7 @@ function LobbyScreen({
         [cardId]: nextValue,
       };
     });
+    if (nextValue) setOpenLobbyTileInfoId('');
   };
 
   const closeDashboardMenu = () => {
@@ -3280,6 +3282,7 @@ function LobbyScreen({
   const activeLobbyCarouselCard = lobbyCarouselCards[lobbyCarouselIndex] || lobbyCarouselCards[0];
 
   const moveLobbyCarousel = (direction) => {
+    setOpenLobbyTileInfoId('');
     setLobbyCarouselIndex((current) => (current + direction + lobbyCarouselCount) % lobbyCarouselCount);
   };
 
@@ -3323,8 +3326,9 @@ function LobbyScreen({
   const isQuizTileFlipped = Boolean(flippedLobbyTiles.quiz);
   const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
 
-  const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, footerMeta, onCreateAndInvite }) => {
+  const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, description, footerMeta, onCreateAndInvite }) => {
     const isFlipped = Boolean(flippedLobbyTiles?.[cardId]);
+    const isInfoOpen = openLobbyTileInfoId === cardId;
     return (
       <div className="lobby-image-tile-face lobby-image-tile-face--front" inert={isFlipped} aria-hidden={isFlipped}>
         <div className="lobby-image-tile-front-copy">
@@ -3333,8 +3337,20 @@ function LobbyScreen({
               <p className="eyebrow">{eyebrow}</p>
               <h2>{title}</h2>
             </div>
-            {statusText ? <span className="status-pill">{statusText}</span> : null}
+            <div className="lobby-image-tile-front-heading-side">
+              <Button
+                type="button"
+                className={`ghost-button compact lobby-image-tile-info-button ${isInfoOpen ? 'is-active' : ''}`}
+                onClick={() => setOpenLobbyTileInfoId((current) => (current === cardId ? '' : cardId))}
+                aria-label={`Show more info about ${title}`}
+                aria-expanded={isInfoOpen}
+              >
+                i
+              </Button>
+              {statusText ? <span className="status-pill">{statusText}</span> : null}
+            </div>
           </div>
+          {isInfoOpen ? <p className="panel-copy lobby-image-tile-info-copy">{description}</p> : null}
         </div>
         <div className="lobby-image-tile-front-spacer" aria-hidden="true" />
         <div className="lobby-image-tile-front-footer">
@@ -3552,7 +3568,20 @@ function LobbyScreen({
                           eyebrow: 'Game Lobby',
                           title: 'Normal Game',
                           statusText: `${questionCount} ready`,
-                          footerMeta: `${Math.max(1, Number(gameQuestionCount || 0) || 0)} Questions`,
+                          description: 'Penalty-point rounds, question reveals, and all the usual Jay vs Kim game flow.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={gameQuestionCount}
+                                onChange={(event) => onGameQuestionCountChange(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
                           onCreateAndInvite: handleCreateAndInviteGame,
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isStandardTileFlipped} aria-hidden={!isStandardTileFlipped}>
@@ -3687,7 +3716,20 @@ function LobbyScreen({
                           eyebrow: 'Quick Fire',
                           title: 'Quick Fire Quiz',
                           statusText: `${quizQuestionCount} ready`,
-                          footerMeta: `${Math.max(1, Number(quizQuestionCountDraft || 0) || 0)} Questions`,
+                          description: 'Fast-answer quiz mode with its own scoring, timer pressure, and separate quiz points.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={quizQuestionCountDraft}
+                                onChange={(event) => setQuizQuestionCountDraft(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
                           onCreateAndInvite: () => handleCreateQuizGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isQuizTileFlipped} aria-hidden={!isQuizTileFlipped}>
@@ -3787,6 +3829,7 @@ function LobbyScreen({
                           eyebrow: 'Cards',
                           title: "Texas Hold'em",
                           statusText: `${formatScore(HOLDEM_SMALL_BLIND)} / ${formatScore(HOLDEM_BIG_BLIND)}`,
+                          description: 'Heads-up poker using Jay and Kim’s live penalty-point totals as the bankroll for each hand.',
                           footerMeta: '2 Players',
                           onCreateAndInvite: () => handleCreateHoldemGame(true),
                         })}
