@@ -13133,7 +13133,12 @@ function ProductionApp() {
   const incomingGameInvites = useMemo(
     () =>
       gameInvites
-        .filter((invite) => matchesCurrentPlayerIdentity(invite.invitedForUserId) && invite.invitedByUserId !== user?.uid)
+        .filter(
+          (invite) => (
+            matchesCurrentPlayerIdentity(invite.invitedForUserId)
+            || (dashboardSeat && invite.invitedForSeat === dashboardSeat)
+          ) && invite.invitedByUserId !== user?.uid,
+        )
         .filter((invite) => (invite.status || 'pending') !== 'dismissed')
         .map((invite) => {
           const linkedGame =
@@ -13152,7 +13157,7 @@ function ProductionApp() {
         })
         .filter((invite) => ['pending', 'expired'].includes(invite.displayStatus))
         .sort(sortByNewest),
-    [gameInvites, matchesCurrentPlayerIdentity, user?.uid, game?.id, game, gameLibrary],
+    [dashboardSeat, gameInvites, matchesCurrentPlayerIdentity, user?.uid, game?.id, game, gameLibrary],
   );
   const pendingIncomingGameInvites = useMemo(
     () => incomingGameInvites.filter((invite) => invite.displayStatus === 'pending'),
@@ -13605,14 +13610,59 @@ function ProductionApp() {
     [amaDiaryEntries],
   );
 
+  const getLocalQuestionPoolForBankType = (targetBankType = 'game') => {
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    if (normalizedTargetBankType === 'quiz') return quizBankQuestions;
+    if (normalizedTargetBankType === 'thisOrThatGame') return thisOrThatBankQuestions;
+    if (normalizedTargetBankType === 'trueFalseGame') return trueFalseBankQuestions;
+    return gameBankQuestions;
+  };
+
+  const ensureQuestionBankReadyForQueue = async (targetBankType = 'game') => {
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    if (getLocalQuestionPoolForBankType(normalizedTargetBankType).length) return;
+    const seedTimeoutMarker = { timedOut: true };
+    let timeoutId = 0;
+    try {
+      const result = await Promise.race([
+        seedBankIfNeeded(normalizedTargetBankType),
+        new Promise((resolve) => {
+          timeoutId = window.setTimeout(() => resolve(seedTimeoutMarker), 2500);
+        }),
+      ]);
+      if (result === seedTimeoutMarker) {
+        console.warn('Question bank seed timed out while creating a room; continuing with the latest synced questions.', {
+          targetBankType: normalizedTargetBankType,
+        });
+      }
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+    }
+  };
+
   const buildQuestionQueue = async (requestedCount = 10, filters = {}) => {
-    const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
     const requestedBankType = normalizeQuestionBankType(filters.bankType);
     const requestedGameMode = resolveGameMode(filters.gameMode || 'standard');
     const isThisOrThatQueue = isThisOrThatGameMode(requestedGameMode);
-    const allQuestions = bankSnapshot.empty
-      ? STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))
-      : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
+    const localPool = getLocalQuestionPoolForBankType(requestedBankType);
+    let allQuestions = [];
+    if (requestedBankType === 'game') {
+      if (bankQuestions.length) {
+        allQuestions = bankQuestions;
+      } else {
+        const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
+        allQuestions = bankSnapshot.empty
+          ? STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))
+          : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
+      }
+    } else if (localPool.length) {
+      allQuestions = bankQuestions;
+    } else {
+      const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
+      allQuestions = bankSnapshot.empty
+        ? []
+        : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
+    }
     const questionBankPool = allQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === requestedBankType);
     const retiredQuestionIds = requestedBankType === 'quiz'
       ? trackedUsedQuizQuestionIds
@@ -16499,7 +16549,7 @@ function ProductionApp() {
         let warning = '';
         let actualCount = 0;
         if (!isHoldemGame) {
-          await seedBankIfNeeded(targetBankType);
+          await ensureQuestionBankReadyForQueue(targetBankType);
           const queueResult = await buildQuestionQueue(requestedQuestionCount, {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
@@ -16708,9 +16758,7 @@ function ProductionApp() {
         let actualCount = 0;
         try {
           if (!isHoldemGame) {
-            await seedBankIfNeeded(targetBankType);
-            const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
-            if (!bankSnapshot.size) throw new Error('Question bank is not loaded.');
+            await ensureQuestionBankReadyForQueue(targetBankType);
             const queueResult = await buildQuestionQueue(requestedQuestionCount, {
               roundTypes: selectedRoundTypes,
               categories: selectedCategories,
