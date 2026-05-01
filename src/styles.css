@@ -196,50 +196,8 @@ button:disabled {
   gap: 12px;
   min-width: 0;
   overflow: hidden;
-  grid-template-rows: auto var(--lobby-carousel-card-height) auto;
+  grid-template-rows: var(--lobby-carousel-card-height) auto;
   align-content: start;
-}
-
-.lobby-carousel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-inline: 4px;
-}
-
-.lobby-carousel-header h2 {
-  margin: 0;
-}
-
-.lobby-carousel-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.lobby-carousel-arrow {
-  min-width: 88px;
-  min-height: 52px;
-  padding: 0 14px;
-  border-radius: 999px;
-  font-size: 1.6rem;
-  line-height: 1;
-  gap: 8px;
-  border-color: rgba(255, 223, 140, 0.48);
-  background:
-    linear-gradient(135deg, rgba(255, 204, 92, 0.24), rgba(46, 92, 255, 0.2)),
-    rgba(10, 18, 34, 0.9);
-  box-shadow:
-    0 12px 24px rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.lobby-carousel-arrow small {
-  font-size: 0.74rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .lobby-carousel-stage {
@@ -301,10 +259,11 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 60px;
-  min-width: 60px;
+  gap: 8px;
+  width: auto;
+  min-width: 108px;
   min-height: 60px;
-  padding: 0;
+  padding: 0 16px;
   border-radius: 999px;
   border-color: rgba(255, 223, 140, 0.58);
   background:
@@ -313,9 +272,16 @@ button:disabled {
   box-shadow:
     0 18px 28px rgba(0, 0, 0, 0.24),
     inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  font-size: 2.4rem;
+  font-size: 1.6rem;
   line-height: 1;
   transform: translateY(-50%);
+}
+
+.lobby-carousel-stage-arrow small {
+  font-size: 0.74rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .lobby-carousel-stage-arrow--left {
@@ -652,29 +618,15 @@ button:disabled {
   .lobby-carousel-shell {
     --lobby-carousel-card-height: clamp(520px, 70svh, 660px);
   }
-  .lobby-carousel-header {
-    align-items: start;
-    flex-direction: column;
-  }
-  .lobby-carousel-controls {
-    width: 100%;
-    justify-content: space-between;
-  }
-  .lobby-carousel-arrow {
-    min-width: 108px;
-  }
-  .lobby-carousel-controls .lobby-carousel-arrow {
-    min-height: 52px;
-  }
   .lobby-carousel-stage {
     padding-inline: 34px;
   }
   .lobby-carousel-stage-arrow {
-    width: 54px;
-    min-width: 54px;
+    min-width: 96px;
     min-height: 54px;
     height: 54px;
-    font-size: 2.1rem;
+    padding-inline: 14px;
+    font-size: 1.3rem;
   }
   .lobby-carousel-slide--left {
     transform: translateX(-126%) scale(0.88);

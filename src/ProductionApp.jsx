@@ -3279,8 +3279,6 @@ function LobbyScreen({
   ];
 
   const lobbyCarouselCount = lobbyCarouselCards.length;
-  const activeLobbyCarouselCard = lobbyCarouselCards[lobbyCarouselIndex] || lobbyCarouselCards[0];
-
   const moveLobbyCarousel = (direction) => {
     setOpenLobbyTileInfoId('');
     setLobbyCarouselIndex((current) => (current + direction + lobbyCarouselCount) % lobbyCarouselCount);
@@ -3504,33 +3502,6 @@ function LobbyScreen({
             ) : null}
             <div className="game-lobby-grid">
               <section className="lobby-carousel-shell" aria-label="Game mode carousel">
-                <div className="lobby-carousel-header">
-                  <div>
-                    <p className="eyebrow">Choose a mode</p>
-                    <h2>{activeLobbyCarouselCard.label}</h2>
-                  </div>
-                  <div className="lobby-carousel-controls" aria-label="Carousel controls">
-                    <Button
-                      type="button"
-                      className="ghost-button compact lobby-carousel-arrow"
-                      onClick={() => moveLobbyCarousel(-1)}
-                      aria-label="Show previous lobby box"
-                    >
-                      <span aria-hidden="true">‹</span>
-                      <small>Prev</small>
-                    </Button>
-                    <Button
-                      type="button"
-                      className="ghost-button compact lobby-carousel-arrow"
-                      onClick={() => moveLobbyCarousel(1)}
-                      aria-label="Show next lobby box"
-                    >
-                      <small>Next</small>
-                      <span aria-hidden="true">›</span>
-                    </Button>
-                  </div>
-                </div>
-
                 <div
                   className="lobby-carousel-stage"
                   aria-live="polite"
@@ -3544,6 +3515,7 @@ function LobbyScreen({
                     aria-label="Show previous game mode"
                   >
                     <span aria-hidden="true">‹</span>
+                    <small>Prev</small>
                   </Button>
                   <Button
                     type="button"
@@ -3551,6 +3523,7 @@ function LobbyScreen({
                     onClick={() => moveLobbyCarousel(1)}
                     aria-label="Show next game mode"
                   >
+                    <small>Next</small>
                     <span aria-hidden="true">›</span>
                   </Button>
                   <div
