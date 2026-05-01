@@ -229,6 +229,7 @@ const defaultForfeitResponseDraft = () => ({ price: '', message: '' });
 const defaultAmaQuestionDraft = () => ({ question: '', open: false });
 const defaultAmaAnswerDraft = () => ({ answer: '', story: '', media: [], relatedCategories: [], open: false, question: '', itemId: '', requestId: '' });
 const activeGameKey = 'kjk-active-game-id';
+const pendingDeletedGamesKey = 'kjk-pending-deleted-game-ids';
 const editingModeKey = 'kjk-editing-mode';
 const questionBankMetaId = 'question-bank-source';
 const EDITING_MODE_PIN = '0000';
@@ -2304,6 +2305,30 @@ const safeLocalStorageSet = (key = '', value = '') => {
   try {
     window.localStorage.setItem(key, value);
     return true;
+  } catch {
+    return false;
+  }
+};
+const readPendingDeletedGameIds = () => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(pendingDeletedGamesKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((value) => String(value || '')).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+};
+const writePendingDeletedGameIds = (ids = []) => {
+  if (typeof window === 'undefined') return false;
+  try {
+    const normalizedIds = [...new Set((ids || []).map((value) => String(value || '')).filter(Boolean))];
+    if (!normalizedIds.length) {
+      window.localStorage.removeItem(pendingDeletedGamesKey);
+      return true;
+    }
+    return safeLocalStorageSet(pendingDeletedGamesKey, JSON.stringify(normalizedIds));
   } catch {
     return false;
   }
@@ -12371,6 +12396,7 @@ function ProductionApp() {
   const [pairHistory, setPairHistory] = useState({ playedQuestionIds: [], completedGameIds: [] });
   const [selectedGameId, setSelectedGameId] = useState('');
   const [localEndedGameSummary, setLocalEndedGameSummary] = useState(null);
+  const [pendingDeletedGameIds, setPendingDeletedGameIds] = useState(() => readPendingDeletedGameIds());
   const [confirmAction, setConfirmAction] = useState(null);
   const [bankDraft, setBankDraft] = useState(defaultBankDraft);
   const [sheetInput, setSheetInput] = useState(DEFAULT_SETTINGS.googleSheetInput);
@@ -12413,6 +12439,7 @@ function ProductionApp() {
   const autoTrueFalseSheetSyncInFlightRef = useRef(false);
   const roomLoadTimeoutRef = useRef(null);
   const firestoreCooldownTimerRef = useRef(null);
+  const pendingDeleteRetryInFlightRef = useRef(false);
   const gameListenerRetryRef = useRef({ timer: null, gameId: '', attempts: 0 });
   const amaStoreSeededRef = useRef({ jay: false, kim: false });
   const autoResumedGameIdRef = useRef(gameId || '');
@@ -12423,6 +12450,7 @@ function ProductionApp() {
   const gameLibrarySnapshotRequestRef = useRef(0);
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
+  const hiddenGameIdSet = useMemo(() => new Set(pendingDeletedGameIds), [pendingDeletedGameIds]);
   const shouldPauseBackgroundFirestore = isFirestoreCoolingDown && !hasOpenRoomSession;
   const shouldLoadQuestionBankData = Boolean(
     user
@@ -12596,6 +12624,26 @@ function ProductionApp() {
       // Ignore storage failures.
     }
   };
+
+  const addPendingDeletedGameId = useCallback((targetGameId = '') => {
+    const normalizedGameId = String(targetGameId || '');
+    if (!normalizedGameId) return;
+    setPendingDeletedGameIds((current) => {
+      const next = [...new Set([...current, normalizedGameId])];
+      writePendingDeletedGameIds(next);
+      return next;
+    });
+  }, []);
+
+  const removePendingDeletedGameId = useCallback((targetGameId = '') => {
+    const normalizedGameId = String(targetGameId || '');
+    if (!normalizedGameId) return;
+    setPendingDeletedGameIds((current) => {
+      const next = current.filter((entry) => entry !== normalizedGameId);
+      writePendingDeletedGameIds(next);
+      return next;
+    });
+  }, []);
 
   const clearCompletedGameProfiles = async (targetGameId, participantUids = []) => {
     if (!firestore || !targetGameId) return;
@@ -12795,6 +12843,15 @@ function ProductionApp() {
         leavePendingGameRef.current = '';
       }
       if (isLocalTestGameId(gameId)) return;
+      if (activeGameFromProfile && hiddenGameIdSet.has(activeGameFromProfile)) {
+        clearPersistedActiveGame(activeGameFromProfile);
+        setGameId('');
+        setGame(null);
+        setRounds([]);
+        setChatMessages([]);
+        resetRoomLoadState();
+        return;
+      }
       if (activeGameFromProfile && activeGameFromProfile !== gameId) {
         void (async () => {
           const snap = await getDoc(doc(firestore, 'games', activeGameFromProfile)).catch(() => null);
@@ -12830,7 +12887,7 @@ function ProductionApp() {
       failRoomLoad(gameId, `Could not read your profile: ${error?.message || error}`, 'profile-listener');
     });
     return unsubscribe;
-  }, [user, gameId, firestore, listenerRefreshKey, enterFirestoreCooldown]);
+  }, [user, gameId, firestore, listenerRefreshKey, enterFirestoreCooldown, hiddenGameIdSet]);
 
   useEffect(() => {
     gameLibrarySnapshotRequestRef.current += 1;
@@ -12890,7 +12947,7 @@ function ProductionApp() {
         if (isStaleRequest()) return;
         if (!snapshot.empty) summaries.sort(sortByNewestGameSession);
         if (isStaleRequest()) return;
-        setGameLibrary(summaries.filter(Boolean));
+        setGameLibrary(summaries.filter((entry) => entry?.id && !hiddenGameIdSet.has(entry.id)));
       })().catch((error) => {
         if (!isStaleRequest()) return;
         if (isFirestoreRateLimitedError(error)) {
@@ -12916,6 +12973,7 @@ function ProductionApp() {
     shouldLoadAllCompletedGameRounds,
     shouldLoadSelectedCompletedGameRoundHistory,
     enterFirestoreCooldown,
+    hiddenGameIdSet,
     reportFirestoreListenerError,
   ]);
 
@@ -13030,10 +13088,10 @@ function ProductionApp() {
         collectionInviteId: entry.id,
         roomInviteId: '',
         ...entry.data(),
-      })).sort(sortByNewest));
+      })).filter((entry) => !hiddenGameIdSet.has(entry.gameId || '')).sort(sortByNewest));
     }, (error) => reportFirestoreListenerError('gameInvitesSnapshotError', error));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
+  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, hiddenGameIdSet, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
@@ -13083,10 +13141,10 @@ function ProductionApp() {
           updatedAt: data.pendingInviteUpdatedAt || data.updatedAt || null,
         };
       });
-      setRoomGameInvites(roomInvites.sort(sortByNewest));
+      setRoomGameInvites(roomInvites.filter((entry) => !hiddenGameIdSet.has(entry.gameId || '')).sort(sortByNewest));
     }, (error) => reportFirestoreListenerError('roomInviteSnapshotError', error));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
+  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, hiddenGameIdSet, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!shouldLoadStoreCollections) {
@@ -13459,6 +13517,7 @@ function ProductionApp() {
             || (dashboardSeat && invite.invitedForSeat === dashboardSeat)
           ) && invite.invitedByUserId !== user?.uid,
         )
+        .filter((invite) => !hiddenGameIdSet.has(invite.gameId || ''))
         .filter((invite) => (invite.status || 'pending') !== 'dismissed')
         .map((invite) => {
           const linkedGame =
@@ -13475,7 +13534,7 @@ function ProductionApp() {
         .filter((invite) => ['pending', 'expired'].includes(invite.displayStatus))
         .sort(sortByNewest);
     },
-    [dashboardSeat, gameInvites, roomGameInvites, matchesCurrentPlayerIdentity, user?.uid, game?.id, game, gameLibrary],
+    [dashboardSeat, gameInvites, roomGameInvites, hiddenGameIdSet, matchesCurrentPlayerIdentity, user?.uid, game?.id, game, gameLibrary],
   );
   const pendingIncomingGameInvites = useMemo(
     () => incomingGameInvites.filter((invite) => invite.displayStatus === 'pending'),
@@ -14933,6 +14992,42 @@ function ProductionApp() {
     });
   };
 
+  useEffect(() => {
+    if (!firestore || !user || hasOpenRoomSession || isFirestoreCoolingDown || !pendingDeletedGameIds.length) return undefined;
+    if (pendingDeleteRetryInFlightRef.current) return undefined;
+    let cancelled = false;
+    pendingDeleteRetryInFlightRef.current = true;
+    void (async () => {
+      for (const targetGameId of pendingDeletedGameIds) {
+        if (cancelled || !targetGameId) break;
+        try {
+          await deleteGameById(targetGameId);
+          if (cancelled) break;
+          removePendingDeletedGameId(targetGameId);
+        } catch (error) {
+          if (isFirestoreRateLimitedError(error)) {
+            enterFirestoreCooldown('pendingDeleteRetry');
+          }
+          console.warn('Pending deleted game retry failed.', targetGameId, error);
+          break;
+        }
+      }
+    })().finally(() => {
+      pendingDeleteRetryInFlightRef.current = false;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    firestore,
+    hasOpenRoomSession,
+    isFirestoreCoolingDown,
+    pendingDeletedGameIds,
+    removePendingDeletedGameId,
+    user,
+    enterFirestoreCooldown,
+  ]);
+
   const saveRedemptionItem = async ({ itemId = '', ownerPlayerId, title, description, cost, active = true, keepOnRedeemed = false, itemType = 'forfeit' }) => {
     if (!firestore || !user) throw new Error('Firebase is not configured.');
     const normalizedOwner = canonicalPlayerIdForRef(ownerPlayerId, dashboardSeat || 'jay');
@@ -15663,7 +15758,20 @@ function ProductionApp() {
           setNotice('Game ended. It has moved to Previous Games.');
         }
       } else if (actionToConfirm.type === 'delete') {
-        await deleteGameById(actionToConfirm.gameId);
+        addPendingDeletedGameId(actionToConfirm.gameId);
+        void deleteGameById(actionToConfirm.gameId)
+          .then(() => {
+            removePendingDeletedGameId(actionToConfirm.gameId);
+          })
+          .catch((error) => {
+            if (isFirestoreRateLimitedError(error)) {
+              enterFirestoreCooldown('deleteGameQueued');
+              setNotice('Firebase is quota-limited right now. The game is hidden here and the app will keep retrying the delete.');
+              return;
+            }
+            console.warn('Queued game delete failed.', actionToConfirm.gameId, error);
+            setNotice(error?.message || 'The game is hidden here, but the cloud delete still needs another try.');
+          });
         setGameLibrary((current) => current.filter((entry) => entry?.id !== actionToConfirm.gameId));
         setLocalArchivedGames((current) => current.filter((entry) => entry?.id !== actionToConfirm.gameId));
         setGameInvites((current) => current.filter((entry) => entry?.gameId !== actionToConfirm.gameId));
@@ -15690,7 +15798,7 @@ function ProductionApp() {
         }
         if (actionToConfirm.gameId === selectedGameId) setSelectedGameId('');
         if (localEndedGameSummary?.id === actionToConfirm.gameId) setLocalEndedGameSummary(null);
-        setNotice('Game deleted permanently.');
+        setNotice('Game removed from this device. Firebase will finish the delete as soon as it allows writes again.');
       }
 
       console.info('[KJK ROOM] Confirm game action completed successfully', actionToConfirm);
