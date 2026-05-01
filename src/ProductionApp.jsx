@@ -36,10 +36,10 @@ import {
 } from 'firebase/storage';
 import AnalyticsPanel from './components/AnalyticsPanel.jsx';
 import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
-import normalGameTileImage from '../Normal Game.png';
-import pokerTileImage from '../Poker.png';
-import quickFireQuizTileImage from '../Quick FIre QUiz.png';
-import trueOrFalseTileImage from '../True or False.png';
+import normalGameTileImage from './assets/lobby-normal-game.webp';
+import pokerTileImage from './assets/lobby-poker.webp';
+import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
+import trueOrFalseTileImage from './assets/lobby-true-or-false.webp';
 import {
   calculateAnalytics,
   CATEGORY_COLOR_MAP,
@@ -2965,6 +2965,7 @@ function LobbyScreen({
     holdem: false,
   }));
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
+  const [lobbyTileImagesEnabled, setLobbyTileImagesEnabled] = useState(false);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
@@ -3616,6 +3617,32 @@ function LobbyScreen({
     setMobileLobbyChatOpen(false);
   }, [activeTab, isMobileDashboardNav]);
 
+  useEffect(() => {
+    let cancelled = false;
+    let frameId = 0;
+    let timeoutId = 0;
+    let idleId = null;
+    const enableLobbyTileImages = () => {
+      if (!cancelled) setLobbyTileImagesEnabled(true);
+    };
+    // Defer decorative tile art until after first paint so the lobby becomes interactive sooner.
+    frameId = window.requestAnimationFrame(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(enableLobbyTileImages, { timeout: 250 });
+        return;
+      }
+      timeoutId = window.setTimeout(enableLobbyTileImages, 120);
+    });
+    return () => {
+      cancelled = true;
+      if (frameId) window.cancelAnimationFrame(frameId);
+      if (idleId !== null && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleId);
+      }
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
+  }, []);
+
   const lobbyCarouselCards = [
     { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
     { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
@@ -3670,6 +3697,9 @@ function LobbyScreen({
   const isQuizTileFlipped = Boolean(flippedLobbyTiles.quiz);
   const isTrueFalseTileFlipped = Boolean(flippedLobbyTiles.trueFalse);
   const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
+  const getLobbyTileImageStyle = (imageUrl) => ({
+    '--lobby-tile-image': lobbyTileImagesEnabled && imageUrl ? `url("${imageUrl}")` : 'none',
+  });
 
   const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, description, footerMeta, onCreateAndInvite }) => {
     const isFlipped = Boolean(flippedLobbyTiles?.[cardId]);
@@ -3880,7 +3910,7 @@ function LobbyScreen({
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby create-game-card lobby-image-tile lobby-image-tile--normal"
-                      style={{ '--lobby-tile-image': `url("${normalGameTileImage}")` }}
+                      style={getLobbyTileImageStyle(normalGameTileImage)}
                     >
                       <div className={`lobby-image-tile-flip ${isStandardTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
@@ -4028,7 +4058,7 @@ function LobbyScreen({
                   >
 	                <section
                     className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--quiz"
-                    style={{ '--lobby-tile-image': `url("${quickFireQuizTileImage}")` }}
+                    style={getLobbyTileImageStyle(quickFireQuizTileImage)}
                   >
                       <div className={`lobby-image-tile-flip ${isQuizTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
@@ -4141,7 +4171,7 @@ function LobbyScreen({
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--true-false"
-                      style={{ '--lobby-tile-image': `url("${trueOrFalseTileImage}")` }}
+                      style={getLobbyTileImageStyle(trueOrFalseTileImage)}
                     >
                       <div className={`lobby-image-tile-flip ${isTrueFalseTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
@@ -4232,7 +4262,7 @@ function LobbyScreen({
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
-                      style={{ '--lobby-tile-image': `url("${pokerTileImage}")` }}
+                      style={getLobbyTileImageStyle(pokerTileImage)}
                     >
                       <div className={`lobby-image-tile-flip ${isHoldemTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
