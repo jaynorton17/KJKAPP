@@ -418,24 +418,73 @@ button:disabled {
   align-items: flex-start;
 }
 
-.lobby-image-tile-front-summary {
-  width: min(100%, 30rem);
-  margin: 0;
-}
-
 .lobby-image-tile-front-spacer {
   flex: 1 1 auto;
 }
 
-.lobby-image-tile-front-actions {
+.lobby-image-tile-front-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
   margin-top: auto;
+}
+
+.lobby-image-tile-front-meta {
+  display: inline-flex;
+  align-items: center;
+  min-height: 52px;
+  padding: 0 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)),
+    rgba(7, 14, 25, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 20px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(8px);
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.lobby-image-tile-front-actions {
   justify-content: flex-end;
   align-items: flex-end;
   flex-wrap: wrap;
+  gap: 10px;
 }
 
 .lobby-image-tile-action {
-  min-height: 44px;
+  min-height: 52px;
+  padding-inline: 18px;
+  border-radius: 16px;
+  font-size: 0.84rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  box-shadow:
+    0 14px 24px rgba(0, 0, 0, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.lobby-image-tile-action.lobby-primary-button {
+  border-color: rgba(255, 224, 132, 0.72);
+  background:
+    linear-gradient(135deg, rgba(255, 214, 106, 0.98), rgba(255, 160, 70, 0.92)),
+    rgba(255, 186, 74, 0.94);
+  color: #1c1306;
+}
+
+.lobby-image-tile-action.lobby-secondary-button {
+  border-color: rgba(255, 255, 255, 0.24);
+  background:
+    linear-gradient(135deg, rgba(26, 43, 78, 0.98), rgba(13, 25, 48, 0.94)),
+    rgba(9, 18, 34, 0.92);
+  color: #f4f8ff;
 }
 
 .lobby-image-tile-back-toolbar {
@@ -563,6 +612,14 @@ button:disabled {
   }
   .lobby-image-tile-front-actions {
     align-items: stretch;
+  }
+  .lobby-image-tile-front-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .lobby-image-tile-front-meta {
+    justify-content: center;
+    width: 100%;
   }
   .lobby-image-tile-action {
     width: 100%;

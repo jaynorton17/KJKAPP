@@ -3323,7 +3323,7 @@ function LobbyScreen({
   const isQuizTileFlipped = Boolean(flippedLobbyTiles.quiz);
   const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
 
-  const renderLobbyTileFront = ({ cardId, eyebrow, title, description, statusText, onCreateAndInvite }) => {
+  const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, footerMeta, onCreateAndInvite }) => {
     const isFlipped = Boolean(flippedLobbyTiles?.[cardId]);
     return (
       <div className="lobby-image-tile-face lobby-image-tile-face--front" inert={isFlipped} aria-hidden={isFlipped}>
@@ -3335,26 +3335,30 @@ function LobbyScreen({
             </div>
             {statusText ? <span className="status-pill">{statusText}</span> : null}
           </div>
-          <p className="panel-copy lobby-image-tile-front-summary">{description}</p>
         </div>
         <div className="lobby-image-tile-front-spacer" aria-hidden="true" />
-        <div className="button-row lobby-image-tile-front-actions">
-          <Button
-            type="button"
-            className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
-            onClick={() => setLobbyTileFlipped(cardId, true)}
-            disabled={isBusy}
-          >
-            Create New Game
-          </Button>
-          <Button
-            type="button"
-            className="primary-button compact lobby-primary-button lobby-image-tile-action"
-            onClick={onCreateAndInvite}
-            disabled={isBusy}
-          >
-            Create + Invite
-          </Button>
+        <div className="lobby-image-tile-front-footer">
+          <div className="lobby-image-tile-front-meta" aria-live="polite">
+            {footerMeta}
+          </div>
+          <div className="button-row lobby-image-tile-front-actions">
+            <Button
+              type="button"
+              className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
+              onClick={() => setLobbyTileFlipped(cardId, true)}
+              disabled={isBusy}
+            >
+              Create New Game
+            </Button>
+            <Button
+              type="button"
+              className="primary-button compact lobby-primary-button lobby-image-tile-action"
+              onClick={onCreateAndInvite}
+              disabled={isBusy}
+            >
+              Create + Invite
+            </Button>
+          </div>
         </div>
       </div>
     );
@@ -3547,8 +3551,8 @@ function LobbyScreen({
                           cardId: 'standard',
                           eyebrow: 'Game Lobby',
                           title: 'Normal Game',
-                          description: 'Penalty-point rounds, question reveals, and all the usual Jay vs Kim game flow.',
                           statusText: `${questionCount} ready`,
+                          footerMeta: `${Math.max(1, Number(gameQuestionCount || 0) || 0)} Questions`,
                           onCreateAndInvite: handleCreateAndInviteGame,
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isStandardTileFlipped} aria-hidden={!isStandardTileFlipped}>
@@ -3682,8 +3686,8 @@ function LobbyScreen({
                           cardId: 'quiz',
                           eyebrow: 'Quick Fire',
                           title: 'Quick Fire Quiz',
-                          description: 'Fast-answer quiz mode with its own scoring, timer pressure, and separate quiz points.',
                           statusText: `${quizQuestionCount} ready`,
+                          footerMeta: `${Math.max(1, Number(quizQuestionCountDraft || 0) || 0)} Questions`,
                           onCreateAndInvite: () => handleCreateQuizGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isQuizTileFlipped} aria-hidden={!isQuizTileFlipped}>
@@ -3782,8 +3786,8 @@ function LobbyScreen({
                           cardId: 'holdem',
                           eyebrow: 'Cards',
                           title: "Texas Hold'em",
-                          description: 'Heads-up poker using Jay and Kim’s live penalty-point totals as the bankroll for each hand.',
                           statusText: `${formatScore(HOLDEM_SMALL_BLIND)} / ${formatScore(HOLDEM_BIG_BLIND)}`,
+                          footerMeta: '2 Players',
                           onCreateAndInvite: () => handleCreateHoldemGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isHoldemTileFlipped} aria-hidden={!isHoldemTileFlipped}>
