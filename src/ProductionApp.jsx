@@ -151,6 +151,19 @@ const buildHoldemDealSeedKey = (roomId = '', state = {}, balances = {}) => [
   `jay:${Number(balances?.jay || 0)}`,
   `kim:${Number(balances?.kim || 0)}`,
 ].join('|');
+const getHoldemSessionWinner = (holdemStats = null, fallbackScores = null) => {
+  const netJay = Number(holdemStats?.netMovementJay || 0);
+  const netKim = Number(holdemStats?.netMovementKim || 0);
+  const handsPlayed = Number(holdemStats?.handsPlayed || 0);
+  if (handsPlayed > 0 || netJay !== 0 || netKim !== 0) {
+    if (netJay === netKim) return 'tie';
+    return netJay > netKim ? 'jay' : 'kim';
+  }
+  const safeFallbackScores = fallbackScores || null;
+  if (!safeFallbackScores) return 'tie';
+  if (Number(safeFallbackScores.jay || 0) === Number(safeFallbackScores.kim || 0)) return 'tie';
+  return Number(safeFallbackScores.jay || 0) > Number(safeFallbackScores.kim || 0) ? 'jay' : 'kim';
+};
 const mergeHoldemSnapshotState = (currentState = null, incomingState = null) => {
   if (!currentState) return incomingState;
   if (!incomingState) return currentState;
@@ -2339,11 +2352,7 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     data.playerProfiles?.[data.seats?.jay]?.displayName || 'Jay',
     data.playerProfiles?.[data.seats?.kim]?.displayName || 'Kim',
   ].filter(Boolean);
-  const holdemWinner = Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
-    ? 'tie'
-    : Number(finalScores.jay || 0) > Number(finalScores.kim || 0)
-      ? 'jay'
-      : 'kim';
+  const holdemWinner = getHoldemSessionWinner(holdemStats, finalScores);
 
   return {
     id,
@@ -2361,7 +2370,9 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     endedAt: data.endedAt || null,
     endedBy: data.endedBy || '',
     finalScores,
-    winner: data.winner || (isHoldemGame ? holdemWinner : (finalScores ? (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim') : 'tie')),
+    winner: isHoldemGame
+      ? holdemWinner
+      : (data.winner || (finalScores ? (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim') : 'tie')),
     quizTotals: data.quizTotals || { jay: 0, kim: 0 },
     quizWinner: data.quizWinner || '',
     wagerSettlement: data.wagerSettlement || null,
@@ -8248,15 +8259,18 @@ function GameSummaryContent({
     gameSummary?.updatedAt,
   ].filter(Boolean).join(':');
   const jayWonSummary = isHoldemGame
-    ? Number(finalScores.jay || 0) > Number(finalScores.kim || 0)
+    ? getHoldemSessionWinner(holdemStats, finalScores) === 'jay'
     : Number(finalScores.jay || 0) < Number(finalScores.kim || 0);
-  const winner =
-    gameSummary?.winner ||
-    (Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
-      ? 'tie'
-      : jayWonSummary
-        ? 'jay'
-        : 'kim');
+  const winner = isHoldemGame
+    ? getHoldemSessionWinner(holdemStats, finalScores)
+    : (
+      gameSummary?.winner ||
+      (Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
+        ? 'tie'
+        : jayWonSummary
+          ? 'jay'
+          : 'kim')
+    );
   const gameLabel = gameSummary?.gameName || gameSummary?.name || gameSummary?.joinCode || 'Game summary';
   const completedLabel = formatShortDateTime(gameSummary?.endedAt || gameSummary?.updatedAt || gameSummary?.createdAt);
   const lastHoldemSettlement = holdemState?.settlement || holdemState?.showdown || null;
@@ -13103,7 +13117,9 @@ function ProductionApp() {
     const playedQuestionIds = getPlayedQuestionIdsForGame(gameDoc);
     const roundsPlayed = Number(gameDoc.roundsPlayed || gameDoc.rounds?.length || 0);
     const finalScores = gameDoc.finalScores || gameDoc.totals || { jay: 0, kim: 0 };
-    const winner = gameDoc.winner || (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim');
+    const winner = isHoldemGameMode(gameDoc?.gameMode || 'standard')
+      ? getHoldemSessionWinner(gameDoc?.holdemStats || defaultHoldemStats(), finalScores)
+      : (gameDoc.winner || (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim'));
     await setDoc(
       pairRef,
       {
@@ -13157,11 +13173,7 @@ function ProductionApp() {
       const holdemStats = gameDoc?.holdemStats || defaultHoldemStats();
       const fallbackBalances = buildHoldemBankrollsFromAccounts(playerAccounts);
       const finalHoldemScores = holdemState?.lastSettledBalances || gameDoc?.finalScores || fallbackBalances;
-      const holdemWinner = Number(finalHoldemScores.jay || 0) === Number(finalHoldemScores.kim || 0)
-        ? 'tie'
-        : Number(finalHoldemScores.jay || 0) > Number(finalHoldemScores.kim || 0)
-          ? 'jay'
-          : 'kim';
+      const holdemWinner = getHoldemSessionWinner(holdemStats, finalHoldemScores);
       const finalizedHoldemState = holdemState
         ? {
             ...holdemState,
@@ -16304,11 +16316,7 @@ function ProductionApp() {
   const buildHoldemSummaryFields = useCallback((holdemState = null, holdemStats = null) => {
     const normalizedStats = holdemStats || defaultHoldemStats();
     const finalScores = holdemState?.lastSettledBalances || buildHoldemBankrollsFromAccounts(playerAccounts);
-    const winner = Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
-      ? 'tie'
-      : Number(finalScores.jay || 0) > Number(finalScores.kim || 0)
-        ? 'jay'
-        : 'kim';
+    const winner = getHoldemSessionWinner(normalizedStats, finalScores);
     return {
       totals: finalScores,
       finalScores,
