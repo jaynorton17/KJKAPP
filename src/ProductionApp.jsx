@@ -772,6 +772,22 @@ const sortByNewest = (a, b) =>
 const sortByOldest = (a, b) =>
   getRecordTime(a?.createdAt || a?.redeemedAt || a?.updatedAt || a?.questionAskedAt || a?.answeredAt)
   - getRecordTime(b?.createdAt || b?.redeemedAt || b?.updatedAt || b?.questionAskedAt || b?.answeredAt);
+const getInviteDisplayStatus = (invite = null, linkedGame = null) => {
+  const inviteStatus = normalizeText(invite?.status || 'pending') || 'pending';
+  if (inviteStatus !== 'pending') return inviteStatus;
+  const linkedGameStatus = normalizeText(linkedGame?.status || '') || '';
+  const storedGameStatus = normalizeText(invite?.gameStatus || '') || '';
+  if (
+    COMPLETED_GAME_STATUSES.includes(storedGameStatus)
+    || ['missing', 'unavailable', 'expired'].includes(storedGameStatus)
+    || COMPLETED_GAME_STATUSES.includes(linkedGameStatus)
+    || ['missing', 'unavailable', 'expired'].includes(linkedGameStatus)
+  ) {
+    return 'expired';
+  }
+  if (linkedGame && !isGameSessionJoinable(linkedGame)) return 'expired';
+  return 'pending';
+};
 const collectGameQuestionIds = (games = [], { includeQueued = true } = {}) =>
   mergeUniqueIds(
     ...(games || []).map((entry) =>
@@ -13330,10 +13346,7 @@ function ProductionApp() {
             (game?.id === invite.gameId ? game : null)
             || gameLibrary.find((entry) => entry.id === invite.gameId)
             || null;
-          let displayStatus = invite.status || 'pending';
-          if (displayStatus === 'pending' && linkedGame && !isGameSessionJoinable(linkedGame)) {
-            displayStatus = 'expired';
-          }
+          const displayStatus = getInviteDisplayStatus(invite, linkedGame);
           return {
             ...invite,
             roomCode: invite.roomCode || invite.joinCode || '',
