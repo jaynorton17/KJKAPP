@@ -1073,6 +1073,9 @@ button:disabled {
   position: relative;
   overflow: hidden;
   border-color: color-mix(in srgb, var(--section-accent, var(--accent)) 34%, rgba(255, 255, 255, 0.1));
+}
+
+.lobby-panel[class*="lobby-panel--"]:not(.lobby-image-tile) {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--section-accent, var(--accent)) 10%, transparent), rgba(255, 255, 255, 0.018) 24%),
     rgba(7, 17, 35, 0.84);
@@ -8648,6 +8651,25 @@ select:focus-visible {
   box-shadow:
     0 22px 40px rgba(0, 0, 0, 0.25),
     0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+}
+
+.panel.lobby-image-tile {
+  background-image:
+    linear-gradient(180deg, rgba(5, 10, 19, 0.02), rgba(5, 10, 19, 0.18)),
+    var(--lobby-tile-image),
+    linear-gradient(180deg, rgba(11, 20, 38, 0.94), rgba(5, 11, 21, 0.97));
+  background-position:
+    center center,
+    var(--lobby-tile-position, center center),
+    center center;
+  background-size:
+    cover,
+    cover,
+    cover;
+  background-repeat:
+    no-repeat,
+    no-repeat,
+    no-repeat;
 }
 
 .round-control {
