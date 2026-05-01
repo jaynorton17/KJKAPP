@@ -109,6 +109,7 @@ const HOLDEM_GAME_MODE = 'holdem';
 const TRUE_FALSE_GAME_MODE = 'trueFalseGame';
 const TRUE_FALSE_WRONG_PENALTY = 10;
 const TRUE_FALSE_TIMER_SECONDS = 8;
+const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const buildHoldemBankrollsFromAccounts = (accounts = {}) => ({
   jay: Math.max(0, Math.floor(Number(accounts?.jay?.lifetimePenaltyPoints || 0) || 0)),
@@ -11499,6 +11500,7 @@ function ProductionApp() {
   const isMobileDashboard = useMediaQuery('(max-width: 900px)');
   const leavePendingGameRef = useRef('');
   const autoSheetImportAttemptedRef = useRef(false);
+  const autoTrueFalseSheetImportAttemptedRef = useRef(false);
   const roomLoadTimeoutRef = useRef(null);
   const amaStoreSeededRef = useRef({ jay: false, kim: false });
   const autoResumedGameIdRef = useRef(gameId || '');
@@ -14448,7 +14450,28 @@ function ProductionApp() {
     if (!firestore || !user) return;
     const snap = await getDocs(collection(firestore, 'questionBank'));
     const existingQuestions = snap.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
-    if (normalizeQuestionBankType(targetBankType) !== 'game') return existingQuestions;
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    if (normalizedTargetBankType === 'trueFalseGame') {
+      const trueFalseQuestions = existingQuestions.filter(
+        (question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame',
+      );
+      if (trueFalseQuestions.length >= TRUE_FALSE_AUTO_SYNC_MIN_COUNT) return existingQuestions;
+      try {
+        const result = await syncGoogleSheetQuestions({
+          sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+          existingQuestions,
+          overwriteExisting: false,
+          targetBankType: 'trueFalseGame',
+        });
+        if (result.imports.length || result.updates.length) {
+          await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+        }
+      } catch (error) {
+        console.warn('True or False bank sync failed while topping up the dedicated sheet tab.', error);
+      }
+      return existingQuestions;
+    }
+    if (normalizedTargetBankType !== 'game') return existingQuestions;
     const needsTopUp = snap.empty || isStarterOnlyQuestionBank(existingQuestions);
     if (!needsTopUp) return existingQuestions;
     try {
@@ -14495,6 +14518,30 @@ function ProductionApp() {
         console.warn('Automatic Google Sheet top-up failed.', error);
       });
   }, [user, firestore, bankQuestions, sheetInput, gameId, game?.id]);
+
+  useEffect(() => {
+    if (!user || !firestore || autoTrueFalseSheetImportAttemptedRef.current) return;
+    if (gameId || game?.id) return;
+    if (trueFalseBankQuestions.length >= TRUE_FALSE_AUTO_SYNC_MIN_COUNT) return;
+    autoTrueFalseSheetImportAttemptedRef.current = true;
+    syncGoogleSheetQuestions({
+      sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+      existingQuestions: bankQuestions,
+      overwriteExisting: false,
+      targetBankType: 'trueFalseGame',
+    })
+      .then(async (result) => {
+        if (!result.imports.length && !result.updates.length) return;
+        await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+        setSyncNotice(
+          `Imported ${result.summary.imported} new True or False sheet questions automatically. Duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}.`,
+        );
+        setNotice(`True or False bank topped up from the dedicated sheet with ${result.summary.imported} new questions.`);
+      })
+      .catch((error) => {
+        console.warn('Automatic True or False sheet top-up failed.', error);
+      });
+  }, [user, firestore, trueFalseBankQuestions.length, bankQuestions, sheetInput, gameId, game?.id]);
 
   const saveDisplayNameProfile = async (nextDisplayName) =>
     withBusy(async () => {
@@ -15269,7 +15316,7 @@ function ProductionApp() {
         let warning = '';
         let actualCount = 0;
         if (!isHoldemGame) {
-          await seedBankIfNeeded();
+          await seedBankIfNeeded(targetBankType);
           const queueResult = await buildQuestionQueue(requestedQuestionCount, {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
@@ -15457,7 +15504,7 @@ function ProductionApp() {
         let actualCount = 0;
         try {
           if (!isHoldemGame) {
-            await seedBankIfNeeded();
+            await seedBankIfNeeded(targetBankType);
             const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
             if (!bankSnapshot.size) throw new Error('Question bank is not loaded.');
             const queueResult = await buildQuestionQueue(requestedQuestionCount, {
