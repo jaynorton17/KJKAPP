@@ -1993,10 +1993,16 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
   if (!isSameLiveRound) return incomingGame;
   const currentAnswers = currentGame.currentRound.answers || {};
   const incomingAnswers = incomingGame.currentRound.answers || {};
-  const nextAnswers = {
-    jay: hasSubmittedRoundAnswer(incomingGame.currentRound, 'jay') ? incomingAnswers.jay : currentAnswers.jay,
-    kim: hasSubmittedRoundAnswer(incomingGame.currentRound, 'kim') ? incomingAnswers.kim : currentAnswers.kim,
-  };
+  const preserveOptimisticAnswers = incomingRound.status === 'open' && currentRound.status === 'open';
+  const nextAnswers = preserveOptimisticAnswers
+    ? {
+        jay: hasSubmittedRoundAnswer(incomingGame.currentRound, 'jay') ? incomingAnswers.jay : currentAnswers.jay,
+        kim: hasSubmittedRoundAnswer(incomingGame.currentRound, 'kim') ? incomingAnswers.kim : currentAnswers.kim,
+      }
+    : {
+        ...(hasSubmittedRoundAnswer(incomingGame.currentRound, 'jay') ? { jay: incomingAnswers.jay } : {}),
+        ...(hasSubmittedRoundAnswer(incomingGame.currentRound, 'kim') ? { kim: incomingAnswers.kim } : {}),
+      };
   const stableRoundFields =
     currentGame.currentRound.status === incomingGame.currentRound.status
     && currentGame.currentRound.questionId === incomingGame.currentRound.questionId
@@ -13761,6 +13767,7 @@ function ProductionApp() {
   const quizSetupLaunchRef = useRef('');
   const quizSetupCountdownRef = useRef('');
   const quizAdvanceRef = useRef('');
+  const quizRevealSettleRef = useRef('');
   const quizTimeoutRevealRef = useRef('');
   const standardRevealSettleRef = useRef('');
   const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, startOpen = false } = {}) => {
@@ -13997,6 +14004,9 @@ function ProductionApp() {
     }, 'Could not mark ready.');
 
   const submitAnswer = async (draftOverride = null) => {
+    let previousLocalAnswer;
+    let optimisticPayload = null;
+    let optimisticRoundKey = '';
     try {
       if (!game?.currentRound || !currentSeat) throw new Error('No active round to answer.');
       if (game.currentRound.status !== 'open') throw new Error('Both players must be ready before answering.');
@@ -14084,12 +14094,15 @@ function ProductionApp() {
       const gameRef = makeGameRef();
       if (!gameRef || !firestore) throw new Error('Room is missing.');
       const existingLocalAnswer = currentAnswers?.[currentSeat] || {};
+      previousLocalAnswer = currentAnswers?.[currentSeat];
+      optimisticRoundKey = stableRoundIdentityKey(game.currentRound || {});
       const payload = {
         ...baseAnswerPayload,
         submittedBy: existingLocalAnswer.submittedBy || baseAnswerPayload.submittedBy,
         submittedAt: existingLocalAnswer.submittedAt || baseAnswerPayload.submittedAt,
         updatedAt: submittedAtIso,
       };
+      optimisticPayload = payload;
       const nextLocalAnswers = {
         ...currentAnswers,
         [currentSeat]: payload,
@@ -14106,7 +14119,9 @@ function ProductionApp() {
           currentRound: {
             ...current.currentRound,
             answers: nextAnswers,
-            status: nextAnswers.jay?.ownAnswer && nextAnswers.kim?.ownAnswer ? 'reveal' : 'open',
+            status: isQuizGame
+              ? current.currentRound.status
+              : (nextAnswers.jay?.ownAnswer && nextAnswers.kim?.ownAnswer ? 'reveal' : 'open'),
           },
         };
       });
@@ -14119,35 +14134,10 @@ function ProductionApp() {
         });
         return true;
       }
-      await runTransaction(firestore, async (transaction) => {
-        const snap = await transaction.get(gameRef);
-        if (!snap.exists()) throw new Error('Room not found.');
-        const data = snap.data() || {};
-        const round = data.currentRound || null;
-        if (!round) throw new Error('No active round to answer.');
-        if (round.status !== 'open') throw new Error('This round is not open for answers.');
-        const serverSeatAnswer = (round.answers || {})[currentSeat] || {};
-        const existingSubmittedBy = serverSeatAnswer.submittedBy || '';
-        const existingSubmittedAt = serverSeatAnswer.submittedAt || '';
-        if (existingSubmittedBy && existingSubmittedBy !== user.uid) {
-          throw new Error('This answer was submitted by another player.');
-        }
-        const payload = {
-          ...baseAnswerPayload,
-          submittedBy: existingSubmittedBy || baseAnswerPayload.submittedBy,
-          submittedAt: existingSubmittedAt || baseAnswerPayload.submittedAt,
-          updatedAt: submittedAtIso,
-        };
-        const serverAnswers = round.answers || {};
-        const nextAnswers = { ...serverAnswers, [currentSeat]: payload };
-        const bothAnswered = Boolean(normalizeText(nextAnswers.jay?.ownAnswer) && normalizeText(nextAnswers.kim?.ownAnswer));
-        const patch = {
-          [`currentRound.answers.${currentSeat}`]: payload,
-          ...(bothAnswered ? { 'currentRound.status': 'reveal' } : {}),
-          'currentRound.updatedAt': serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        };
-        transaction.update(gameRef, patch);
+      await updateDoc(gameRef, {
+        [`currentRound.answers.${currentSeat}`]: payload,
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
       if (isQuizGame) {
         const roundQuestionId = normalizeText(game.currentRound?.questionId || '') || sanitizeNoteKey(game.currentRound?.question || '');
@@ -14185,6 +14175,22 @@ function ProductionApp() {
       }
       return true;
     } catch (error) {
+      if ((game?.gameMode || 'standard') === 'quiz' && game?.currentRound && currentSeat) {
+        setGame((current) => {
+          if (!current?.currentRound || stableRoundIdentityKey(current.currentRound) !== optimisticRoundKey) return current;
+          if (!areRoundAnswerSnapshotsEqual(current.currentRound.answers?.[currentSeat], optimisticPayload)) return current;
+          const nextAnswers = { ...(current.currentRound.answers || {}) };
+          if (previousLocalAnswer) nextAnswers[currentSeat] = previousLocalAnswer;
+          else delete nextAnswers[currentSeat];
+          return {
+            ...current,
+            currentRound: {
+              ...current.currentRound,
+              answers: nextAnswers,
+            },
+          };
+        });
+      }
       const message = String(error?.message || 'Could not submit answer.');
       const normalizedMessage = normalizeText(message);
       if (
@@ -14231,6 +14237,48 @@ function ProductionApp() {
     firestore,
     game?.id,
     game?.gameMode,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.answers?.jay?.ownAnswer,
+    game?.currentRound?.answers?.kim?.ownAnswer,
+  ]);
+
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const settleKey = `${game?.id || ''}:${roundKey}:quiz-reveal`;
+    if (
+      !isQuizGame
+      || currentSeat !== coordinatorSeat
+      || !round
+      || round.status !== 'open'
+      || !hasSubmittedRoundAnswer(round, 'jay')
+      || !hasSubmittedRoundAnswer(round, 'kim')
+    ) {
+      if (quizRevealSettleRef.current === settleKey) quizRevealSettleRef.current = '';
+      return undefined;
+    }
+    if (quizRevealSettleRef.current === settleKey) return undefined;
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return undefined;
+    quizRevealSettleRef.current = settleKey;
+    updateDoc(gameRef, {
+      'currentRound.status': 'reveal',
+      'currentRound.updatedAt': serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {
+      quizRevealSettleRef.current = '';
+    });
+    return undefined;
+  }, [
+    currentSeat,
+    firestore,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
     game?.currentRound?.status,
     game?.currentRound?.questionId,
     game?.currentRound?.number,
