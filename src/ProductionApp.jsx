@@ -3198,6 +3198,7 @@ function LobbyScreen({
   onConfirmAction,
   onCancelAction,
   onResetQuestionBank,
+  onActiveTabChange,
 }) {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('kjk-dashboard-tab') || 'gameLobby');
   const [activityTab, setActivityTab] = useState(() => localStorage.getItem('kjk-activity-tab') || 'activeGames');
@@ -3506,6 +3507,10 @@ function LobbyScreen({
       // Ignore storage failures.
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    onActiveTabChange?.(activeTab);
+  }, [activeTab, onActiveTabChange]);
 
   useEffect(() => {
     try {
@@ -12305,6 +12310,13 @@ function ProductionApp() {
   const [joinCode, setJoinCode] = useState('');
   const [lobbyQuestionCount, setLobbyQuestionCount] = useState('10');
   const [deferredLobbyDataReady, setDeferredLobbyDataReady] = useState(false);
+  const [dashboardTabState, setDashboardTabState] = useState(() => {
+    try {
+      return window.localStorage.getItem('kjk-dashboard-tab') || 'gameLobby';
+    } catch {
+      return 'gameLobby';
+    }
+  });
   const [editingModeEnabled, setEditingModeEnabled] = useState(() => {
     try {
       return window.localStorage.getItem(editingModeKey) === 'true';
@@ -12377,6 +12389,62 @@ function ProductionApp() {
   const gameLibraryRoundsCacheRef = useRef(new Map());
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
+  const shouldLoadQuestionBankData = Boolean(
+    user
+    && firestore
+    && (hasOpenRoomSession || dashboardTabState === 'gameLobby' || dashboardTabState === 'questionBank'),
+  );
+  const shouldLoadStoreCollections = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'forfeitStore' || dashboardTabState === 'activity'),
+  );
+  const shouldLoadDiaryCollections = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'diary' || dashboardTabState === 'activity' || dashboardTabState === 'ai'),
+  );
+  const shouldLoadQuestionFeedback = Boolean(
+    user
+    && firestore
+    && (
+      hasOpenRoomSession
+      || (deferredLobbyDataReady && (dashboardTabState === 'analytics' || dashboardTabState === 'ai'))
+    ),
+  );
+  const shouldLoadQuestionReplays = Boolean(
+    user
+    && firestore
+    && (
+      hasOpenRoomSession
+      || (deferredLobbyDataReady && dashboardTabState === 'analytics')
+    ),
+  );
+  const shouldLoadQuizAnswerHistory = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'ai'),
+  );
+  const shouldLoadAiChatHistory = Boolean(
+    user?.uid
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && dashboardTabState === 'ai',
+  );
+  const shouldAutoTopUpQuestionBanks = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && dashboardTabState === 'questionBank',
+  );
   const localTestGameForId = (targetGameId = '') => {
     if (!targetGameId) return null;
     if (game?.id === targetGameId && isLocalTestGame(game)) return game;
@@ -12789,7 +12857,7 @@ function ProductionApp() {
   }, [user, firestore]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
+    if (!shouldLoadStoreCollections) {
       setRedemptionItems([]);
       return undefined;
     }
@@ -12798,10 +12866,10 @@ function ProductionApp() {
       setRedemptionItems(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('redemptionItemsSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadStoreCollections]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
+    if (!shouldLoadStoreCollections) {
       setRedemptionHistory([]);
       return undefined;
     }
@@ -12810,10 +12878,10 @@ function ProductionApp() {
       setRedemptionHistory(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('redemptionHistorySnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadStoreCollections]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
+    if (!shouldLoadStoreCollections) {
       setForfeitPriceRequests([]);
       return undefined;
     }
@@ -12822,22 +12890,34 @@ function ProductionApp() {
       setForfeitPriceRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('forfeitRequestsSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadStoreCollections]);
 
   useEffect(() => {
     if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setGameInvites([]);
       return undefined;
     }
-    const inviteRef = query(collection(firestore, 'gameInvites'), orderBy('updatedAt', 'desc'), limit(80));
+    const inferredInviteSeat = preferredSeatForUser(user, profile) || 'jay';
+    const inviteTargetIds = mergeUniqueIds(
+      user.uid,
+      canonicalPlayerIdForRef(user.uid, inferredInviteSeat),
+      canonicalPlayerIdForRef(profile?.displayName || user?.displayName || user?.email?.split('@')[0], inferredInviteSeat),
+    ).filter(Boolean).slice(0, 10);
+    if (!inviteTargetIds.length) {
+      setGameInvites([]);
+      return undefined;
+    }
+    const inviteRef = inviteTargetIds.length === 1
+      ? query(collection(firestore, 'gameInvites'), where('invitedForUserId', '==', inviteTargetIds[0]))
+      : query(collection(firestore, 'gameInvites'), where('invitedForUserId', 'in', inviteTargetIds));
     const unsubscribe = onSnapshot(inviteRef, (snapshot) => {
-      setGameInvites(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
+      setGameInvites(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })).sort(sortByNewest));
     }, (error) => debugRoom('gameInvitesSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
+    if (!shouldLoadStoreCollections) {
       setAmaRequests([]);
       return undefined;
     }
@@ -12846,10 +12926,10 @@ function ProductionApp() {
       setAmaRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('amaRequestsSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadStoreCollections]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
+    if (!shouldLoadDiaryCollections) {
       setDiaryEntries([]);
       return undefined;
     }
@@ -12858,7 +12938,7 @@ function ProductionApp() {
       setDiaryEntries(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('diaryEntriesSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadDiaryCollections]);
 
   useEffect(() => {
     if (!firestore || !user?.uid || hasOpenRoomSession || !deferredLobbyDataReady) {
@@ -12875,7 +12955,7 @@ function ProductionApp() {
   }, [deferredLobbyDataReady, user?.uid, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user?.uid || hasOpenRoomSession || !deferredLobbyDataReady) {
+    if (!shouldLoadAiChatHistory) {
       setAiChatMessages([]);
       setOptimisticAiChatMessages([]);
       return undefined;
@@ -12896,10 +12976,10 @@ function ProductionApp() {
       },
     );
     return unsubscribe;
-  }, [deferredLobbyDataReady, user?.uid, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadAiChatHistory, user?.uid]);
 
   useEffect(() => {
-    if (!firestore || !user || !deferredLobbyDataReady) {
+    if (!shouldLoadQuestionFeedback) {
       setQuestionFeedback([]);
       return undefined;
     }
@@ -12910,10 +12990,10 @@ function ProductionApp() {
       (error) => debugRoom('questionFeedbackSnapshotError', { message: error?.message || String(error) }),
     );
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, firestore]);
+  }, [firestore, shouldLoadQuestionFeedback, user]);
 
   useEffect(() => {
-    if (!firestore || !user || !deferredLobbyDataReady) {
+    if (!shouldLoadQuestionReplays) {
       setQuestionReplays([]);
       return undefined;
     }
@@ -12924,10 +13004,10 @@ function ProductionApp() {
       (error) => debugRoom('questionReplaysSnapshotError', { message: error?.message || String(error) }),
     );
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, firestore]);
+  }, [firestore, shouldLoadQuestionReplays, user]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
+    if (!shouldLoadQuizAnswerHistory) {
       setQuizAnswers([]);
       return undefined;
     }
@@ -12938,10 +13018,10 @@ function ProductionApp() {
       (error) => debugRoom('quizAnswersSnapshotError', { message: error?.message || String(error) }),
     );
     return unsubscribe;
-  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadQuizAnswerHistory, user]);
 
   useEffect(() => {
-    if (!user || !firestore) return undefined;
+    if (!shouldLoadQuestionBankData) return undefined;
     const bankRef = collection(firestore, 'questionBank');
     const unsubscribe = onSnapshot(query(bankRef, orderBy('question', 'asc')), async (snapshot) => {
       if (snapshot.empty) {
@@ -12951,7 +13031,7 @@ function ProductionApp() {
       setBankQuestions(snapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id)));
     }, (error) => debugRoom('bankSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore, gameId, game?.id]);
+  }, [firestore, gameId, game?.id, shouldLoadQuestionBankData]);
 
   useEffect(() => {
     if (isLocalTestGameId(gameId)) {
@@ -13800,16 +13880,17 @@ function ProductionApp() {
     if (hasWrites) await batch.commit();
   };
 
-  const sendGameInviteForSession = async ({ targetGameId, targetUserId, targetSeat = '', sourceGame = null }) => {
+  const buildGameInviteRecord = ({ targetGameId, targetUserId, targetSeat = '', sourceGame = null }) => {
     if (!firestore || !user || !targetGameId || !targetUserId) throw new Error('Could not send the game invite.');
     if (targetUserId === user.uid) throw new Error('Choose the other player for the invite.');
     const baseGame = sourceGame || (game?.id === targetGameId ? game : null) || gameLibrary.find((entry) => entry.id === targetGameId) || null;
     const hostSeat = seatForUid(baseGame, user.uid) || preferredSeatForUser(user, profile);
     const inviteSeat = targetSeat || oppositeSeatOf(hostSeat);
     const inviteRef = doc(firestore, 'gameInvites', buildGameInviteId(targetGameId, targetUserId));
-    await setDoc(
+    return {
       inviteRef,
-      {
+      inviteId: inviteRef.id,
+      inviteDoc: {
         inviteId: inviteRef.id,
         gameId: targetGameId,
         roomCode: gameRoomCodeForLookup(baseGame) || normalizeJoinCode(baseGame?.joinCode || baseGame?.code || ''),
@@ -13830,9 +13911,17 @@ function ProductionApp() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
+    };
+  };
+
+  const sendGameInviteForSession = async ({ targetGameId, targetUserId, targetSeat = '', sourceGame = null }) => {
+    const inviteRecord = buildGameInviteRecord({ targetGameId, targetUserId, targetSeat, sourceGame });
+    await setDoc(
+      inviteRecord.inviteRef,
+      inviteRecord.inviteDoc,
       { merge: true },
     );
-    return inviteRef.id;
+    return inviteRecord.inviteId;
   };
 
   const lobbyAnalytics = useMemo(() => {
@@ -15258,7 +15347,7 @@ function ProductionApp() {
     }, 'Could not save redemption item.');
 
   useEffect(() => {
-    if (!user || !firestore || !deferredLobbyDataReady) return;
+    if (!shouldLoadStoreCollections) return;
     seats.forEach((seat) => {
       const ownerPlayerId = playerIdForSeat(seat);
       const existingAmaItem = redemptionItems.find((item) => {
@@ -15300,7 +15389,7 @@ function ProductionApp() {
         amaStoreSeededRef.current[seat] = false;
       });
     });
-  }, [deferredLobbyDataReady, firestore, redemptionItems, user]);
+  }, [firestore, redemptionItems, shouldLoadStoreCollections, user]);
 
   const deleteRedemptionItemAction = async (itemId) =>
     withBusy(async () => {
@@ -15575,6 +15664,16 @@ function ProductionApp() {
     };
   };
 
+  const buildActiveGameProfilePatch = (nextGameId = '') => ({
+    uid: user?.uid || '',
+    displayName: profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player',
+    email: user?.email || '',
+    photoURL: user?.photoURL || '',
+    activeGameId: nextGameId,
+    activeGames: nextGameId ? arrayUnion(nextGameId) : [],
+    updatedAt: serverTimestamp(),
+  });
+
   const persistActiveGame = async (nextGameId) => {
     autoResumedGameIdRef.current = '';
     if (isLocalTestGameId(nextGameId)) {
@@ -15588,15 +15687,7 @@ function ProductionApp() {
     const profileRef = doc(firestore, 'users', user.uid);
     await setDoc(
       profileRef,
-      {
-        uid: user.uid,
-        displayName: profile?.displayName || user.displayName || user.email?.split('@')[0] || 'Player',
-        email: user.email || '',
-        photoURL: user.photoURL || '',
-        activeGameId: nextGameId,
-        activeGames: nextGameId ? arrayUnion(nextGameId) : [],
-        updatedAt: serverTimestamp(),
-      },
+      buildActiveGameProfilePatch(nextGameId),
       { merge: true },
     );
     if (nextGameId) safeLocalStorageSet(activeGameKey, nextGameId);
@@ -15719,8 +15810,7 @@ function ProductionApp() {
   }, [bankQuestions, firestore, sheetInput, thisOrThatBankQuestions.length, user]);
 
   useEffect(() => {
-    if (!user || !firestore || !deferredLobbyDataReady || autoSheetImportAttemptedRef.current) return;
-    if (gameId || game?.id) return;
+    if (!shouldAutoTopUpQuestionBanks || autoSheetImportAttemptedRef.current) return;
     if (!bankQuestions.length || bankQuestions.length > STARTER_QUESTIONS.length) return;
     const looksStarterOnly = isStarterOnlyQuestionBank(bankQuestions);
     if (!looksStarterOnly) return;
@@ -15741,34 +15831,24 @@ function ProductionApp() {
       .catch((error) => {
         console.warn('Automatic Google Sheet top-up failed.', error);
       });
-  }, [deferredLobbyDataReady, user, firestore, bankQuestions, sheetInput, gameId, game?.id]);
+  }, [bankQuestions, firestore, sheetInput, shouldAutoTopUpQuestionBanks]);
 
   useEffect(() => {
-    if (!user || !firestore || !deferredLobbyDataReady) return;
-    if (gameId || game?.id) return;
+    if (!shouldAutoTopUpQuestionBanks) return;
     if (thisOrThatBankQuestions.length >= THIS_OR_THAT_AUTO_SYNC_MIN_COUNT) return;
     void topUpThisOrThatBankFromDedicatedSheet();
   }, [
-    deferredLobbyDataReady,
-    user,
-    firestore,
-    gameId,
-    game?.id,
+    shouldAutoTopUpQuestionBanks,
     thisOrThatBankQuestions.length,
     topUpThisOrThatBankFromDedicatedSheet,
   ]);
 
   useEffect(() => {
-    if (!user || !firestore || !deferredLobbyDataReady) return;
-    if (gameId || game?.id) return;
+    if (!shouldAutoTopUpQuestionBanks) return;
     if (trueFalseBankQuestions.length >= TRUE_FALSE_AUTO_SYNC_MIN_COUNT) return;
     void topUpTrueFalseBankFromDedicatedSheet();
   }, [
-    deferredLobbyDataReady,
-    user,
-    firestore,
-    gameId,
-    game?.id,
+    shouldAutoTopUpQuestionBanks,
     trueFalseBankQuestions.length,
     topUpTrueFalseBankFromDedicatedSheet,
   ]);
@@ -16723,184 +16803,146 @@ function ProductionApp() {
         ...(isHoldemGame ? buildHoldemSummaryFields(initialHoldemState, initialHoldemStats) : {}),
       };
       autoResumedGameIdRef.current = '';
+      leavePendingGameRef.current = '';
       resetRoomLoadState();
       setGame(optimisticOpeningGameState);
       setRounds([]);
       setChatMessages([]);
       setNotice(`Opening ${effectiveGameName || 'new game'}…`);
-      const joinCode = await makeUniqueJoinCode(requestedCreateCode);
-      const openingGameState = {
-        ...optimisticOpeningGameState,
-        joinCode,
-        code: joinCode,
-        roomCode: joinCode,
-        gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
-      };
-      const openingGameDoc = {
-        ...openingGameState,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
       let roomCreated = false;
 
       try {
+        let queue = [];
+        let warning = '';
+        let actualCount = 0;
+        if (!isHoldemGame) {
+          await ensureQuestionBankReadyForQueue(targetBankType);
+          const queueResult = await buildQuestionQueue(requestedQuestionCount, {
+            roundTypes: selectedRoundTypes,
+            categories: selectedCategories,
+            bankType: targetBankType,
+            gameMode,
+          });
+          queue = queueResult.queue;
+          warning = queueResult.warning;
+          actualCount = queueResult.actualCount;
+          if (!queue.length) {
+            throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
+          }
+          if (actualCount < requestedQuestionCount) {
+            if (isThisOrThatGame) {
+              console.debug('This or That live game auto-accepting shorter compatible queue', {
+                requestedQuestionCount,
+                actualCount,
+              });
+            } else {
+              const shouldContinue = window.confirm(`${warning} Create game with ${actualCount}?`);
+              if (!shouldContinue) {
+                setNotice('Game creation cancelled before question queue was finalized.');
+                return;
+              }
+            }
+          }
+        }
+        const joinCode = await makeUniqueJoinCode(requestedCreateCode);
+        const createdGameState = isHoldemGame
+          ? {
+              ...optimisticOpeningGameState,
+              joinCode,
+              code: joinCode,
+              roomCode: joinCode,
+              gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
+              status: 'active',
+            }
+          : {
+              ...optimisticOpeningGameState,
+              joinCode,
+              code: joinCode,
+              roomCode: joinCode,
+              gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
+              status: 'active',
+              questionSelectionMode: selectionMode,
+              questionSelectionFilters: {
+                roundTypes: selectedRoundTypes,
+                categories: selectedCategories,
+              },
+              questionQueueIds: queue.map((question) => question.id),
+              actualQuestionCount: actualCount,
+            };
+        if (!isHoldemGame) {
+          console.debug('Create New Game queue selected', {
+            joinCode,
+            requestedQuestionCount,
+            actualCount,
+            queueCount: queue.length,
+            queueIds: queue.map((question) => question.id),
+          });
+        }
+        const createdGameDoc = {
+          ...createdGameState,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+        const trueFalseQueueIds = isTrueFalseGame ? mergeUniqueIds(queue.map((question) => question.id)) : [];
+        const batch = writeBatch(firestore);
+        batch.set(gameRef, createdGameDoc, { merge: true });
+        batch.set(
+          doc(firestore, 'games', gameRef.id, 'players', user.uid),
+          {
+            uid: user.uid,
+            displayName: profile?.displayName || user.displayName || PLAYER_LABEL[creatorSeat] || 'Player',
+            seat: creatorSeat,
+            role: 'host',
+            photoURL: user.photoURL || '',
+            joinedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+        batch.set(
+          doc(firestore, 'users', user.uid),
+          buildActiveGameProfilePatch(gameRef.id),
+          { merge: true },
+        );
+        if (isTrueFalseGame && trueFalseQueueIds.length) {
+          batch.set(
+            doc(firestore, 'playerPairs', buildPairKey()),
+            {
+              pairId: buildPairKey(),
+              playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
+              // True or False questions are retired as soon as they are queued
+              // into a live session so this mode never repeats statements later.
+              playedQuestionIds: arrayUnion(...trueFalseQueueIds),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true },
+          );
+        }
+        if (options.sendInvite) {
+          const inviteRecord = buildGameInviteRecord({
+            targetGameId: gameRef.id,
+            targetUserId: inviteTargetUserId,
+            targetSeat: inviteTargetSeat,
+            sourceGame: createdGameState,
+          });
+          batch.set(inviteRecord.inviteRef, inviteRecord.inviteDoc, { merge: true });
+        }
+
         armRoomLoadTimeout(gameRef.id, 'opening game');
-        await setDoc(gameRef, openingGameDoc);
+        await batch.commit();
         roomCreated = true;
-        setGame(openingGameState);
+        setGame(createdGameState);
         setRounds([]);
         setChatMessages([]);
         setGameId(gameRef.id);
         safeLocalStorageSet(activeGameKey, gameRef.id);
-
-        let queue = [];
-        let warning = '';
-        let actualCount = 0;
-        try {
-          if (!isHoldemGame) {
-            await ensureQuestionBankReadyForQueue(targetBankType);
-            const queueResult = await buildQuestionQueue(requestedQuestionCount, {
-              roundTypes: selectedRoundTypes,
-              categories: selectedCategories,
-              bankType: targetBankType,
-              gameMode,
-            });
-            queue = queueResult.queue;
-            warning = queueResult.warning;
-            actualCount = queueResult.actualCount;
-            if (!queue.length) {
-              throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
-            }
-            if (actualCount < requestedQuestionCount) {
-              if (isThisOrThatGame) {
-                console.debug('This or That live game auto-accepting shorter compatible queue', {
-                  requestedQuestionCount,
-                  actualCount,
-                });
-              } else {
-                const shouldContinue = window.confirm(`${warning} Create game with ${actualCount}?`);
-                if (!shouldContinue) {
-                  setNotice('Game creation cancelled before question queue was finalized.');
-                  return;
-                }
-              }
-            }
-          }
-          const createdGameState = isHoldemGame
-            ? {
-                ...openingGameState,
-                joinCode,
-                status: 'active',
-              }
-            : {
-                ...openingGameState,
-                joinCode,
-                status: 'active',
-                questionSelectionMode: selectionMode,
-                questionSelectionFilters: {
-                  roundTypes: selectedRoundTypes,
-                  categories: selectedCategories,
-                },
-                questionQueueIds: queue.map((question) => question.id),
-                actualQuestionCount: actualCount,
-              };
-          if (!isHoldemGame) {
-            console.debug('Create New Game queue selected', {
-              joinCode,
-              requestedQuestionCount,
-              actualCount,
-              queueCount: queue.length,
-              queueIds: queue.map((question) => question.id),
-            });
-          }
-          const createdGameDoc = {
-            ...createdGameState,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          };
-          const trueFalseQueueIds = isTrueFalseGame ? mergeUniqueIds(queue.map((question) => question.id)) : [];
-          setGame(createdGameState);
-          setGameId(gameRef.id);
-          safeLocalStorageSet(activeGameKey, gameRef.id);
-          if (isTrueFalseGame && trueFalseQueueIds.length) {
-            const batch = writeBatch(firestore);
-            batch.set(gameRef, createdGameDoc, { merge: true });
-            batch.set(
-              doc(firestore, 'playerPairs', buildPairKey()),
-              {
-                pairId: buildPairKey(),
-                playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
-                // True or False questions are retired as soon as they are queued
-                // into a live session so this mode never repeats statements later.
-                playedQuestionIds: arrayUnion(...trueFalseQueueIds),
-                updatedAt: serverTimestamp(),
-              },
-              { merge: true },
-            );
-            await batch.commit();
-          } else {
-            await setDoc(gameRef, createdGameDoc, { merge: true });
-          }
-          setNotice(
-            isHoldemGame
+        setNotice(
+          options.sendInvite
+            ? `Game ${joinCode} created and invite sent to ${PLAYER_LABEL[inviteTargetSeat] || inviteTargetSeat}.`
+            : isHoldemGame
               ? `Texas Hold’em game ${joinCode} created.`
               : `Game ${joinCode} created with ${actualCount} questions.${warning ? ` ${warning}` : ''}`,
-          );
-          console.debug('Create New Game queue committed', { gameId: gameRef.id, joinCode, actualCount });
-        } catch (queueError) {
-          console.warn('Create New Game queue setup failed, keeping the room open.', queueError);
-          setNotice(
-            isHoldemGame
-              ? `Texas Hold’em game ${joinCode} created, but the table could not finish loading. ${queueError?.message || ''}`.trim()
-              : `Game ${joinCode} created, but the question queue could not be finalized yet. ${queueError?.message || ''}`.trim(),
-          );
-        }
-
-        try {
-          await setDoc(
-            doc(firestore, 'games', gameRef.id, 'players', user.uid),
-            {
-              uid: user.uid,
-              displayName: profile?.displayName || user.displayName || PLAYER_LABEL[creatorSeat] || 'Player',
-              seat: creatorSeat,
-              role: 'host',
-              photoURL: user.photoURL || '',
-              joinedAt: serverTimestamp(),
-            },
-            { merge: true },
-          );
-        } catch (playerError) {
-          console.warn('Create New Game player profile write failed.', playerError);
-        }
-
-        try {
-          await persistActiveGame(gameRef.id);
-        } catch (persistError) {
-          console.warn('Create New Game active game persist failed, room kept open.', persistError);
-        }
-
-        if (options.sendInvite) {
-          try {
-            await sendGameInviteForSession({
-              targetGameId: gameRef.id,
-              targetUserId: inviteTargetUserId,
-              targetSeat: inviteTargetSeat,
-              sourceGame: {
-                ...openingGameState,
-                status: 'active',
-                joinCode,
-                roomCode: joinCode,
-                code: joinCode,
-                actualQuestionCount: actualCount || openingGameState.actualQuestionCount,
-                requestedQuestionCount,
-              },
-            });
-            setNotice(`Game ${joinCode} created and invite sent to ${PLAYER_LABEL[inviteTargetSeat] || inviteTargetSeat}.`);
-          } catch (inviteError) {
-            console.warn('Create New Game invite send failed.', inviteError);
-            setNotice(`Game ${joinCode} created, but the invite could not be sent. ${inviteError?.message || ''}`.trim());
-          }
-        }
+        );
+        console.debug('Create New Game queue committed', { gameId: gameRef.id, joinCode, actualCount, inviteSent: Boolean(options.sendInvite) });
 
         setLobbyGameName('');
         setLobbyQuestionCount('10');
@@ -19643,12 +19685,7 @@ function ProductionApp() {
   };
 
   useEffect(() => {
-    if (!firestore) return undefined;
-    const currentDashboardTab = (typeof window !== 'undefined' && window.localStorage)
-      ? (window.localStorage.getItem('kjk-dashboard-tab') || 'gameLobby')
-      : 'gameLobby';
-
-    if (currentDashboardTab !== 'gameLobby') {
+    if (!firestore || hasOpenRoomSession || dashboardTabState !== 'gameLobby') {
       setLobbyChatMessages([]);
       return undefined;
     }
@@ -19666,7 +19703,7 @@ function ProductionApp() {
     });
 
     return () => unsub();
-  }, [firestore]);
+  }, [dashboardTabState, firestore, hasOpenRoomSession]);
 
   const addQuestion = async () =>
     withBusy(async () => {
@@ -20046,6 +20083,7 @@ function ProductionApp() {
         onConfirmAction={confirmGameAction}
         onCancelAction={cancelGameAction}
         onResetQuestionBank={resetQuestionBankAction}
+        onActiveTabChange={setDashboardTabState}
         lobbyChatMessages={lobbyChatMessages}
         lobbyChatDraft={lobbyChatDraft}
         isLobbyChatSending={isLobbyChatSending}
