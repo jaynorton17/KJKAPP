@@ -747,6 +747,14 @@ const getQuizWagerAgreementRank = (agreement = {}) => {
   if (normalized.status === 'proposal_pending' || normalized.status === 'wheel_pending') return 1;
   return 0;
 };
+const shouldPreserveCurrentQuizAgreement = (currentGame = null, incomingGame = null) => {
+  const currentAgreementRank = getQuizWagerAgreementRank(currentGame?.quizWagerAgreement || null);
+  const incomingAgreementRank = getQuizWagerAgreementRank(incomingGame?.quizWagerAgreement || null);
+  if (currentAgreementRank <= incomingAgreementRank) return false;
+  const currentUpdatedAtMs = getRecordTime(currentGame?.updatedAt || 0);
+  const incomingUpdatedAtMs = getRecordTime(incomingGame?.updatedAt || 0);
+  return incomingUpdatedAtMs > 0 && currentUpdatedAtMs > incomingUpdatedAtMs;
+};
 const hasNextReadySeat = (round = null, seat = 'jay') => Boolean(round?.nextReady?.[seat === 'kim' ? 'kim' : 'jay']);
 const hasQuizSetupReadySeat = (game = null, seat = 'jay') => Boolean(game?.quizReadyState?.ready?.[seat === 'kim' ? 'kim' : 'jay']);
 const getRecordTime = (value) => {
@@ -2395,9 +2403,7 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
   }
   if (!currentGame?.currentRound || !incomingGame?.currentRound) {
     if (currentGame?.id === incomingGame?.id) {
-      const currentAgreementRank = getQuizWagerAgreementRank(currentGame?.quizWagerAgreement || null);
-      const incomingAgreementRank = getQuizWagerAgreementRank(incomingGame?.quizWagerAgreement || null);
-      const preserveCurrentAgreement = currentAgreementRank > incomingAgreementRank;
+      const preserveCurrentAgreement = shouldPreserveCurrentQuizAgreement(currentGame, incomingGame);
       const isHoldemRoom = isHoldemGameMode(incomingGame?.gameMode || currentGame?.gameMode || 'standard');
       const mergedGame = {
         ...incomingGame,
@@ -6701,6 +6707,12 @@ function QuizSetupStagePanel({
       setOptimisticWheelRequesterId('');
     }
   }, [wheelPending]);
+
+  useEffect(() => {
+    if (!isBusy && optimisticWheelRequesterId && !wheelPending) {
+      setOptimisticWheelRequesterId('');
+    }
+  }, [isBusy, optimisticWheelRequesterId, wheelPending]);
 
   useEffect(() => {
     const shouldTick = countdownActive || (agreement.status === 'wheel_countdown' && Number.isFinite(wheelSpinEndsAtMs) && !sharedWagerLocked);
@@ -13201,6 +13213,9 @@ function ProductionApp() {
     setChatMessages((current) => (game?.id === targetGameId ? [] : current));
     resetRoomLoadState();
     setProfile((current) => (current?.activeGameId === targetGameId ? { ...current, activeGameId: '' } : current));
+    void clearCompletedGameProfiles(targetGameId, game.playerUids || []).catch((error) => {
+      console.warn('Could not clear completed game profiles during live room cleanup.', error);
+    });
     setNotice('Game ended and closed. Summary moved to Previous Games.');
     return undefined;
   }, [game, rounds]);
