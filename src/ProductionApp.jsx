@@ -11890,38 +11890,64 @@ function ProductionApp() {
       setAuthLoading(false);
       return undefined;
     }
-    const unsubscribe = onAuthStateChanged(firebaseAuth, async (nextUser) => {
-      debugRoom('authStateChanged', { uid: nextUser?.uid || '', email: nextUser?.email || '' });
-      const previousAuthUserId = lastAuthUserIdRef.current;
-      const nextAuthUserId = nextUser?.uid || '';
-      lastAuthUserIdRef.current = nextAuthUserId;
-      if (nextAuthUserId && nextAuthUserId !== previousAuthUserId) {
-        setMobilePostAuthDashboardDefault();
-      }
-      setUser(nextUser);
+    let cancelled = false;
+    let authResolved = false;
+    const resolveAuthLoading = () => {
+      if (cancelled || authResolved) return;
+      authResolved = true;
       setAuthLoading(false);
-      if (nextUser && firestore) {
-        const profileRef = doc(firestore, 'users', nextUser.uid);
-        await setDoc(
-          profileRef,
-          {
-            uid: nextUser.uid,
-            displayName: nextUser.displayName || nextUser.email?.split('@')[0] || 'Player',
-            email: nextUser.email || '',
-            photoURL: nextUser.photoURL || '',
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true },
-        );
-      } else {
-        setProfile(null);
-        autoResumedGameIdRef.current = '';
-        setGameId('');
-        localStorage.removeItem(activeGameKey);
-        resetRoomLoadState();
+    };
+    const initialCurrentUser = firebaseAuth.currentUser || null;
+    if (initialCurrentUser) {
+      setUser((current) => current || initialCurrentUser);
+      resolveAuthLoading();
+    }
+    const authFallbackTimer = window.setTimeout(() => {
+      if (cancelled || authResolved) return;
+      setUser((current) => current || firebaseAuth.currentUser || null);
+      resolveAuthLoading();
+    }, 2500);
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (nextUser) => {
+      try {
+        debugRoom('authStateChanged', { uid: nextUser?.uid || '', email: nextUser?.email || '' });
+        const previousAuthUserId = lastAuthUserIdRef.current;
+        const nextAuthUserId = nextUser?.uid || '';
+        lastAuthUserIdRef.current = nextAuthUserId;
+        if (nextAuthUserId && nextAuthUserId !== previousAuthUserId) {
+          setMobilePostAuthDashboardDefault();
+        }
+        setUser(nextUser);
+        resolveAuthLoading();
+        if (nextUser && firestore) {
+          const profileRef = doc(firestore, 'users', nextUser.uid);
+          await setDoc(
+            profileRef,
+            {
+              uid: nextUser.uid,
+              displayName: nextUser.displayName || nextUser.email?.split('@')[0] || 'Player',
+              email: nextUser.email || '',
+              photoURL: nextUser.photoURL || '',
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true },
+          );
+        } else {
+          setProfile(null);
+          autoResumedGameIdRef.current = '';
+          setGameId('');
+          localStorage.removeItem(activeGameKey);
+          resetRoomLoadState();
+        }
+      } catch (error) {
+        resolveAuthLoading();
+        console.error('[KJK AUTH] Could not finish auth bootstrap.', error);
       }
     });
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      window.clearTimeout(authFallbackTimer);
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
