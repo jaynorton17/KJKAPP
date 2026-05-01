@@ -65,12 +65,29 @@ import {
   setQuestionUsed,
   toScore,
 } from './utils/game.js';
+import {
+  HOLDEM_BIG_BLIND,
+  HOLDEM_SMALL_BLIND,
+  applyHoldemAction,
+  buildNextHoldemHandState,
+  createHoldemSessionState,
+  defaultHoldemStats,
+  getHoldemActionState as getHoldemActionStateFromRules,
+  getHoldemStatDelta,
+  getHoldemVisibleCommunityCards,
+  mergeHoldemStats,
+} from './utils/holdem.js';
 import { loadThemeIndex, saveThemeIndex } from './utils/storage.js';
 import { firebaseAuth, firebaseIsConfigured, firestore, storage } from './lib/firebase.js';
 import { parseGoogleSheetImport, parseGoogleSheetQuizImport, parseGoogleSheetReference } from './utils/importers.js';
 
 const seats = ['jay', 'kim'];
+const HOLDEM_GAME_MODE = 'holdem';
 const categoryColorMap = CATEGORY_COLOR_MAP;
+const buildHoldemBankrollsFromAccounts = (accounts = {}) => ({
+  jay: Math.max(0, Math.floor(Number(accounts?.jay?.lifetimePenaltyPoints || 0) || 0)),
+  kim: Math.max(0, Math.floor(Number(accounts?.kim?.lifetimePenaltyPoints || 0) || 0)),
+});
 const defaultAuthForm = { displayName: '', email: '', password: '', resetEmail: '' };
 const defaultDraft = { ownAnswer: '', guessedOther: '' };
 const defaultPenaltyDraft = { jay: '0', kim: '0' };
@@ -113,6 +130,10 @@ const oppositeSeatOf = (seat = 'jay') => (seat === 'kim' ? 'jay' : 'kim');
 const preferredSeatForUser = (user, profile) => inferSeatFromUser(user, profile) || seatFromPlayerRef(user?.uid) || 'jay';
 const buildGameInviteId = (targetGameId = '', invitedForUserId = '') =>
   targetGameId && invitedForUserId ? `game-invite-${targetGameId}-${invitedForUserId}` : '';
+const resolveGameMode = (value = 'standard') =>
+  value === 'quiz' ? 'quiz' : value === HOLDEM_GAME_MODE ? HOLDEM_GAME_MODE : 'standard';
+const isQuizGameMode = (value = 'standard') => resolveGameMode(value) === 'quiz';
+const isHoldemGameMode = (value = 'standard') => resolveGameMode(value) === HOLDEM_GAME_MODE;
 const QUIZ_TIMER_SECONDS = 10;
 const QUIZ_WHEEL_SLOT_COUNT = 20;
 const QUIZ_WHEEL_MAX_AMOUNT = 2500;
@@ -1033,7 +1054,8 @@ const buildAiEvidenceSnapshot = ({
   };
 
   (previousGames || []).forEach((game) => {
-    const gameMode = (game?.gameMode || 'standard') === 'quiz' ? 'quiz' : 'standard';
+    const gameMode = resolveGameMode(game?.gameMode || 'standard');
+    if (gameMode === HOLDEM_GAME_MODE) return;
     if (gameMode === 'quiz') pairStats.completedQuizGames += 1;
     else pairStats.completedStandardGames += 1;
     if (gameMode !== 'standard') return;
@@ -1902,6 +1924,8 @@ const stableRoomSnapshotValue = (game = {}) => {
     quizWagers: game.quizWagers || {},
     quizWagerAgreement: game.quizWagerAgreement || null,
     quizReadyState: game.quizReadyState || null,
+    holdemState: game.holdemState || null,
+    holdemStats: game.holdemStats || null,
     roundsPlayed: Number(game.roundsPlayed || 0),
     requestedQuestionCount: Number(game.requestedQuestionCount || 0),
     actualQuestionCount: Number(game.actualQuestionCount || 0),
@@ -2068,6 +2092,9 @@ const getPlayedQuestionIdsForGame = (game = {}) => {
 };
 
 const getCompletedGameDisplayCount = (game = {}) => {
+  if (isHoldemGameMode(game?.gameMode || 'standard')) {
+    return Math.max(0, Number(game?.holdemStats?.handsPlayed || 0), Number(game?.roundsPlayed || 0));
+  }
   const answeredRoundsLength = Array.isArray(game?.rounds) ? game.rounds.length : 0;
   const roundsPlayed = Math.max(0, Number(game?.roundsPlayed || 0));
   const playedQuestionIdsLength = getPlayedQuestionIdsForGame(game).length;
@@ -2103,26 +2130,40 @@ const getGameQuestionGoal = (game, rounds = []) => {
 
 const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
   const status = data.status || 'active';
+  const gameMode = resolveGameMode(data.gameMode || 'standard');
+  const isHoldemGame = isHoldemGameMode(gameMode);
+  const holdemStats = data.holdemStats || defaultHoldemStats();
+  const holdemState = data.holdemState || null;
   const selectedQuestionsLength = Array.isArray(data.questionQueueIds) ? data.questionQueueIds.filter(Boolean).length : 0;
   const usedQuestionIds = Array.isArray(data.usedQuestionIds) ? data.usedQuestionIds.filter(Boolean) : [];
-  const answeredRoundsLength = roundsData.length;
-  const displayedQuestionCount = COMPLETED_GAME_STATUSES.includes(status)
-    ? getCompletedGameDisplayCount({
-        rounds: roundsData,
-        roundsPlayed: data.roundsPlayed || roundsData.length,
-        usedQuestionIds,
-      })
-    : Math.max(
-        Number(data.actualQuestionCount || 0),
-        Number(data.requestedQuestionCount || 0),
-        answeredRoundsLength + selectedQuestionsLength + (data.currentRound ? 1 : 0),
-        0,
-      );
-  const finalScores = data.finalScores || data.totals || (roundsData.length ? roundsData.at(-1)?.totalsAfterRound || { jay: 0, kim: 0 } : { jay: 0, kim: 0 });
+  const answeredRoundsLength = isHoldemGame ? 0 : roundsData.length;
+  const displayedQuestionCount = isHoldemGame
+    ? Math.max(0, Number(holdemStats?.handsPlayed || 0), Number(data.roundsPlayed || 0))
+    : COMPLETED_GAME_STATUSES.includes(status)
+      ? getCompletedGameDisplayCount({
+          rounds: roundsData,
+          roundsPlayed: data.roundsPlayed || roundsData.length,
+          usedQuestionIds,
+        })
+      : Math.max(
+          Number(data.actualQuestionCount || 0),
+          Number(data.requestedQuestionCount || 0),
+          answeredRoundsLength + selectedQuestionsLength + (data.currentRound ? 1 : 0),
+          0,
+        );
+  const defaultHoldemFinals = holdemState?.lastSettledBalances || { jay: 0, kim: 0 };
+  const finalScores = isHoldemGame
+    ? (data.finalScores || data.totals || defaultHoldemFinals)
+    : (data.finalScores || data.totals || (roundsData.length ? roundsData.at(-1)?.totalsAfterRound || { jay: 0, kim: 0 } : { jay: 0, kim: 0 }));
   const currentPlayerList = [
     data.playerProfiles?.[data.seats?.jay]?.displayName || 'Jay',
     data.playerProfiles?.[data.seats?.kim]?.displayName || 'Kim',
   ].filter(Boolean);
+  const holdemWinner = Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
+    ? 'tie'
+    : Number(finalScores.jay || 0) > Number(finalScores.kim || 0)
+      ? 'jay'
+      : 'kim';
 
   return {
     id,
@@ -2140,17 +2181,17 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     endedAt: data.endedAt || null,
     endedBy: data.endedBy || '',
     finalScores,
-    winner: data.winner || (finalScores ? (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim') : 'tie'),
+    winner: data.winner || (isHoldemGame ? holdemWinner : (finalScores ? (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim') : 'tie')),
     quizTotals: data.quizTotals || { jay: 0, kim: 0 },
     quizWinner: data.quizWinner || '',
     wagerSettlement: data.wagerSettlement || null,
-    roundsPlayed: data.roundsPlayed || roundsData.length,
+    roundsPlayed: isHoldemGame ? Number(holdemStats?.handsPlayed || data.roundsPlayed || 0) : (data.roundsPlayed || roundsData.length),
     rounds: roundsData,
     questionQueueIds: data.questionQueueIds || [],
     usedQuestionIds,
     seats: data.seats || {},
     playerProfiles: data.playerProfiles || {},
-    gameMode: data.gameMode || 'standard',
+    gameMode,
     questionBankType: data.questionBankType || 'game',
     requestedQuestionCount: Number(data.requestedQuestionCount || 0),
     actualQuestionCount: displayedQuestionCount,
@@ -2160,6 +2201,9 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     roundHistoryLength: roundsData.length,
     currentQuestionIndex: data.currentRound?.number || null,
     lifetimePointsApplied: Boolean(data.lifetimePointsApplied),
+    holdemState,
+    holdemStats,
+    holdemHandsPlayed: Number(holdemStats?.handsPlayed || 0),
   };
 };
 
@@ -2663,6 +2707,7 @@ function LobbyScreen({
   previousGames,
   lobbyAnalytics,
   lobbyRoundAnalytics,
+  holdemAnalytics,
   categoryColorMap,
   bankCount,
   questionCount,
@@ -2714,7 +2759,6 @@ function LobbyScreen({
   const [quizCreateCodeDraft, setQuizCreateCodeDraft] = useState('');
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
-  const [holdemQuestionCountDraft, setHoldemQuestionCountDraft] = useState('10');
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
@@ -3518,11 +3562,11 @@ function LobbyScreen({
                 <div className="panel-heading">
                   <div>
                     <p className="eyebrow">Cards</p>
-                    <h2>Texas Hold Em'</h2>
+                    <h2>Texas Hold'em</h2>
                   </div>
-                  <span className="status-pill">{questionCount} ready</span>
+                  <span className="status-pill">{formatScore(HOLDEM_SMALL_BLIND)} / {formatScore(HOLDEM_BIG_BLIND)}</span>
                 </div>
-                <p className="panel-copy">Open a Texas Hold Em' room with its own code and invite flow. This currently uses the standard live room flow behind the scenes.</p>
+                <p className="panel-copy">Open a heads-up Texas Hold'em table where Jay and Kim use their live penalty-point totals as the poker bankroll.</p>
                 <div className="hold-em-card-hero" aria-hidden="true">
                   <span className="hold-em-card-chip">A♠</span>
                   <span className="hold-em-card-chip">K♥</span>
@@ -3530,53 +3574,41 @@ function LobbyScreen({
                   <span className="hold-em-card-chip">J♦</span>
                 </div>
                 <label className="field">
-                  <span>Texas Hold Em' Code</span>
+                  <span>Texas Hold'em Code</span>
                   <input
                     value={holdemCreateCodeDraft}
                     onChange={(event) => setHoldemCreateCodeDraft(normalizeJoinCode(event.target.value))}
                     placeholder="Optional"
                   />
                 </label>
-                <label className="field">
-                  <span>Number of Questions</span>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    value={holdemQuestionCountDraft}
-                    onChange={(event) => setHoldemQuestionCountDraft(event.target.value)}
-                    placeholder="10"
-                  />
-                </label>
+                <p className="field-note">Small blind {formatScore(HOLDEM_SMALL_BLIND)}. Big blind {formatScore(HOLDEM_BIG_BLIND)}. Bets settle back into penalty points when the hand ends.</p>
                 <div className="button-row">
                   <Button
                     className="primary-button compact"
                     onClick={() =>
                       onCreateGame({
                         createCode: holdemCreateCodeDraft,
-                        gameName: "Texas Hold Em'",
+                        gameName: "Texas Hold'em",
                         mode: 'random',
-                        gameMode: 'standard',
+                        gameMode: HOLDEM_GAME_MODE,
                         roundTypes: [],
                         categories: [],
-                        requestedQuestionCount: holdemQuestionCountDraft,
                       })}
                     disabled={isBusy}
                   >
-                    Create Texas Hold Em'
+                    Create Texas Hold'em
                   </Button>
                   <Button
                     className="ghost-button compact"
                     onClick={() =>
                       onCreateGame({
                         createCode: holdemCreateCodeDraft,
-                        gameName: "Texas Hold Em'",
+                        gameName: "Texas Hold'em",
                         mode: 'random',
-                        gameMode: 'standard',
+                        gameMode: HOLDEM_GAME_MODE,
                         roundTypes: [],
                         categories: [],
                         sendInvite: true,
-                        requestedQuestionCount: holdemQuestionCountDraft,
                       })}
                     disabled={isBusy}
                   >
@@ -3688,47 +3720,66 @@ function LobbyScreen({
                 <div className="activity-content activity-content--active">
                   <div className="active-games-list">
                     {activeGames.length ? (
-                      activeGames.map((game) => (
-                        <article className="game-record-row" key={game.id}>
-                          <div className="game-record-badge" aria-hidden="true">
-                            {String((game.gameName || game.joinCode || 'G').slice(0, 2)).toUpperCase()}
-                          </div>
-                          <div className="game-record-main">
-                            <strong>{game.gameName || game.name || game.joinCode}</strong>
-                            <span>{game.joinCode}</span>
-                            <small>
-                              {game.players?.join(' + ') || 'Waiting'} · {game.status || 'active'} · Round {game.currentRound || '—'} · Questions {game.actualQuestionCount || game.questionQueueIds?.length || 0}/{game.requestedQuestionCount || game.actualQuestionCount || game.questionQueueIds?.length || 0} · Created {formatDate(game.createdAt)}
-                            </small>
-                            <div className="game-progress">
-                              <span className="game-progress-label">
-                                Progress
-                                <strong>
-                                  {Math.min(100, Math.round(((game.currentRound || 0) / Math.max(1, game.actualQuestionCount || game.questionQueueIds?.length || 1)) * 100))}%
-                                </strong>
-                              </span>
-                              <div className="game-progress-track">
-                                <div
-                                  className="game-progress-fill"
-                                  style={{
-                                    width: `${Math.min(100, Math.round(((game.currentRound || 0) / Math.max(1, game.actualQuestionCount || game.questionQueueIds?.length || 1)) * 100))}%`,
-                                  }}
-                                />
+                      activeGames.map((game) => {
+                        const isHoldemGame = isHoldemGameMode(game?.gameMode || 'standard');
+                        const holdemState = game?.holdemState || null;
+                        const holdemHandsPlayed = Number(game?.holdemStats?.handsPlayed || 0);
+                        const holdemProgress = holdemState?.sessionStatus === 'hand_complete'
+                          ? 100
+                          : holdemState?.phase === 'river'
+                            ? 85
+                            : holdemState?.phase === 'turn'
+                              ? 70
+                              : holdemState?.phase === 'flop'
+                                ? 50
+                                : holdemState?.phase === 'preflop'
+                                  ? 25
+                                  : 0;
+                        const standardProgress = Math.min(
+                          100,
+                          Math.round(((game.currentRound || 0) / Math.max(1, game.actualQuestionCount || game.questionQueueIds?.length || 1)) * 100),
+                        );
+                        const progressValue = isHoldemGame ? holdemProgress : standardProgress;
+                        return (
+                          <article className="game-record-row" key={game.id}>
+                            <div className="game-record-badge" aria-hidden="true">
+                              {String((game.gameName || game.joinCode || 'G').slice(0, 2)).toUpperCase()}
+                            </div>
+                            <div className="game-record-main">
+                              <strong>{game.gameName || game.name || game.joinCode}</strong>
+                              <span>{game.joinCode}</span>
+                              <small>
+                                {isHoldemGame
+                                  ? `${game.players?.join(' + ') || 'Waiting'} · ${holdemState?.phase ? HOLDEM_PHASE_LABELS[holdemState.phase] || holdemState.phase : holdemState?.statusMessage || 'Waiting'} · Hands ${holdemHandsPlayed} · Pot ${formatScore(Number(holdemState?.potTotal || 0))} · Created ${formatDate(game.createdAt)}`
+                                  : `${game.players?.join(' + ') || 'Waiting'} · ${game.status || 'active'} · Round ${game.currentRound || '—'} · Questions ${game.actualQuestionCount || game.questionQueueIds?.length || 0}/${game.requestedQuestionCount || game.actualQuestionCount || game.questionQueueIds?.length || 0} · Created ${formatDate(game.createdAt)}`}
+                              </small>
+                              <div className="game-progress">
+                                <span className="game-progress-label">
+                                  {isHoldemGame ? 'Street' : 'Progress'}
+                                  <strong>{progressValue}%</strong>
+                                </span>
+                                <div className="game-progress-track">
+                                  <div
+                                    className="game-progress-fill"
+                                    style={{ width: `${progressValue}%` }}
+                                  />
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          <div className="game-record-actions dashboard-toolbar-actions">
-                            <Button className="ghost-button compact" onClick={() => onResumeGame(game.id)}>
-                              Resume Game
-                            </Button>
-                            <Button className="ghost-button compact" onClick={() => onViewSummary(game.id)}>
-                              View Details
-                            </Button>
-                            <Button className="ghost-button compact" onClick={() => onEndGame(game.id)}>
-                              End Game
-                            </Button>
-                          </div>
-                        </article>
-                      ))
+                            <div className="game-record-actions dashboard-toolbar-actions">
+                              <Button className="ghost-button compact" onClick={() => onResumeGame(game.id)}>
+                                Resume Game
+                              </Button>
+                              <Button className="ghost-button compact" onClick={() => onViewSummary(game.id)}>
+                                View Details
+                              </Button>
+                              <Button className="ghost-button compact" onClick={() => onEndGame(game.id)}>
+                                End Game
+                              </Button>
+                            </div>
+                          </article>
+                        );
+                      })
                     ) : (
                       <div className="activity-empty-state">
                         <h3>No active games yet</h3>
@@ -3749,6 +3800,8 @@ function LobbyScreen({
                       previousGames.map((game) => {
                         const winnerSeat = game.winner === 'jay' || game.winner === 'kim' ? game.winner : 'tie';
                         const completedQuestionCount = getCompletedGameDisplayCount(game);
+                        const isHoldemGame = isHoldemGameMode(game?.gameMode || 'standard');
+                        const holdemStats = game?.holdemStats || defaultHoldemStats();
                         return (
                           <article
                             className={`game-record-row game-record-row--previous game-record-row--winner-${winnerSeat}`}
@@ -3763,10 +3816,14 @@ function LobbyScreen({
                                 {game.joinCode} · Winner {PLAYER_LABEL[winnerSeat] || 'Tie'}
                               </span>
                               <p className="game-record-summary">
-                                Final {formatScore(game.finalScores?.jay || 0)} / {formatScore(game.finalScores?.kim || 0)} · Rounds {completedQuestionCount}
+                                {isHoldemGame
+                                  ? `Final ${formatScore(game.finalScores?.jay || 0)} / ${formatScore(game.finalScores?.kim || 0)} · Hands ${completedQuestionCount} · Biggest Pot ${formatScore(Number(holdemStats?.biggestPot || 0))}`
+                                  : `Final ${formatScore(game.finalScores?.jay || 0)} / ${formatScore(game.finalScores?.kim || 0)} · Rounds ${completedQuestionCount}`}
                               </p>
                               <small>
-                                {game.players?.join(' + ') || 'Waiting'} · Ended {formatDate(game.endedAt)}
+                                {isHoldemGame
+                                  ? `${game.players?.join(' + ') || 'Waiting'} · ${holdemStats?.foldWins || holdemStats?.showdownWins ? `Fold wins ${Number(holdemStats?.foldWins || 0)} · Showdown wins ${Number(holdemStats?.showdownWins || 0)} · ` : ''}Ended ${formatDate(game.endedAt)}`
+                                  : `${game.players?.join(' + ') || 'Waiting'} · Ended ${formatDate(game.endedAt)}`}
                               </small>
                             </div>
                             <div className="game-record-actions game-record-actions--stacked">
@@ -3913,6 +3970,9 @@ function LobbyScreen({
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('quiz')}>
                   Quiz
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'holdem' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('holdem')}>
+                  Texas Hold Em
                 </button>
               </div>
 
@@ -4200,6 +4260,94 @@ function LobbyScreen({
                         </div>
                       </section>
                     </div>
+                  ) : null}
+                </section>
+              ) : analyticsSegment === 'holdem' ? (
+                <section className="analytics-questions-panel">
+                  <div className="question-bank-status-grid">
+                    <article className="stat-tile">
+                      <small>Tracked Sessions</small>
+                      <strong>{holdemAnalytics.sessionsTracked}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Hands Played</small>
+                      <strong>{holdemAnalytics.handsPlayed}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Won</small>
+                      <strong>{holdemAnalytics.handsWonJay}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Won</small>
+                      <strong>{holdemAnalytics.handsWonKim}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Hands Split</small>
+                      <strong>{holdemAnalytics.handsSplit}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Total Wagered</small>
+                      <strong>{formatScore(holdemAnalytics.totalPointsWagered)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Biggest Pot</small>
+                      <strong>{formatScore(holdemAnalytics.biggestPot)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Fold Wins</small>
+                      <strong>{holdemAnalytics.foldWins}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Showdown Wins</small>
+                      <strong>{holdemAnalytics.showdownWins}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>All-Ins</small>
+                      <strong>{holdemAnalytics.allIns}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Net Move</small>
+                      <strong>{formatScore(holdemAnalytics.netMovementJay)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Net Move</small>
+                      <strong>{formatScore(holdemAnalytics.netMovementKim)}</strong>
+                    </article>
+                  </div>
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Outcomes</span>
+                          <h3>Texas Hold Em</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Active sessions</strong><span>{holdemAnalytics.activeSessions}</span></article>
+                        <article className="mini-list-row"><strong>Completed sessions</strong><span>{holdemAnalytics.completedSessions}</span></article>
+                        <article className="mini-list-row"><strong>Fold wins</strong><span>{holdemAnalytics.foldWins}</span></article>
+                        <article className="mini-list-row"><strong>Showdown wins</strong><span>{holdemAnalytics.showdownWins}</span></article>
+                        <article className="mini-list-row"><strong>Split pots</strong><span>{holdemAnalytics.handsSplit}</span></article>
+                        <article className="mini-list-row"><strong>All-ins</strong><span>{holdemAnalytics.allIns}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Penalty Points</span>
+                          <h3>Net Movement</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Jay movement</strong><span>{formatScore(holdemAnalytics.netMovementJay)}</span></article>
+                        <article className="mini-list-row"><strong>Kim movement</strong><span>{formatScore(holdemAnalytics.netMovementKim)}</span></article>
+                        <article className="mini-list-row"><strong>Total wagered</strong><span>{formatScore(holdemAnalytics.totalPointsWagered)}</span></article>
+                        <article className="mini-list-row"><strong>Biggest pot</strong><span>{formatScore(holdemAnalytics.biggestPot)}</span></article>
+                      </div>
+                    </section>
+                  </div>
+                  {!holdemAnalytics.handsPlayed ? (
+                    <p className="empty-copy">No Texas Hold Em hands have been recorded yet.</p>
                   ) : null}
                 </section>
               ) : (
@@ -6289,6 +6437,515 @@ function ChatPanel({
   return <section className="panel chat-panel">{content}</section>;
 }
 
+const HOLDEM_SUIT_SYMBOLS = {
+  s: '♠',
+  h: '♥',
+  d: '♦',
+  c: '♣',
+};
+
+const HOLDEM_PHASE_LABELS = {
+  preflop: 'Pre-Flop',
+  flop: 'Flop',
+  turn: 'Turn',
+  river: 'River',
+  showdown: 'Showdown',
+  complete: 'Hand Complete',
+};
+
+const formatHoldemCardFace = (card = '') => {
+  const rawCard = String(card || '').trim();
+  if (!rawCard) return '';
+  const rank = rawCard.charAt(0).toUpperCase();
+  const suit = rawCard.slice(1, 2).toLowerCase();
+  return `${rank}${HOLDEM_SUIT_SYMBOLS[suit] || suit.toUpperCase()}`;
+};
+
+const holdemCardTone = (card = '') => {
+  const suit = String(card || '').slice(1, 2).toLowerCase();
+  return suit === 'h' || suit === 'd' ? 'is-red' : 'is-black';
+};
+
+function HoldemActionControls({
+  holdemState,
+  viewerSeat,
+  isBusy,
+  onStartHand,
+  onTakeAction,
+}) {
+  const actionState = useMemo(
+    () => getHoldemActionStateFromRules(holdemState || {}, viewerSeat),
+    [holdemState, viewerSeat],
+  );
+  const draftKey = [
+    holdemState?.handNumber || 0,
+    holdemState?.phase || '',
+    holdemState?.actionSeat || '',
+    actionState.amountToCall || 0,
+    actionState.minBetTo || 0,
+    actionState.minRaiseTo || 0,
+    actionState.maxTotal || 0,
+  ].join(':');
+  const [amountDraft, setAmountDraft] = useState('');
+
+  useEffect(() => {
+    const defaultAmount = actionState.actions.raise
+      ? actionState.minRaiseTo
+      : actionState.actions.bet
+        ? actionState.minBetTo
+        : actionState.maxTotal;
+    setAmountDraft(defaultAmount ? String(defaultAmount) : '');
+  }, [draftKey, actionState.actions.bet, actionState.actions.raise, actionState.maxTotal, actionState.minBetTo, actionState.minRaiseTo]);
+
+  if (!holdemState) return null;
+
+  if (holdemState.sessionStatus === 'waiting_for_players') {
+    return <p className="panel-copy holdem-action-copy">{holdemState.statusMessage || 'Waiting for both players to join.'}</p>;
+  }
+
+  if (holdemState.sessionStatus === 'bankroll_blocked') {
+    return <p className="panel-copy holdem-action-copy">{holdemState.statusMessage || 'Both players need penalty points before the next hand can begin.'}</p>;
+  }
+
+  if (holdemState.sessionStatus === 'ready_to_deal') {
+    return (
+      <div className="holdem-action-stack">
+        <p className="panel-copy holdem-action-copy">{holdemState.statusMessage || 'Players are seated. Deal the next hand when ready.'}</p>
+        <div className="button-row holdem-action-row">
+          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy}>
+            {Number(holdemState.handNumber || 0) > 0 ? 'Deal Next Hand' : 'Deal First Hand'}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (holdemState.sessionStatus === 'hand_complete') {
+    const winningSeats = holdemState?.settlement?.winningSeats || [];
+    const resultLabel = winningSeats.length > 1
+      ? 'Pot split'
+      : winningSeats[0]
+        ? `${PLAYER_LABEL[winningSeats[0]] || winningSeats[0]} wins`
+        : 'Hand complete';
+    return (
+      <div className="holdem-action-stack">
+        <p className="panel-copy holdem-action-copy">{resultLabel}. {holdemState.statusMessage || 'Review the showdown, then deal the next hand.'}</p>
+        <div className="button-row holdem-action-row">
+          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy}>
+            Deal Next Hand
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!actionState.canAct) {
+    const actingLabel = holdemState?.actionSeat ? PLAYER_LABEL[holdemState.actionSeat] || holdemState.actionSeat : 'the other player';
+    return <p className="panel-copy holdem-action-copy">Waiting for {actingLabel} to act.</p>;
+  }
+
+  return (
+    <div className="holdem-action-stack">
+      <p className="panel-copy holdem-action-copy">
+        {actionState.amountToCall > 0
+          ? `Call ${formatScore(actionState.amountToCall)} to stay in the hand.`
+          : 'No bet to call. You can check or open the action.'}
+      </p>
+      <div className="button-row holdem-action-row">
+        <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'fold' })} disabled={isBusy || !actionState.actions.fold}>
+          Fold
+        </Button>
+        <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'check' })} disabled={isBusy || !actionState.actions.check}>
+          Check
+        </Button>
+        <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'call' })} disabled={isBusy || !actionState.actions.call}>
+          {`Call ${formatScore(actionState.amountToCall)}`}
+        </Button>
+      </div>
+      {(actionState.actions.bet || actionState.actions.raise) ? (
+        <div className="holdem-raise-row">
+          <label className="field">
+            <span>{actionState.actions.raise ? 'Raise To' : 'Bet'}</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={actionState.actions.raise ? actionState.minRaiseTo : actionState.minBetTo}
+              max={actionState.maxTotal}
+              value={amountDraft}
+              onChange={(event) => setAmountDraft(event.target.value)}
+              placeholder={String(actionState.actions.raise ? actionState.minRaiseTo : actionState.minBetTo)}
+            />
+          </label>
+          <div className="button-row holdem-action-row">
+            <Button
+              className="primary-button compact"
+              onClick={() => onTakeAction({ action: actionState.actions.raise ? 'raise' : 'bet', amount: Number(amountDraft || 0) })}
+              disabled={isBusy || !(actionState.actions.bet || actionState.actions.raise)}
+            >
+              {actionState.actions.raise ? 'Raise' : 'Bet'}
+            </Button>
+            <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'all-in' })} disabled={isBusy || !actionState.actions.allIn}>
+              All-In
+            </Button>
+          </div>
+          <p className="field-note">
+            {actionState.actions.raise
+              ? `Minimum raise to ${formatScore(actionState.minRaiseTo)}. Maximum ${formatScore(actionState.maxTotal)}.`
+              : `Minimum bet ${formatScore(actionState.minBetTo)}. Maximum ${formatScore(actionState.maxTotal)}.`}
+          </p>
+        </div>
+      ) : (
+        <div className="button-row holdem-action-row">
+          <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'all-in' })} disabled={isBusy || !actionState.actions.allIn}>
+            All-In
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HoldemTable({
+  game,
+  viewerSeat,
+  editingModeEnabled,
+  isBusy,
+  onStartHand,
+  onTakeAction,
+}) {
+  const holdemState = game?.holdemState || null;
+  const communityCards = getHoldemVisibleCommunityCards(holdemState || {});
+  const showAllCards = editingModeEnabled || isLocalTestGame(game) || holdemState?.sessionStatus === 'hand_complete';
+  const displayedStacks = {
+    jay: holdemState?.sessionStatus === 'hand_live'
+      ? Number(holdemState?.players?.jay?.stack || 0)
+      : Number(holdemState?.lastSettledBalances?.jay || holdemState?.players?.jay?.stack || 0),
+    kim: holdemState?.sessionStatus === 'hand_live'
+      ? Number(holdemState?.players?.kim?.stack || 0)
+      : Number(holdemState?.lastSettledBalances?.kim || holdemState?.players?.kim?.stack || 0),
+  };
+  const currentBet = Number(holdemState?.currentBet || 0);
+  const potTotal = Number(holdemState?.potTotal || 0);
+  const phaseLabel = HOLDEM_PHASE_LABELS[holdemState?.phase] || 'Waiting';
+  const winningSeats = holdemState?.settlement?.winningSeats || [];
+
+  return (
+    <section className="panel room-panel holdem-table-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Texas Hold'em</p>
+          <h2>Poker Table</h2>
+        </div>
+        <span className="status-pill">{phaseLabel}</span>
+      </div>
+
+      <div className="holdem-status-grid">
+        <article className="stat-tile">
+          <small>Hand</small>
+          <strong>{Number(holdemState?.handNumber || 0)}</strong>
+          <span>{holdemState?.sessionStatus === 'hand_live' ? 'in progress' : 'ready status'}</span>
+        </article>
+        <article className="stat-tile">
+          <small>Pot</small>
+          <strong>{formatScore(potTotal)}</strong>
+          <span>chips in the middle</span>
+        </article>
+        <article className="stat-tile">
+          <small>Current Bet</small>
+          <strong>{formatScore(currentBet)}</strong>
+          <span>big blind is {formatScore(HOLDEM_BIG_BLIND)}</span>
+        </article>
+      </div>
+
+      <div className="holdem-table-surface">
+        <article className={`holdem-player-panel holdem-player-panel--kim ${holdemState?.actionSeat === 'kim' ? 'is-acting' : ''} ${winningSeats.includes('kim') ? 'is-winning' : ''}`}>
+          <div className="holdem-player-head">
+            <div>
+              <span className="holdem-player-badges">
+                {holdemState?.dealerSeat === 'kim' ? <span className="status-pill">Button</span> : null}
+                {holdemState?.smallBlindSeat === 'kim' ? <span className="status-pill">Small Blind {formatScore(HOLDEM_SMALL_BLIND)}</span> : null}
+                {holdemState?.bigBlindSeat === 'kim' ? <span className="status-pill">Big Blind {formatScore(HOLDEM_BIG_BLIND)}</span> : null}
+              </span>
+              <h3>Kim</h3>
+            </div>
+            <strong>{formatScore(displayedStacks.kim)}</strong>
+          </div>
+          <div className="holdem-card-row">
+            {(holdemState?.players?.kim?.holeCards || ['', '']).map((card, index) => {
+              const revealCard = showAllCards || viewerSeat === 'kim';
+              return (
+                <span key={`kim-card-${index + 1}`} className={`holdem-card ${revealCard ? holdemCardTone(card) : 'is-hidden'}`}>
+                  {revealCard ? formatHoldemCardFace(card) : '??'}
+                </span>
+              );
+            })}
+          </div>
+          <small>{`Available balance ${formatScore(displayedStacks.kim)} · Committed ${formatScore(Number(holdemState?.players?.kim?.totalCommitted || 0))}`}</small>
+        </article>
+
+        <div className="holdem-board-panel">
+          <div className="holdem-board-pot">
+            <span className="status-pill">{holdemState?.statusMessage || 'Table ready'}</span>
+          </div>
+          <div className="holdem-community-row" aria-label="Community cards">
+            {[0, 1, 2, 3, 4].map((index) => {
+              const card = communityCards[index] || '';
+              const revealed = Boolean(card);
+              return (
+                <span key={`community-card-${index + 1}`} className={`holdem-card holdem-card--community ${revealed ? holdemCardTone(card) : 'is-hidden'}`}>
+                  {revealed ? formatHoldemCardFace(card) : '??'}
+                </span>
+              );
+            })}
+          </div>
+          {holdemState?.settlement?.reason === 'showdown' ? (
+            <div className="holdem-showdown-grid">
+              {(['jay', 'kim']).map((seat) => {
+                const hand = holdemState?.settlement?.evaluations?.[seat] || null;
+                if (!hand) return null;
+                return (
+                  <article className="mini-list-row" key={`showdown-${seat}`}>
+                    <strong>{PLAYER_LABEL[seat] || seat}</strong>
+                    <span>{hand.description || hand.label || 'Made hand'}</span>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+
+        <article className={`holdem-player-panel holdem-player-panel--jay ${holdemState?.actionSeat === 'jay' ? 'is-acting' : ''} ${winningSeats.includes('jay') ? 'is-winning' : ''}`}>
+          <div className="holdem-player-head">
+            <div>
+              <span className="holdem-player-badges">
+                {holdemState?.dealerSeat === 'jay' ? <span className="status-pill">Button</span> : null}
+                {holdemState?.smallBlindSeat === 'jay' ? <span className="status-pill">Small Blind {formatScore(HOLDEM_SMALL_BLIND)}</span> : null}
+                {holdemState?.bigBlindSeat === 'jay' ? <span className="status-pill">Big Blind {formatScore(HOLDEM_BIG_BLIND)}</span> : null}
+              </span>
+              <h3>Jay</h3>
+            </div>
+            <strong>{formatScore(displayedStacks.jay)}</strong>
+          </div>
+          <div className="holdem-card-row">
+            {(holdemState?.players?.jay?.holeCards || ['', '']).map((card, index) => {
+              const revealCard = showAllCards || viewerSeat === 'jay';
+              return (
+                <span key={`jay-card-${index + 1}`} className={`holdem-card ${revealCard ? holdemCardTone(card) : 'is-hidden'}`}>
+                  {revealCard ? formatHoldemCardFace(card) : '??'}
+                </span>
+              );
+            })}
+          </div>
+          <small>{`Available balance ${formatScore(displayedStacks.jay)} · Committed ${formatScore(Number(holdemState?.players?.jay?.totalCommitted || 0))}`}</small>
+        </article>
+      </div>
+
+      <section className="holdem-controls-panel">
+        <div className="mini-heading">
+          <div>
+            <span>Action Controls</span>
+            <h3>{holdemState?.actionSeat ? `${PLAYER_LABEL[holdemState.actionSeat] || holdemState.actionSeat} to act` : 'Table Controls'}</h3>
+          </div>
+        </div>
+        <HoldemActionControls
+          holdemState={holdemState}
+          viewerSeat={viewerSeat}
+          isBusy={isBusy}
+          onStartHand={onStartHand}
+          onTakeAction={onTakeAction}
+        />
+      </section>
+    </section>
+  );
+}
+
+function HoldemGameRoom({
+  user,
+  profile,
+  game,
+  playerAccounts,
+  editingModeEnabled,
+  onToggleEditingMode,
+  role,
+  seat,
+  onLeaveGame,
+  onEndGame,
+  onSignOut,
+  isBusy,
+  notice,
+  chatMessages,
+  chatDraft,
+  setChatDraft,
+  onSendChat,
+  chatIsBusy,
+  confirmAction,
+  onConfirmAction,
+  onCancelAction,
+  onStartHoldemHand,
+  onTakeHoldemAction,
+}) {
+  const activePalette = PALETTES[loadThemeIndex() % PALETTES.length];
+  const isMobile = useMediaQuery('(max-width: 900px)');
+  const resolvedViewerSeat = seatForUid(game, user?.uid)
+    || (seat === 'kim' ? 'kim' : seat === 'jay' ? 'jay' : null)
+    || inferSeatFromUser(user, profile)
+    || 'jay';
+  const viewerLabel = gameSeatDisplayName(game, resolvedViewerSeat, null);
+  const holdemState = game?.holdemState || null;
+  const displayedBalances = {
+    jay: holdemState?.sessionStatus === 'hand_live'
+      ? Number(holdemState?.players?.jay?.stack || 0)
+      : Number(holdemState?.lastSettledBalances?.jay || holdemState?.players?.jay?.stack || playerAccounts?.jay?.lifetimePenaltyPoints || 0),
+    kim: holdemState?.sessionStatus === 'hand_live'
+      ? Number(holdemState?.players?.kim?.stack || 0)
+      : Number(holdemState?.lastSettledBalances?.kim || holdemState?.players?.kim?.stack || playerAccounts?.kim?.lifetimePenaltyPoints || 0),
+  };
+  const roomMenuRef = useRef(null);
+  const closeRoomMenu = () => {
+    roomMenuRef.current?.removeAttribute('open');
+  };
+  const handleToggleEditingModeFromRoomMenu = () => {
+    closeRoomMenu();
+    onToggleEditingMode();
+  };
+  const handleSignOutFromRoomMenu = () => {
+    closeRoomMenu();
+    onSignOut();
+  };
+  const gameEnded = game?.status === 'ended' || game?.status === 'completed';
+  const showTestModeBanner = editingModeEnabled || isLocalTestGame(game);
+  const roomPlayerScorePills = (
+    <div className="room-player-score-pills" aria-label="Texas Hold’em balances">
+      {seats.map((playerSeat) => (
+        <span className={`status-pill room-player-score-pill room-player-score-pill--${playerSeat}`} key={`holdem-score-${playerSeat}`}>
+          <SeatFlag seat={playerSeat} className="dashboard-balance-flag" />
+          <span className="room-player-score-pill__name">{PLAYER_LABEL[playerSeat] || playerSeat}</span>
+          <strong>{formatScore(displayedBalances[playerSeat])}</strong>
+        </span>
+      ))}
+    </div>
+  );
+
+  return (
+    <main className={`app production-app ${isMobile ? 'mobile-app' : ''}`} style={{ '--accent': activePalette.accent, '--accent-2': activePalette.accent2, '--accent-3': activePalette.accent3, '--accent-glow': activePalette.glow, '--accent-wash': activePalette.wash }}>
+      <header className="top-bar top-bar--room">
+        <div className="top-bar-left">
+          <div className="brand-lockup brand-lockup--left">
+            <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
+            <h1><span className="brand-mobile-mark">92.1 JKC Radio</span><span className="brand-full-text">KJK KIMJAYKINKS</span></h1>
+          </div>
+        </div>
+        <div className="top-actions top-actions--room">
+          {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
+          {roomPlayerScorePills}
+          {!gameEnded ? (
+            <Button className="ghost-button compact room-end-game-button" onClick={onEndGame}>
+              End Game
+            </Button>
+          ) : null}
+          <Button className="ghost-button compact" onClick={onLeaveGame}>
+            Leave
+          </Button>
+          <details className="top-menu settings-menu room-settings-menu" ref={roomMenuRef}>
+            <summary aria-label="Open room actions">
+              <span className="settings-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                  <path d="M5 7.5h14M5 12h14M5 16.5h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              </span>
+              <span className="settings-label">More</span>
+            </summary>
+            <div className="top-menu-panel settings-menu-panel room-settings-menu-panel">
+              <section className="settings-menu-section">
+                <span className="settings-section-label">Room Actions</span>
+                <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromRoomMenu} disabled={isBusy}>
+                  {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
+                </Button>
+                <Button className="ghost-button compact" onClick={handleSignOutFromRoomMenu}>
+                  Sign out
+                </Button>
+              </section>
+            </div>
+          </details>
+        </div>
+      </header>
+
+      {showTestModeBanner ? (
+        <section className="editing-mode-banner editing-mode-banner--room" role="status" aria-live="polite">
+          <strong>TEST MODE / EDITING MODE</strong>
+          <span>
+            {isLocalTestGame(game)
+              ? 'This Hold’em room is local only. Hand results are not written to live totals, analytics, or session history.'
+              : 'Editing Mode is enabled. New Hold’em sessions can still use the live table, but test-room creates stay local only.'}
+          </span>
+        </section>
+      ) : null}
+
+      {gameEnded ? (
+        <section className="mobile-game-shell">
+          <section className="panel game-complete-panel">
+            <GameSummaryContent
+              gameSummary={game}
+              categoryColorMap={categoryColorMap}
+              showActions
+              onClose={onLeaveGame}
+              onBackToLobby={onLeaveGame}
+              onViewOverallAnalytics={() => {
+                safeLocalStorageSet('kjk-dashboard-tab', 'analytics');
+                onLeaveGame();
+              }}
+            />
+          </section>
+        </section>
+      ) : (
+        <section className="holdem-room-layout">
+          <div className="holdem-room-main">
+            <HoldemTable
+              game={game}
+              viewerSeat={resolvedViewerSeat}
+              editingModeEnabled={editingModeEnabled}
+              isBusy={isBusy}
+              onStartHand={onStartHoldemHand}
+              onTakeAction={onTakeHoldemAction}
+            />
+          </div>
+          <div className="holdem-room-side">
+            <section className="panel room-status-panel holdem-room-status">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Seat</p>
+                  <h2>{viewerLabel}</h2>
+                </div>
+                <span className="status-pill">{holdemState?.actionSeat === resolvedViewerSeat ? 'Your turn' : 'Watching'}</span>
+              </div>
+              <p className="panel-copy">
+                {holdemState?.sessionStatus === 'hand_live'
+                  ? `You are seated as ${PLAYER_LABEL[resolvedViewerSeat] || resolvedViewerSeat}. Use your penalty points as your Hold’em bankroll for this hand.`
+                  : holdemState?.statusMessage || 'The table is waiting for the next hand.'}
+              </p>
+            </section>
+            <ChatPanel
+              messages={chatMessages}
+              draft={chatDraft}
+              onDraftChange={setChatDraft}
+              onSend={onSendChat}
+              isBusy={chatIsBusy}
+              seat={resolvedViewerSeat}
+              displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+              compact={false}
+              emptyCopy="No Hold’em chat yet. Send a message to the other player here."
+              placeholderText="Message at the poker table"
+              sendLabel="Send"
+            />
+          </div>
+        </section>
+      )}
+      {notice ? <div className="toast">{notice}</div> : null}
+      <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
+    </main>
+  );
+}
+
 function GameSummaryContent({
   gameSummary,
   categoryColorMap,
@@ -6300,9 +6957,17 @@ function GameSummaryContent({
 }) {
   const summaryRounds = useMemo(() => normalizeStoredRounds(gameSummary?.rounds || []), [gameSummary?.rounds]);
   const summaryAnalytics = useMemo(() => calculateAnalytics(summaryRounds), [summaryRounds]);
-  const finalScores = gameSummary?.finalScores || gameSummary?.totals || summaryAnalytics.totals || { jay: 0, kim: 0 };
+  const isHoldemGame = isHoldemGameMode(gameSummary?.gameMode || 'standard');
+  const holdemStats = gameSummary?.holdemStats || defaultHoldemStats();
+  const holdemState = gameSummary?.holdemState || null;
+  const finalScores = isHoldemGame
+    ? (gameSummary?.finalScores || gameSummary?.totals || holdemState?.lastSettledBalances || { jay: 0, kim: 0 })
+    : (gameSummary?.finalScores || gameSummary?.totals || summaryAnalytics.totals || { jay: 0, kim: 0 });
   const isQuizGame = (gameSummary?.gameMode || 'standard') === 'quiz';
   const quizTotals = gameSummary?.quizTotals || { jay: 0, kim: 0 };
+  const completedCount = isHoldemGame
+    ? Math.max(0, Number(holdemStats?.handsPlayed || gameSummary?.roundsPlayed || 0))
+    : summaryRounds.length;
   const wagerSettlement = gameSummary?.wagerSettlement || null;
   const sharedWagerAmount = wagerSettlement
     ? Math.max(
@@ -6320,15 +6985,36 @@ function GameSummaryContent({
     gameSummary?.endedAt,
     gameSummary?.updatedAt,
   ].filter(Boolean).join(':');
+  const jayWonSummary = isHoldemGame
+    ? Number(finalScores.jay || 0) > Number(finalScores.kim || 0)
+    : Number(finalScores.jay || 0) < Number(finalScores.kim || 0);
   const winner =
     gameSummary?.winner ||
     (Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
       ? 'tie'
-      : Number(finalScores.jay || 0) < Number(finalScores.kim || 0)
+      : jayWonSummary
         ? 'jay'
         : 'kim');
   const gameLabel = gameSummary?.gameName || gameSummary?.name || gameSummary?.joinCode || 'Game summary';
   const completedLabel = formatShortDateTime(gameSummary?.endedAt || gameSummary?.updatedAt || gameSummary?.createdAt);
+  const lastHoldemSettlement = holdemState?.settlement || holdemState?.showdown || null;
+  const holdemResultLabel = lastHoldemSettlement?.winningSeats?.length > 1
+    ? 'Split pot'
+    : lastHoldemSettlement?.winningSeats?.[0]
+      ? `${PLAYER_LABEL[lastHoldemSettlement.winningSeats[0]] || lastHoldemSettlement.winningSeats[0]} won the last hand`
+      : 'No settled hand yet';
+  const holdemOutcomeRows = [
+    { label: 'Hands won by Jay', value: holdemStats.handsWonJay },
+    { label: 'Hands won by Kim', value: holdemStats.handsWonKim },
+    { label: 'Hands split', value: holdemStats.handsSplit },
+    { label: 'Fold wins', value: holdemStats.foldWins },
+    { label: 'Showdown wins', value: holdemStats.showdownWins },
+    { label: 'All-ins', value: holdemStats.allIns },
+    { label: 'Total wagered', value: formatScore(holdemStats.totalPointsWagered) },
+    { label: 'Biggest pot', value: formatScore(holdemStats.biggestPot) },
+    { label: 'Jay net movement', value: formatScore(holdemStats.netMovementJay) },
+    { label: 'Kim net movement', value: formatScore(holdemStats.netMovementKim) },
+  ];
 
   useEffect(() => {
     const resetScroll = () => {
@@ -6349,10 +7035,13 @@ function GameSummaryContent({
           <h2>{gameLabel}</h2>
           <div className="game-summary-meta">
             <span className="game-summary-meta-pill">Completed {completedLabel}</span>
-            <span className="game-summary-meta-pill">{summaryRounds.length} {summaryRounds.length === 1 ? 'round' : 'rounds'} played</span>
+            <span className="game-summary-meta-pill">{completedCount} {completedCount === 1 ? (isHoldemGame ? 'hand' : 'round') : (isHoldemGame ? 'hands' : 'rounds')} played</span>
             <span className="game-summary-meta-pill">{winner === 'tie' ? 'Tied game' : `${PLAYER_LABEL[winner] || winner} won`}</span>
             {isQuizGame && sharedWagerAmount > 0 ? (
               <span className="game-summary-meta-pill">{`Played for ${formatScore(sharedWagerAmount)}`}</span>
+            ) : null}
+            {isHoldemGame ? (
+              <span className="game-summary-meta-pill">{`Biggest pot ${formatScore(holdemStats.biggestPot)}`}</span>
             ) : null}
           </div>
         </div>
@@ -6379,8 +7068,15 @@ function GameSummaryContent({
 
               <div className="summary-scoreboard">
                 <div className="stat-tile"><small>Winner</small><strong>{winner === 'tie' ? 'Tie' : PLAYER_LABEL[winner] || winner}</strong></div>
-                <div className="stat-tile"><small>Questions</small><strong>{summaryRounds.length}</strong></div>
-                {isQuizGame ? (
+                <div className="stat-tile"><small>{isHoldemGame ? 'Hands' : 'Questions'}</small><strong>{completedCount}</strong></div>
+                {isHoldemGame ? (
+                  <>
+                    <div className="stat-tile"><small>Total Wagered</small><strong>{formatScore(holdemStats.totalPointsWagered || 0)}</strong></div>
+                    <div className="stat-tile"><small>Biggest Pot</small><strong>{formatScore(holdemStats.biggestPot || 0)}</strong></div>
+                    <div className="stat-tile"><small>Jay Final</small><strong>{formatScore(finalScores.jay || 0)}</strong></div>
+                    <div className="stat-tile"><small>Kim Final</small><strong>{formatScore(finalScores.kim || 0)}</strong></div>
+                  </>
+                ) : isQuizGame ? (
                   <>
                     <div className="stat-tile"><small>Played For</small><strong>{formatScore(sharedWagerAmount || 0)}</strong></div>
                     <div className="stat-tile"><small>Jay Quiz</small><strong>{formatScore(quizTotals.jay || 0)}</strong></div>
@@ -6406,69 +7102,139 @@ function GameSummaryContent({
               ) : null}
             </section>
 
-            <section className="game-summary-section">
-              <div className="mini-heading">
-                <div>
-                  <span>Round History</span>
-                  <h3>Every Question</h3>
-                </div>
-              </div>
-              <div className="summary-list">
-                {summaryRounds.length ? (
-                  summaryRounds.map((round, index) => (
-                    <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
-                      <strong>Round {index + 1}</strong>
-                      <span>{round.question}</span>
-                      <small>
-                        Jay {formatScore(round.penaltyAdded?.jay || 0)} · Kim {formatScore(round.penaltyAdded?.kim || 0)} · Winner {round.winner || 'tie'}
-                      </small>
-                      <small>
-                        Jay answered {round.actualAnswers?.jay || '-'} / guessed {round.guessedAnswers?.jay || '-'}
-                      </small>
-                      <small>
-                        Kim answered {round.actualAnswers?.kim || '-'} / guessed {round.guessedAnswers?.kim || '-'}
-                      </small>
-                    </article>
-                  ))
-                ) : (
-                  <p className="empty-copy">No rounds were archived for this game.</p>
-                )}
-              </div>
-            </section>
+            {isHoldemGame ? (
+              <>
+                <section className="game-summary-section">
+                  <div className="mini-heading">
+                    <div>
+                      <span>Texas Hold Em</span>
+                      <h3>Session Results</h3>
+                    </div>
+                  </div>
+                  <div className="summary-list">
+                    {holdemOutcomeRows.map((row) => (
+                      <article className="mini-list-row" key={row.label}>
+                        <strong>{row.label}</strong>
+                        <span>{row.value}</span>
+                      </article>
+                    ))}
+                  </div>
+                </section>
 
-            <section className="game-summary-section">
-              <div className="mini-heading">
-                <div>
-                  <span>Category Breakdown</span>
-                  <h3>How The Game Broke Down</h3>
-                </div>
-              </div>
-              <div className="summary-list">
-                {summaryAnalytics.categoryRows?.length ? (
-                  summaryAnalytics.categoryRows.map((row) => (
-                    <article className="mini-list-row" key={row.category}>
-                      <strong>{row.category}</strong>
-                      <span>Rounds {row.rounds}</span>
-                      <small>Jay {formatScore(row.totals.jay)} · Kim {formatScore(row.totals.kim)} · Winner {row.winner}</small>
+                <section className="game-summary-section">
+                  <div className="mini-heading">
+                    <div>
+                      <span>Last Hand</span>
+                      <h3>{holdemResultLabel}</h3>
+                    </div>
+                  </div>
+                  <div className="summary-list">
+                    <article className="mini-list-row">
+                      <strong>Result</strong>
+                      <span>{lastHoldemSettlement?.reason === 'fold' ? 'Won by fold' : lastHoldemSettlement?.reason === 'showdown' ? 'Showdown' : 'No showdown saved'}</span>
                     </article>
-                  ))
-                ) : (
-                  <p className="empty-copy">No category breakdown is available for this game yet.</p>
-                )}
-              </div>
-            </section>
+                    {(['jay', 'kim']).map((seat) => {
+                      const hand = lastHoldemSettlement?.evaluations?.[seat] || null;
+                      return (
+                        <article className="mini-list-row" key={`holdem-last-${seat}`}>
+                          <strong>{PLAYER_LABEL[seat] || seat}</strong>
+                          <span>{hand?.description || hand?.label || (lastHoldemSettlement ? 'Folded before showdown' : 'No settled hand yet')}</span>
+                        </article>
+                      );
+                    })}
+                    <article className="mini-list-row">
+                      <strong>Payout</strong>
+                      <span>{`Jay ${formatScore(lastHoldemSettlement?.payouts?.jay || 0)} · Kim ${formatScore(lastHoldemSettlement?.payouts?.kim || 0)}`}</span>
+                    </article>
+                  </div>
+                </section>
+              </>
+            ) : (
+              <>
+                <section className="game-summary-section">
+                  <div className="mini-heading">
+                    <div>
+                      <span>Round History</span>
+                      <h3>Every Question</h3>
+                    </div>
+                  </div>
+                  <div className="summary-list">
+                    {summaryRounds.length ? (
+                      summaryRounds.map((round, index) => (
+                        <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
+                          <strong>Round {index + 1}</strong>
+                          <span>{round.question}</span>
+                          <small>
+                            Jay {formatScore(round.penaltyAdded?.jay || 0)} · Kim {formatScore(round.penaltyAdded?.kim || 0)} · Winner {round.winner || 'tie'}
+                          </small>
+                          <small>
+                            Jay answered {round.actualAnswers?.jay || '-'} / guessed {round.guessedAnswers?.jay || '-'}
+                          </small>
+                          <small>
+                            Kim answered {round.actualAnswers?.kim || '-'} / guessed {round.guessedAnswers?.kim || '-'}
+                          </small>
+                        </article>
+                      ))
+                    ) : (
+                      <p className="empty-copy">No rounds were archived for this game.</p>
+                    )}
+                  </div>
+                </section>
+
+                <section className="game-summary-section">
+                  <div className="mini-heading">
+                    <div>
+                      <span>Category Breakdown</span>
+                      <h3>How The Game Broke Down</h3>
+                    </div>
+                  </div>
+                  <div className="summary-list">
+                    {summaryAnalytics.categoryRows?.length ? (
+                      summaryAnalytics.categoryRows.map((row) => (
+                        <article className="mini-list-row" key={row.category}>
+                          <strong>{row.category}</strong>
+                          <span>Rounds {row.rounds}</span>
+                          <small>Jay {formatScore(row.totals.jay)} · Kim {formatScore(row.totals.kim)} · Winner {row.winner}</small>
+                        </article>
+                      ))
+                    ) : (
+                      <p className="empty-copy">No category breakdown is available for this game yet.</p>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
           </div>
 
           <aside className="game-summary-analytics-column">
-            <section className="game-summary-section game-summary-section--analytics">
-              <div className="mini-heading">
-                <div>
-                  <span>Analytics Dashboard</span>
-                  <h3>Post-Game Analytics</h3>
+            {isHoldemGame ? (
+              <section className="game-summary-section game-summary-section--analytics">
+                <div className="mini-heading">
+                  <div>
+                    <span>Poker Ledger</span>
+                    <h3>Penalty Point Balances</h3>
+                  </div>
                 </div>
-              </div>
-              <AnalyticsPanel analytics={summaryAnalytics} categoryColorMap={categoryColorMap} variant="summary" summary={gameSummary} />
-            </section>
+                <div className="summary-list">
+                  <article className="mini-list-row"><strong>Jay final balance</strong><span>{formatScore(finalScores.jay || 0)}</span></article>
+                  <article className="mini-list-row"><strong>Kim final balance</strong><span>{formatScore(finalScores.kim || 0)}</span></article>
+                  <article className="mini-list-row"><strong>Jay net change</strong><span>{formatScore(holdemStats.netMovementJay || 0)}</span></article>
+                  <article className="mini-list-row"><strong>Kim net change</strong><span>{formatScore(holdemStats.netMovementKim || 0)}</span></article>
+                  <article className="mini-list-row"><strong>Split pots</strong><span>{holdemStats.handsSplit || 0}</span></article>
+                  <article className="mini-list-row"><strong>All-ins</strong><span>{holdemStats.allIns || 0}</span></article>
+                </div>
+              </section>
+            ) : (
+              <section className="game-summary-section game-summary-section--analytics">
+                <div className="mini-heading">
+                  <div>
+                    <span>Analytics Dashboard</span>
+                    <h3>Post-Game Analytics</h3>
+                  </div>
+                </div>
+                <AnalyticsPanel analytics={summaryAnalytics} categoryColorMap={categoryColorMap} variant="summary" summary={gameSummary} />
+              </section>
+            )}
           </aside>
         </div>
       </div>
@@ -8524,6 +9290,8 @@ function GameRoomView({
   onEndGame,
   onPauseToggle,
   onNextQuestion,
+  onStartHoldemHand,
+  onTakeHoldemAction,
   onSubmitAnswer,
   onMarkReady,
   onAddQuestion,
@@ -8600,6 +9368,7 @@ function GameRoomView({
         kim: addScores(baseTotals.kim, parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0)),
       }
     : baseTotals;
+  const isHoldemGame = isHoldemGameMode(game?.gameMode || 'standard');
   const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
   const bothPlayersSubmitted = Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
   const revealIsReady = bothPlayersSubmitted || currentRound?.status === 'reveal';
@@ -8962,6 +9731,36 @@ function GameRoomView({
       </section>
     );
   };
+
+  if (isHoldemGame) {
+    return (
+      <HoldemGameRoom
+        user={user}
+        profile={profile}
+        game={game}
+        playerAccounts={playerAccounts}
+        editingModeEnabled={editingModeEnabled}
+        onToggleEditingMode={onToggleEditingMode}
+        role={role}
+        seat={seat}
+        onLeaveGame={onLeaveGame}
+        onEndGame={onEndGame}
+        onSignOut={onSignOut}
+        isBusy={isBusy}
+        notice={notice}
+        chatMessages={chatMessages}
+        chatDraft={chatDraft}
+        setChatDraft={setChatDraft}
+        onSendChat={onSendChat}
+        chatIsBusy={chatIsBusy}
+        confirmAction={confirmAction}
+        onConfirmAction={onConfirmAction}
+        onCancelAction={onCancelAction}
+        onStartHoldemHand={onStartHoldemHand}
+        onTakeHoldemAction={onTakeHoldemAction}
+      />
+    );
+  }
 
   if (isMobile) {
     return (
@@ -10514,9 +11313,36 @@ function ProductionApp() {
   );
   const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
-    () => persistedPreviousGames.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
+    () =>
+      persistedPreviousGames.filter(
+        (entry) =>
+          (entry.status === 'completed' || entry.status === 'ended')
+          && !isHoldemGameMode(entry?.gameMode || 'standard'),
+      ),
     [persistedPreviousGames],
   );
+  const analyticsActiveGames = useMemo(
+    () => activeGames.filter((entry) => !isHoldemGameMode(entry?.gameMode || 'standard')),
+    [activeGames],
+  );
+  const holdemAnalytics = useMemo(() => {
+    const mergedById = new Map();
+    [...localArchivedGames, ...gameLibrary].forEach((entry) => {
+      if (!entry?.id || !isHoldemGameMode(entry?.gameMode || 'standard')) return;
+      mergedById.set(entry.id, entry);
+    });
+    const sessions = [...mergedById.values()];
+    const aggregate = sessions.reduce(
+      (stats, entry) => mergeHoldemStats(stats, entry?.holdemStats || defaultHoldemStats()),
+      defaultHoldemStats(),
+    );
+    return {
+      ...aggregate,
+      sessionsTracked: sessions.length,
+      activeSessions: sessions.filter((entry) => ACTIVE_GAME_STATUSES.includes(entry?.status)).length,
+      completedSessions: sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status)).length,
+    };
+  }, [gameLibrary, localArchivedGames]);
   const pendingActivityCount = useMemo(() => {
     const pendingGameTasks = activeGames.filter((game) => {
       const seat = game?.seats?.jay === user?.uid ? 'jay' : game?.seats?.kim === user?.uid ? 'kim' : null;
@@ -10787,8 +11613,8 @@ function ProductionApp() {
     });
     return {
       totalGamesPlayed: completed.length,
-      activeGames: activeGames.length,
-      previousGames: previousGames.length,
+      activeGames: analyticsActiveGames.length,
+      previousGames: previousCompletedGames.length,
       totalRoundsPlayed: lobbyRounds.length,
       totalQuestionsUsed: allPlayedQuestionIds.size,
       jayGameWins: wins.jay,
@@ -10828,8 +11654,7 @@ function ProductionApp() {
       longestStreakLabel: longestStreak.count ? `${PLAYER_LABEL[longestStreak.winner] || longestStreak.winner} x${longestStreak.count}` : 'No streak',
     };
   }, [
-    gameLibrary,
-    activeGames,
+    analyticsActiveGames.length,
     previousGames,
     lobbyRounds,
     lobbyRoundAnalytics,
@@ -10893,6 +11718,70 @@ function ProductionApp() {
     const gameDoc = { id: snapshot.id, ...snapshot.data() };
     const loadedSummary = gameLibrary.find((entry) => entry.id === targetGameId) || null;
     const isQuizGame = (gameDoc?.gameMode || 'standard') === 'quiz';
+    const isHoldemGame = isHoldemGameMode(gameDoc?.gameMode || 'standard');
+    if (isHoldemGame) {
+      const holdemState = gameDoc?.holdemState || null;
+      const holdemStats = gameDoc?.holdemStats || defaultHoldemStats();
+      const fallbackBalances = buildHoldemBankrollsFromAccounts(playerAccounts);
+      const finalHoldemScores = holdemState?.lastSettledBalances || gameDoc?.finalScores || fallbackBalances;
+      const holdemWinner = Number(finalHoldemScores.jay || 0) === Number(finalHoldemScores.kim || 0)
+        ? 'tie'
+        : Number(finalHoldemScores.jay || 0) > Number(finalHoldemScores.kim || 0)
+          ? 'jay'
+          : 'kim';
+      const finalizedHoldemState = holdemState
+        ? {
+            ...holdemState,
+            sessionStatus: 'ended',
+            actionSeat: '',
+            pendingSeats: [],
+            statusMessage: 'Texas Hold’em session ended.',
+            updatedAt: new Date().toISOString(),
+          }
+        : null;
+      const batch = writeBatch(firestore);
+      batch.set(gameRef, {
+        status: finalStatus,
+        currentRound: null,
+        endedAt: serverTimestamp(),
+        endedBy: endedByUid,
+        totals: finalHoldemScores,
+        finalScores: finalHoldemScores,
+        winner: holdemWinner,
+        roundsPlayed: Number(holdemStats?.handsPlayed || 0),
+        actualQuestionCount: Number(holdemStats?.handsPlayed || 0),
+        questionQueueIds: [],
+        holdemState: finalizedHoldemState,
+        holdemStats,
+        lifetimePointsApplied: true,
+        lifetimePointsAppliedAt: gameDoc.lifetimePointsAppliedAt || serverTimestamp(),
+        lifetimePointsAppliedBy: gameDoc.lifetimePointsAppliedBy || endedByUid || '',
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      await batch.commit();
+      const finalSnapshot = await getDoc(gameRef);
+      const finalizedGameDoc = finalSnapshot.exists() ? { id: finalSnapshot.id, ...finalSnapshot.data() } : gameDoc;
+      try {
+        await archivePairHistory(finalizedGameDoc, targetGameId);
+      } catch (error) {
+        console.warn('Pair history archive failed after Hold’em finalization.', error);
+      }
+      try {
+        await clearCompletedGameProfiles(targetGameId, finalizedGameDoc.playerUids || gameDoc.playerUids || []);
+      } catch (error) {
+        console.warn('Completed game profile cleanup failed after Hold’em finalization.', error);
+      }
+      try {
+        await expirePendingGameInvitesForGame(targetGameId, finalStatus);
+      } catch (error) {
+        console.warn('Pending game invite cleanup failed after Hold’em finalization.', error);
+      }
+      clearPersistedActiveGame(targetGameId);
+      autoResumedGameIdRef.current = autoResumedGameIdRef.current === targetGameId ? '' : autoResumedGameIdRef.current;
+      setProfile((current) => (current?.activeGameId === targetGameId ? { ...current, activeGameId: '' } : current));
+      const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc);
+      return { appliedLifetimePoints: false, finalScores: finalHoldemScores, winner: holdemWinner, gameSummary };
+    }
     let nextFinalScores = gameDoc.totals || gameDoc.finalScores || { jay: 0, kim: 0 };
     let nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
     let nextQuizTotals = gameDoc.quizTotals || { jay: 0, kim: 0 };
@@ -13093,10 +13982,11 @@ function ProductionApp() {
     withBusy(async () => {
       setLocalEndedGameSummary(null);
       if (!firestore || !user) throw new Error('Firebase is not configured.');
-      const gameMode = options.gameMode === 'quiz' ? 'quiz' : 'standard';
+      const gameMode = resolveGameMode(options.gameMode || 'standard');
+      const isHoldemGame = isHoldemGameMode(gameMode);
       const requestedCreateCode = normalizeJoinCode(options.createCode ?? lobbyCode);
       const trimmedGameName = normalizeText(options.gameName ?? lobbyGameName);
-      const effectiveGameName = trimmedGameName || (gameMode === 'quiz' ? 'Quick Fire Quiz' : 'Jay vs Kim');
+      const effectiveGameName = trimmedGameName || (gameMode === 'quiz' ? 'Quick Fire Quiz' : isHoldemGame ? 'Texas Hold’em' : 'Jay vs Kim');
       console.debug('Create New Game clicked', {
         gameName: effectiveGameName || lobbyGameName,
         requestedQuestionCount: options.requestedQuestionCount ?? lobbyQuestionCount,
@@ -13106,8 +13996,8 @@ function ProductionApp() {
         roundTypes: options.roundTypes || [],
         categories: options.categories || [],
       });
-      const requestedQuestionCount = Number.parseInt(String(options.requestedQuestionCount ?? lobbyQuestionCount), 10);
-      if (!Number.isFinite(requestedQuestionCount) || requestedQuestionCount <= 0) {
+      const requestedQuestionCount = isHoldemGame ? 0 : Number.parseInt(String(options.requestedQuestionCount ?? lobbyQuestionCount), 10);
+      if (!isHoldemGame && (!Number.isFinite(requestedQuestionCount) || requestedQuestionCount <= 0)) {
         throw new Error('Enter a valid number of questions.');
       }
       const previousGame = game;
@@ -13115,9 +14005,9 @@ function ProductionApp() {
       const previousRounds = rounds;
       const previousChatMessages = chatMessages;
       const selectionMode = options.mode === 'custom' ? 'custom' : 'random';
-      const targetBankType = gameMode === 'quiz' ? 'quiz' : 'game';
-      const selectedRoundTypes = selectionMode === 'custom' ? options.roundTypes || [] : [];
-      const selectedCategories = selectionMode === 'custom' ? options.categories || [] : [];
+      const targetBankType = gameMode === 'quiz' ? 'quiz' : isHoldemGame ? 'holdem' : 'game';
+      const selectedRoundTypes = !isHoldemGame && selectionMode === 'custom' ? options.roundTypes || [] : [];
+      const selectedCategories = !isHoldemGame && selectionMode === 'custom' ? options.categories || [] : [];
       const creatorSeat = preferredSeatForUser(user, profile);
       const guestSeat = oppositeSeatOf(creatorSeat);
       const inviteTargetSeat = guestSeat;
@@ -13128,30 +14018,39 @@ function ProductionApp() {
       );
 
       if (shouldCreateLocalTestGame) {
-        await seedBankIfNeeded();
-        const queueResult = await buildQuestionQueue(requestedQuestionCount, {
-          roundTypes: selectedRoundTypes,
-          categories: selectedCategories,
-          bankType: targetBankType,
-        });
-        const queue = queueResult.queue;
-        const warning = queueResult.warning;
-        const actualCount = queueResult.actualCount;
-        if (!queue.length) {
-          throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
-        }
-        if (actualCount < requestedQuestionCount) {
-          const shouldContinue = window.confirm(`${warning} Create test game with ${actualCount}?`);
-          if (!shouldContinue) {
-            setNotice('Editing Mode game creation cancelled before the local queue was finalized.');
-            return;
-          }
-        }
         const localGameId = `${TEST_GAME_PREFIX}${makeId('local')}`;
         const localJoinCode = requestedCreateCode || `TEST${makeJoinCode().slice(0, 2)}`;
         const hostName = profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player';
         const localOtherPlayerName = inviteTargetSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)';
         const createdAt = new Date().toISOString();
+        let queue = [];
+        let warning = '';
+        let actualCount = 0;
+        if (!isHoldemGame) {
+          await seedBankIfNeeded();
+          const queueResult = await buildQuestionQueue(requestedQuestionCount, {
+            roundTypes: selectedRoundTypes,
+            categories: selectedCategories,
+            bankType: targetBankType,
+          });
+          queue = queueResult.queue;
+          warning = queueResult.warning;
+          actualCount = queueResult.actualCount;
+          if (!queue.length) {
+            throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
+          }
+          if (actualCount < requestedQuestionCount) {
+            const shouldContinue = window.confirm(`${warning} Create test game with ${actualCount}?`);
+            if (!shouldContinue) {
+              setNotice('Editing Mode game creation cancelled before the local queue was finalized.');
+              return;
+            }
+          }
+        }
+        const initialHoldemState = isHoldemGame
+          ? initializeHoldemSessionState(creatorSeat, true)
+          : null;
+        const initialHoldemStats = isHoldemGame ? defaultHoldemStats() : null;
 	        const localGameState = {
           id: localGameId,
           joinCode: localJoinCode,
@@ -13181,11 +14080,13 @@ function ProductionApp() {
               photoURL: '',
             },
           },
-	          totals: { jay: 0, kim: 0 },
+	          totals: isHoldemGame ? (initialHoldemState?.lastSettledBalances || { jay: 0, kim: 0 }) : { jay: 0, kim: 0 },
 	          quizTotals: { jay: 0, kim: 0 },
 	          quizWagers: { jay: 0, kim: 0 },
           quizWagerAgreement: gameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
           quizReadyState: gameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
+          holdemState: initialHoldemState,
+          holdemStats: initialHoldemStats,
 	          currentRound: null,
           pairId: buildPairKey(),
           gameMode,
@@ -13211,6 +14112,7 @@ function ProductionApp() {
           updatedAt: createdAt,
           isEditingMode: true,
           isLocalOnly: true,
+          ...(isHoldemGame ? buildHoldemSummaryFields(initialHoldemState, initialHoldemStats) : {}),
         };
         autoResumedGameIdRef.current = '';
         resetRoomLoadState();
@@ -13221,19 +14123,27 @@ function ProductionApp() {
         localStorage.removeItem(activeGameKey);
         setLobbyGameName('');
         setLobbyQuestionCount('10');
-        setNotice(`Editing Mode room opened locally with ${actualCount} questions.${warning ? ` ${warning}` : ''}${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`);
+        setNotice(
+          isHoldemGame
+            ? `Editing Mode Texas Hold’em room opened locally.${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`
+            : `Editing Mode room opened locally with ${actualCount} questions.${warning ? ` ${warning}` : ''}${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`,
+        );
         return;
       }
 
       const gameRef = doc(firestore, 'games', makeId('game'));
       const joinCode = await makeUniqueJoinCode(requestedCreateCode);
+      const initialHoldemState = isHoldemGame
+        ? initializeHoldemSessionState(creatorSeat, false)
+        : null;
+      const initialHoldemStats = isHoldemGame ? defaultHoldemStats() : null;
       const openingGameState = {
         id: gameRef.id,
         joinCode,
         code: joinCode,
         roomCode: joinCode,
         gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
-        status: 'opening',
+        status: isHoldemGame ? 'active' : 'opening',
         hostUid: user.uid,
         hostDisplayName: profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player',
         hostPhotoURL: user.photoURL || '',
@@ -13250,11 +14160,13 @@ function ProductionApp() {
             photoURL: user.photoURL || '',
           },
         },
-        totals: { jay: 0, kim: 0 },
+        totals: isHoldemGame ? (initialHoldemState?.lastSettledBalances || { jay: 0, kim: 0 }) : { jay: 0, kim: 0 },
         quizTotals: { jay: 0, kim: 0 },
         quizWagers: { jay: 0, kim: 0 },
         quizWagerAgreement: gameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
         quizReadyState: gameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
+        holdemState: initialHoldemState,
+        holdemStats: initialHoldemStats,
         currentRound: null,
         pairId: buildPairKey(),
         gameMode,
@@ -13278,6 +14190,7 @@ function ProductionApp() {
         endedBy: '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        ...(isHoldemGame ? buildHoldemSummaryFields(initialHoldemState, initialHoldemStats) : {}),
       };
       const openingGameDoc = {
         ...openingGameState,
@@ -13301,46 +14214,56 @@ function ProductionApp() {
         let warning = '';
         let actualCount = 0;
         try {
-          await seedBankIfNeeded();
-          const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
-          if (!bankSnapshot.size) throw new Error('Question bank is not loaded.');
-          const queueResult = await buildQuestionQueue(requestedQuestionCount, {
-            roundTypes: selectedRoundTypes,
-            categories: selectedCategories,
-            bankType: targetBankType,
-          });
-          queue = queueResult.queue;
-          warning = queueResult.warning;
-          actualCount = queueResult.actualCount;
-          if (!queue.length) {
-            throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
-          }
-          if (actualCount < requestedQuestionCount) {
-            const shouldContinue = window.confirm(`${warning} Create game with ${actualCount}?`);
-            if (!shouldContinue) {
-              setNotice('Game creation cancelled before question queue was finalized.');
-              return;
-            }
-          }
-          const createdGameState = {
-            ...openingGameState,
-            joinCode,
-            status: 'active',
-            questionSelectionMode: selectionMode,
-            questionSelectionFilters: {
+          if (!isHoldemGame) {
+            await seedBankIfNeeded();
+            const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
+            if (!bankSnapshot.size) throw new Error('Question bank is not loaded.');
+            const queueResult = await buildQuestionQueue(requestedQuestionCount, {
               roundTypes: selectedRoundTypes,
               categories: selectedCategories,
-            },
-            questionQueueIds: queue.map((question) => question.id),
-            actualQuestionCount: actualCount,
-          };
-          console.debug('Create New Game queue selected', {
-            joinCode,
-            requestedQuestionCount,
-            actualCount,
-            queueCount: queue.length,
-            queueIds: queue.map((question) => question.id),
-          });
+              bankType: targetBankType,
+            });
+            queue = queueResult.queue;
+            warning = queueResult.warning;
+            actualCount = queueResult.actualCount;
+            if (!queue.length) {
+              throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
+            }
+            if (actualCount < requestedQuestionCount) {
+              const shouldContinue = window.confirm(`${warning} Create game with ${actualCount}?`);
+              if (!shouldContinue) {
+                setNotice('Game creation cancelled before question queue was finalized.');
+                return;
+              }
+            }
+          }
+          const createdGameState = isHoldemGame
+            ? {
+                ...openingGameState,
+                joinCode,
+                status: 'active',
+              }
+            : {
+                ...openingGameState,
+                joinCode,
+                status: 'active',
+                questionSelectionMode: selectionMode,
+                questionSelectionFilters: {
+                  roundTypes: selectedRoundTypes,
+                  categories: selectedCategories,
+                },
+                questionQueueIds: queue.map((question) => question.id),
+                actualQuestionCount: actualCount,
+              };
+          if (!isHoldemGame) {
+            console.debug('Create New Game queue selected', {
+              joinCode,
+              requestedQuestionCount,
+              actualCount,
+              queueCount: queue.length,
+              queueIds: queue.map((question) => question.id),
+            });
+          }
           const createdGameDoc = {
             ...createdGameState,
             createdAt: serverTimestamp(),
@@ -13350,11 +14273,19 @@ function ProductionApp() {
           setGameId(gameRef.id);
           safeLocalStorageSet(activeGameKey, gameRef.id);
           await setDoc(gameRef, createdGameDoc, { merge: true });
-          setNotice(`Game ${joinCode} created with ${actualCount} questions.${warning ? ` ${warning}` : ''}`);
+          setNotice(
+            isHoldemGame
+              ? `Texas Hold’em game ${joinCode} created.`
+              : `Game ${joinCode} created with ${actualCount} questions.${warning ? ` ${warning}` : ''}`,
+          );
           console.debug('Create New Game queue committed', { gameId: gameRef.id, joinCode, actualCount });
         } catch (queueError) {
           console.warn('Create New Game queue setup failed, keeping the room open.', queueError);
-          setNotice(`Game ${joinCode} created, but the question queue could not be finalized yet. ${queueError?.message || ''}`.trim());
+          setNotice(
+            isHoldemGame
+              ? `Texas Hold’em game ${joinCode} created, but the table could not finish loading. ${queueError?.message || ''}`.trim()
+              : `Game ${joinCode} created, but the question queue could not be finalized yet. ${queueError?.message || ''}`.trim(),
+          );
         }
 
         try {
@@ -13486,6 +14417,26 @@ function ProductionApp() {
           photoURL: user.photoURL || '',
         },
       };
+      const shouldReadyHoldemSession =
+        isHoldemGameMode(data?.gameMode || 'standard')
+        && !alreadyJoined
+        && Boolean(nextSeats.jay && nextSeats.kim)
+        && !Boolean(seats.jay && seats.kim);
+      let nextHoldemState = null;
+      if (shouldReadyHoldemSession) {
+        const [jayBalanceSnap, kimBalanceSnap] = await Promise.all([
+          getDoc(doc(firestore, 'users', fixedPlayerUids.jay)).catch(() => null),
+          getDoc(doc(firestore, 'users', fixedPlayerUids.kim)).catch(() => null),
+        ]);
+        nextHoldemState = createHoldemSessionState({
+          balances: {
+            jay: Number(jayBalanceSnap?.exists() ? jayBalanceSnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.jay?.lifetimePenaltyPoints || 0),
+            kim: Number(kimBalanceSnap?.exists() ? kimBalanceSnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.kim?.lifetimePenaltyPoints || 0),
+          },
+          nextDealerSeat: data?.holdemState?.nextDealerSeat || targetSeat || preferredSeat || 'jay',
+          bothPlayersJoined: true,
+        });
+      }
 
       const batch = writeBatch(firestore);
       batch.set(roomRef, {
@@ -13497,6 +14448,7 @@ function ProductionApp() {
         playerUids: nextPlayerUids,
         playerProfiles: nextPlayerProfiles,
         status: 'active',
+        ...(nextHoldemState ? { holdemState: nextHoldemState } : {}),
         updatedAt: serverTimestamp(),
       }, { merge: true });
       batch.set(
@@ -13735,6 +14687,184 @@ function ProductionApp() {
       updatedAt: serverTimestamp(),
     }, { merge: true });
   };
+
+  const buildHoldemSummaryFields = useCallback((holdemState = null, holdemStats = null) => {
+    const normalizedStats = holdemStats || defaultHoldemStats();
+    const finalScores = holdemState?.lastSettledBalances || buildHoldemBankrollsFromAccounts(playerAccounts);
+    const winner = Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
+      ? 'tie'
+      : Number(finalScores.jay || 0) > Number(finalScores.kim || 0)
+        ? 'jay'
+        : 'kim';
+    return {
+      totals: finalScores,
+      finalScores,
+      winner,
+      roundsPlayed: Number(normalizedStats?.handsPlayed || 0),
+      actualQuestionCount: Number(normalizedStats?.handsPlayed || 0),
+    };
+  }, [playerAccounts]);
+
+  const initializeHoldemSessionState = useCallback((seatToDeal = 'jay', bothPlayersJoined = false) =>
+    createHoldemSessionState({
+      balances: buildHoldemBankrollsFromAccounts(playerAccounts),
+      nextDealerSeat: seatToDeal,
+      bothPlayersJoined,
+    }), [playerAccounts]);
+
+  const startHoldemHand = async () =>
+    withBusy(async () => {
+      if (!game?.id) throw new Error('Open a Hold’em room first.');
+      if (!isHoldemGameMode(game?.gameMode || 'standard')) throw new Error('Texas Hold’em actions only work in Texas Hold’em rooms.');
+      const bothPlayersJoined = Boolean(game?.seats?.jay && game?.seats?.kim);
+      if (!bothPlayersJoined) throw new Error('Both players need to join before the first Hold’em hand can start.');
+
+      if (isCurrentLocalTestGame) {
+        setGame((current) => {
+          if (!current || !isHoldemGameMode(current?.gameMode || 'standard')) return current;
+          const nextHoldemState = buildNextHoldemHandState(
+            current.holdemState || initializeHoldemSessionState(currentSeat || 'jay', true),
+            current.holdemState?.lastSettledBalances || buildHoldemBankrollsFromAccounts(playerAccounts),
+            true,
+          );
+          return {
+            ...current,
+            holdemState: {
+              ...nextHoldemState,
+              updatedAt: new Date().toISOString(),
+            },
+            ...buildHoldemSummaryFields(nextHoldemState, current.holdemStats || defaultHoldemStats()),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        return true;
+      }
+
+      if (!firestore) throw new Error('Firebase is not configured.');
+      const gameRef = doc(firestore, 'games', game.id);
+      const jayRef = doc(firestore, 'users', fixedPlayerUids.jay);
+      const kimRef = doc(firestore, 'users', fixedPlayerUids.kim);
+      await runTransaction(firestore, async (transaction) => {
+        const [gameSnap, jaySnap, kimSnap] = await Promise.all([
+          transaction.get(gameRef),
+          transaction.get(jayRef),
+          transaction.get(kimRef),
+        ]);
+        if (!gameSnap.exists()) throw new Error('The Hold’em game no longer exists.');
+        const gameData = { id: gameSnap.id, ...gameSnap.data() };
+        if (!isHoldemGameMode(gameData?.gameMode || 'standard')) throw new Error('This room is not a Texas Hold’em game.');
+        const joined = Boolean(gameData?.seats?.jay && gameData?.seats?.kim);
+        if (!joined) throw new Error('Both players need to join before the first Hold’em hand can start.');
+        const baseBalances = gameData?.holdemState?.lastSettledBalances
+          || {
+            jay: Number(jaySnap.exists() ? jaySnap.data()?.lifetimePenaltyPoints || 0 : 0),
+            kim: Number(kimSnap.exists() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : 0),
+          };
+        const holdemState = buildNextHoldemHandState(gameData?.holdemState || initializeHoldemSessionState(currentSeat || 'jay', true), baseBalances, true);
+        transaction.set(gameRef, {
+          holdemState,
+          ...buildHoldemSummaryFields(holdemState, gameData?.holdemStats || defaultHoldemStats()),
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      });
+      setNotice('Texas Hold’em hand dealt.');
+      return true;
+    }, 'Could not start Texas Hold’em.');
+
+  const takeHoldemAction = async ({ action = '', amount = 0 } = {}) =>
+    withBusy(async () => {
+      if (!game?.id) throw new Error('Open a Hold’em room first.');
+      if (!currentSeat) throw new Error('Could not determine your Hold’em seat.');
+      if (!isHoldemGameMode(game?.gameMode || 'standard')) throw new Error('Texas Hold’em actions only work in Texas Hold’em rooms.');
+
+      if (isCurrentLocalTestGame) {
+        setGame((current) => {
+          if (!current || !isHoldemGameMode(current?.gameMode || 'standard')) return current;
+          const nextHoldemState = applyHoldemAction(current.holdemState || initializeHoldemSessionState(currentSeat, true), {
+            seat: currentSeat,
+            action,
+            amount,
+          });
+          if (nextHoldemState?.settlement) {
+            nextHoldemState.lastSettledBalances = {
+              jay: Math.max(0, Number(nextHoldemState.players?.jay?.stack || 0)),
+              kim: Math.max(0, Number(nextHoldemState.players?.kim?.stack || 0)),
+            };
+          }
+          const currentStats = current.holdemStats || defaultHoldemStats();
+          const nextStats = nextHoldemState?.settlement ? mergeHoldemStats(currentStats, getHoldemStatDelta(nextHoldemState)) : currentStats;
+          return {
+            ...current,
+            holdemState: {
+              ...nextHoldemState,
+              updatedAt: new Date().toISOString(),
+            },
+            holdemStats: nextStats,
+            ...buildHoldemSummaryFields(nextHoldemState, nextStats),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        return true;
+      }
+
+      if (!firestore) throw new Error('Firebase is not configured.');
+      const gameRef = doc(firestore, 'games', game.id);
+      const jayRef = doc(firestore, 'users', fixedPlayerUids.jay);
+      const kimRef = doc(firestore, 'users', fixedPlayerUids.kim);
+
+      await runTransaction(firestore, async (transaction) => {
+        const [gameSnap, jaySnap, kimSnap] = await Promise.all([
+          transaction.get(gameRef),
+          transaction.get(jayRef),
+          transaction.get(kimRef),
+        ]);
+        if (!gameSnap.exists()) throw new Error('The Hold’em game no longer exists.');
+        const gameData = { id: gameSnap.id, ...gameSnap.data() };
+        if (!isHoldemGameMode(gameData?.gameMode || 'standard')) throw new Error('This room is not a Texas Hold’em game.');
+        const nextHoldemState = applyHoldemAction(gameData?.holdemState || initializeHoldemSessionState(currentSeat, true), {
+          seat: currentSeat,
+          action,
+          amount,
+        });
+        const currentStats = gameData?.holdemStats || defaultHoldemStats();
+        let nextStats = currentStats;
+        if (nextHoldemState?.settlement) {
+          nextStats = mergeHoldemStats(currentStats, getHoldemStatDelta(nextHoldemState));
+          const deltaJay = Number(nextHoldemState?.settlement?.netChanges?.jay || 0);
+          const deltaKim = Number(nextHoldemState?.settlement?.netChanges?.kim || 0);
+          // Penalty points double as the Hold'em bankroll for this mode. We apply
+          // only the per-hand net delta here so standard rounds/history stay intact.
+          const jayCurrent = Number(jaySnap.exists() ? jaySnap.data()?.lifetimePenaltyPoints || 0 : 0);
+          const kimCurrent = Number(kimSnap.exists() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : 0);
+          transaction.set(jayRef, {
+            uid: fixedPlayerUids.jay,
+            displayName: 'Jay',
+            lifetimePenaltyPoints: Math.max(0, jayCurrent + deltaJay),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+          transaction.set(kimRef, {
+            uid: fixedPlayerUids.kim,
+            displayName: 'Kim',
+            lifetimePenaltyPoints: Math.max(0, kimCurrent + deltaKim),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+          nextHoldemState.lastSettledBalances = {
+            jay: Math.max(0, jayCurrent + deltaJay),
+            kim: Math.max(0, kimCurrent + deltaKim),
+          };
+        }
+        transaction.set(gameRef, {
+          holdemState: {
+            ...nextHoldemState,
+            updatedAt: serverTimestamp(),
+          },
+          holdemStats: nextStats,
+          ...buildHoldemSummaryFields(nextHoldemState, nextStats),
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      });
+      return true;
+    }, 'Could not update Texas Hold’em.');
 
   const updateCurrentRound = async (nextRoundPatch) => {
     if (isCurrentLocalTestGame) {
@@ -15600,6 +16730,7 @@ function ProductionApp() {
         previousGames={previousGames}
         lobbyAnalytics={lobbyAnalytics}
         lobbyRoundAnalytics={lobbyRoundAnalytics}
+        holdemAnalytics={holdemAnalytics}
         categoryColorMap={categoryColorMap}
         bankCount={bankCount}
         questionCount={gameBankQuestions.length || STARTER_QUESTIONS.length}
@@ -15675,6 +16806,8 @@ function ProductionApp() {
       onEndGame={() => requestEndGame(game?.id)}
       onPauseToggle={pauseToggle}
 	      onNextQuestion={nextQuestion}
+      onStartHoldemHand={startHoldemHand}
+      onTakeHoldemAction={takeHoldemAction}
 	      onSubmitAnswer={submitAnswer}
 	      onMarkReady={markReady}
 	      onAddQuestion={addQuestion}
