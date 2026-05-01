@@ -578,6 +578,14 @@ export const normalizeQuestionBankType = (value = 'game') => {
     .toLowerCase()
     .replace(/[^a-z]/g, '');
   if (normalized === 'quiz') return 'quiz';
+  if (
+    normalized === 'thisorthatgame'
+    || normalized === 'thisorthat'
+    || normalized === 'eitheror'
+    || normalized === 'preferencegame'
+  ) {
+    return 'thisOrThatGame';
+  }
   if (normalized === 'truefalsegame' || normalized === 'truefalse' || normalized === 'trueorfalse') {
     return 'trueFalseGame';
   }
@@ -600,7 +608,7 @@ export const createQuestionTemplate = (input = {}) => {
     input.id ||
     `question-${normalizeQuestionKey(question)
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')}-${normalizeText(input.category).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'uncategorised'}-${roundType}`;
+      .replace(/^-+|-+$/g, '')}-${normalizeText(input.category).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'uncategorised'}-${roundType}${bankType !== 'game' ? `-${bankType}` : ''}`;
 
   return {
     id: stableId || makeId('question'),
@@ -608,6 +616,13 @@ export const createQuestionTemplate = (input = {}) => {
     roundType,
     category: normalizeText(input.category),
     tags: parseTags(input.tags),
+    intensity: Math.max(0, parseNumber(input.intensity, 0)),
+    tone: normalizeText(input.tone),
+    relationshipArea: normalizeText(input.relationshipArea),
+    avoidIf: parseTags(input.avoidIf),
+    gameSuitability: parseTags(input.gameSuitability),
+    aiUseCase: parseTags(input.aiUseCase),
+    repeatGroup: normalizeText(input.repeatGroup),
     unitLabel: normalizeText(input.unitLabel ?? input.unit ?? input.units),
     scoringDivisor: Math.max(0.000001, parseNumber(input.scoringDivisor ?? input.divisor, 1) || 1),
     roundingMode: normalizeRoundingMode(input.roundingMode ?? input.rounding),

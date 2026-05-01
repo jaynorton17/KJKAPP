@@ -103,6 +103,7 @@ import {
   parseGoogleSheetImport,
   parseGoogleSheetQuizImport,
   parseGoogleSheetReference,
+  parseGoogleSheetThisOrThatImport,
   parseGoogleSheetTrueFalseImport,
 } from './utils/importers.js';
 
@@ -116,6 +117,7 @@ const TRUE_FALSE_TIMER_SECONDS = 8;
 const THIS_OR_THAT_WRONG_PENALTY = 10;
 const THIS_OR_THAT_UNANSWERED_PENALTY = 10;
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
+const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const HOLDEM_READY_SESSION_STATUSES = new Set(['ready_to_deal', 'hand_complete']);
 const HOLDEM_SESSION_PROGRESS_RANK = {
@@ -275,6 +277,7 @@ const isAutoScoredChoiceGameMode = (value = 'standard') =>
 const getQuestionBankTypeForGameMode = (value = 'standard') => {
   const gameMode = resolveGameMode(value);
   if (gameMode === 'quiz') return 'quiz';
+  if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThatGame';
   if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalseGame';
   return 'game';
 };
@@ -1094,6 +1097,20 @@ const createAiSeatStats = () => ({
   dislikedCategoryCounts: new Map(),
 });
 
+const buildAiMetadataSearchText = (source = {}) =>
+  [
+    ...(Array.isArray(source?.tags) ? source.tags : []),
+    source?.tone || '',
+    source?.relationshipArea || '',
+    ...(Array.isArray(source?.avoidIf) ? source.avoidIf : []),
+    ...(Array.isArray(source?.gameSuitability) ? source.gameSuitability : []),
+    ...(Array.isArray(source?.aiUseCase) ? source.aiUseCase : []),
+    source?.repeatGroup || '',
+    Number(source?.intensity || 0) ? `intensity ${Number(source.intensity)}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
 const finalizeAiCategoryCounts = (bucket = new Map()) =>
   [...bucket.entries()]
     .map(([label, count]) => ({ label, count: Number(count || 0) }))
@@ -1175,13 +1192,19 @@ const buildAiEvidenceSnapshot = ({
     if (gameMode === HOLDEM_GAME_MODE) return;
     if (gameMode === 'quiz') pairStats.completedQuizGames += 1;
     else pairStats.completedStandardGames += 1;
-    if (gameMode !== 'standard') return;
+    if (gameMode === 'quiz') return;
     (game?.rounds || []).forEach((round, index) => {
       const question = normalizeText(round?.question || '');
       const category = normalizeText(round?.category || '');
       const roundType = normalizeText(round?.roundType || '');
       const roundLabel = round?.number ? `Round ${round.number}` : `Round ${index + 1}`;
       const createdAtMs = getRecordTime(round?.updatedAt || round?.submittedAt || game?.endedAt || game?.createdAt || 0);
+      const metadataSearchText = buildAiMetadataSearchText(round);
+      const gameSourceLabel = gameMode === THIS_OR_THAT_GAME_MODE
+        ? 'This or That'
+        : gameMode === TRUE_FALSE_GAME_MODE
+          ? 'True or False'
+          : (game?.name || game?.joinCode || 'Game');
       seats.forEach((seat) => {
         const ownAnswer = normalizeText(round?.answers?.[seat]?.ownAnswer || '');
         if (!ownAnswer) return;
@@ -1198,9 +1221,9 @@ const buildAiEvidenceSnapshot = ({
           answer: ownAnswer,
           category,
           roundType,
-          sourceLabel: `${game?.name || game?.joinCode || 'Game'} · ${roundLabel}`,
+          sourceLabel: `${gameSourceLabel} · ${roundLabel}`,
           createdAtMs,
-          searchText: `${PLAYER_LABEL[seat]} ${question} ${ownAnswer} ${category} ${roundType}`,
+          searchText: `${PLAYER_LABEL[seat]} ${question} ${ownAnswer} ${category} ${roundType} ${metadataSearchText}`,
         });
       });
     });
@@ -1893,6 +1916,13 @@ const buildGameQuestion = (question) => ({
   defaultAnswerType: question.defaultAnswerType || getDefaultAnswerType(question.roundType),
   multipleChoiceOptions: question.multipleChoiceOptions || [],
   tags: question.tags || [],
+  intensity: Number(question.intensity || 0),
+  tone: question.tone || '',
+  relationshipArea: question.relationshipArea || '',
+  avoidIf: question.avoidIf || [],
+  gameSuitability: question.gameSuitability || [],
+  aiUseCase: question.aiUseCase || [],
+  repeatGroup: question.repeatGroup || '',
   notes: question.notes || '',
   unitLabel: question.unitLabel || '',
   source: question.source || 'starter',
@@ -2958,9 +2988,11 @@ function LobbyScreen({
   onDismissGameInvite,
   onSyncQuestionBank,
   onSyncQuizBank,
+  onSyncThisOrThatBank,
   onSyncTrueFalseBank,
   onImportQuestions,
   onImportQuizQuestions,
+  onImportThisOrThatQuestions,
   onImportTrueFalseQuestions,
   onResumeGame,
   onViewSummary,
@@ -2989,6 +3021,9 @@ function LobbyScreen({
   quizQuestionCount,
   usedQuizQuestionCount,
   remainingQuizQuestionCount,
+  thisOrThatQuestionCount,
+  usedThisOrThatQuestionCount,
+  remainingThisOrThatQuestionCount,
   trueFalseQuestionCount,
   usedTrueFalseQuestionCount,
   remainingTrueFalseQuestionCount,
@@ -3083,15 +3118,7 @@ function LobbyScreen({
     jay: String(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0)),
     kim: String(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0)),
   }), [playerAccounts?.jay?.lifetimePenaltyPoints, playerAccounts?.kim?.lifetimePenaltyPoints]);
-  const thisOrThatReadyCount = useMemo(
-    () =>
-      (bankQuestions || []).filter(
-        (question) =>
-          normalizeQuestionBankType(question?.bankType) === 'game'
-          && isThisOrThatQuestionCompatible(question),
-      ).length,
-    [bankQuestions],
-  );
+  const thisOrThatReadyCount = Number(thisOrThatQuestionCount || 0);
   const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
   const lobbyChatUnreadCount = useChatUnreadCount(
     lobbyChatMessages,
@@ -3683,31 +3710,43 @@ function LobbyScreen({
 
   const questionBankLoadedCount = questionBankSegment === 'quiz'
     ? quizQuestionCount
+    : questionBankSegment === 'thisOrThat'
+      ? thisOrThatQuestionCount
     : questionBankSegment === 'trueFalse'
       ? trueFalseQuestionCount
       : questionCount;
   const questionBankUsedTotal = questionBankSegment === 'quiz'
     ? usedQuizQuestionCount
+    : questionBankSegment === 'thisOrThat'
+      ? usedThisOrThatQuestionCount
     : questionBankSegment === 'trueFalse'
       ? usedTrueFalseQuestionCount
       : usedQuestionCount;
   const questionBankRemainingTotal = questionBankSegment === 'quiz'
     ? remainingQuizQuestionCount
+    : questionBankSegment === 'thisOrThat'
+      ? remainingThisOrThatQuestionCount
     : questionBankSegment === 'trueFalse'
       ? remainingTrueFalseQuestionCount
       : remainingQuestionCount;
   const questionBankSyncAction = questionBankSegment === 'quiz'
     ? onSyncQuizBank
+    : questionBankSegment === 'thisOrThat'
+      ? onSyncThisOrThatBank
     : questionBankSegment === 'trueFalse'
       ? onSyncTrueFalseBank
       : onSyncQuestionBank;
   const questionBankImportAction = questionBankSegment === 'quiz'
     ? onImportQuizQuestions
+    : questionBankSegment === 'thisOrThat'
+      ? onImportThisOrThatQuestions
     : questionBankSegment === 'trueFalse'
       ? onImportTrueFalseQuestions
       : onImportQuestions;
   const questionBankActionLabel = questionBankSegment === 'quiz'
     ? 'Quiz Question Bank'
+    : questionBankSegment === 'thisOrThat'
+      ? 'This or That Bank'
     : questionBankSegment === 'trueFalse'
       ? 'True or False Bank'
       : 'Question Bank';
@@ -4577,6 +4616,9 @@ function LobbyScreen({
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('quiz')}>
                   Quiz Questions
                 </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'thisOrThat' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('thisOrThat')}>
+                  This or That
+                </button>
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('trueFalse')}>
                   True or False
                 </button>
@@ -4610,7 +4652,13 @@ function LobbyScreen({
                   {`Sync ${questionBankActionLabel}`}
                 </Button>
                 <Button className="primary-button compact" onClick={questionBankImportAction} disabled={isBusy}>
-                  {`Import ${questionBankSegment === 'trueFalse' ? 'True or False Questions' : 'New Questions'}`}
+                  {`Import ${
+                    questionBankSegment === 'trueFalse'
+                      ? 'True or False Questions'
+                      : questionBankSegment === 'thisOrThat'
+                        ? 'This or That Questions'
+                        : 'New Questions'
+                  }`}
                 </Button>
                 <Button className="ghost-button compact" onClick={onResetQuestionBank} disabled={isBusy}>
                   Re-enter All Questions
@@ -12135,6 +12183,7 @@ function ProductionApp() {
   const isMobileDashboard = useMediaQuery('(max-width: 900px)');
   const leavePendingGameRef = useRef('');
   const autoSheetImportAttemptedRef = useRef(false);
+  const autoThisOrThatSheetSyncInFlightRef = useRef(false);
   const autoTrueFalseSheetSyncInFlightRef = useRef(false);
   const roomLoadTimeoutRef = useRef(null);
   const gameListenerRetryRef = useRef({ timer: null, gameId: '', attempts: 0 });
@@ -13077,6 +13126,10 @@ function ProductionApp() {
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'quiz'),
     [bankQuestions],
   );
+  const thisOrThatBankQuestions = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'thisOrThatGame'),
+    [bankQuestions],
+  );
   const trueFalseBankQuestions = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
     [bankQuestions],
@@ -13118,6 +13171,7 @@ function ProductionApp() {
   );
   const bankCount = gameBankQuestions.length;
   const quizBankCount = quizBankQuestions.length;
+  const thisOrThatBankCount = thisOrThatBankQuestions.length;
   const trueFalseBankCount = trueFalseBankQuestions.length;
   const trackedGameEntries = useMemo(() => {
     if (!game?.id || isLocalTestGame(game)) return gameLibrary;
@@ -13142,6 +13196,10 @@ function ProductionApp() {
   const quizQuestionIds = useMemo(
     () => new Set(quizBankQuestions.map((question) => question.id).filter(Boolean)),
     [quizBankQuestions],
+  );
+  const thisOrThatQuestionIds = useMemo(
+    () => new Set(thisOrThatBankQuestions.map((question) => question.id).filter(Boolean)),
+    [thisOrThatBankQuestions],
   );
   const trueFalseQuestionIds = useMemo(
     () => new Set(trueFalseBankQuestions.map((question) => question.id).filter(Boolean)),
@@ -13236,6 +13294,25 @@ function ProductionApp() {
     if (!trueFalseQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => trueFalseQuestionIds.has(questionId)));
   }, [pairPlayedQuestionIds, trackedGameEntries, trueFalseQuestionIds]);
+  const trackedUsedThisOrThatQuestionIds = useMemo(() => {
+    const trackedIds = mergeUniqueIds(
+      pairPlayedQuestionIds,
+      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!thisOrThatQuestionIds.size) return new Set(trackedIds);
+    return new Set(trackedIds.filter((questionId) => thisOrThatQuestionIds.has(questionId)));
+  }, [pairPlayedQuestionIds, trackedGameEntries, thisOrThatQuestionIds]);
+  const playedThisOrThatQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'thisOrThatGame')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!thisOrThatQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => thisOrThatQuestionIds.has(questionId)));
+  }, [trackedGameEntries, thisOrThatQuestionIds]);
+  const usedThisOrThatQuestionCount = playedThisOrThatQuestionIds.size;
+  const remainingThisOrThatQuestionCount = Math.max(0, thisOrThatBankCount - usedThisOrThatQuestionCount);
   const playedTrueFalseQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -13259,8 +13336,8 @@ function ProductionApp() {
   }, [standardSelectableQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
   const allPlayedQuestionIds = useMemo(
-    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedTrueFalseQuestionIds]),
-    [playedStandardQuestionIds, playedQuizQuestionIds, playedTrueFalseQuestionIds],
+    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedTrueFalseQuestionIds]),
+    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedTrueFalseQuestionIds],
   );
   const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
@@ -13341,9 +13418,11 @@ function ProductionApp() {
     const allQuestions = bankSnapshot.empty
       ? STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))
       : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
-    const questionBankPool = allQuestions.filter((question) => ((question?.bankType || 'game') === requestedBankType));
+    const questionBankPool = allQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === requestedBankType);
     const retiredQuestionIds = requestedBankType === 'quiz'
       ? trackedUsedQuizQuestionIds
+      : requestedBankType === 'thisOrThatGame'
+        ? trackedUsedThisOrThatQuestionIds
       : requestedBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
         : effectiveRetiredQuestionIds;
@@ -15170,6 +15249,8 @@ function ProductionApp() {
     const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
     const sheetName = normalizedTargetBankType === 'quiz'
       ? 'Quiz'
+      : normalizedTargetBankType === 'thisOrThatGame'
+        ? 'This or That'
       : normalizedTargetBankType === 'trueFalseGame'
         ? 'True or False'
         : 'Questions';
@@ -15196,11 +15277,19 @@ function ProductionApp() {
       const parsedResult = normalizedTargetBankType === 'quiz'
         ? parseGoogleSheetQuizImport({
             rawText,
-            existingQuestions: nextExistingQuestions.filter((question) => (question?.bankType || 'game') === 'quiz'),
+            existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'quiz'),
             overwriteExisting,
             importedAt: new Date().toISOString(),
             sourceLabel: `${reference.id}:${target.sheetName || 'Quiz'}`,
           })
+        : normalizedTargetBankType === 'thisOrThatGame'
+          ? parseGoogleSheetThisOrThatImport({
+              rawText,
+              existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'thisOrThatGame'),
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'This or That'}`,
+            })
         : normalizedTargetBankType === 'trueFalseGame'
           ? parseGoogleSheetTrueFalseImport({
               rawText,
@@ -15295,6 +15384,26 @@ function ProductionApp() {
       }
       return existingQuestions;
     }
+    if (normalizedTargetBankType === 'thisOrThatGame') {
+      const thisOrThatQuestions = existingQuestions.filter(
+        (question) => normalizeQuestionBankType(question?.bankType) === 'thisOrThatGame',
+      );
+      if (thisOrThatQuestions.length >= THIS_OR_THAT_AUTO_SYNC_MIN_COUNT) return existingQuestions;
+      try {
+        const result = await syncGoogleSheetQuestions({
+          sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+          existingQuestions,
+          overwriteExisting: false,
+          targetBankType: 'thisOrThatGame',
+        });
+        if (result.imports.length || result.updates.length) {
+          await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+        }
+      } catch (error) {
+        console.warn('This or That bank sync failed while topping up the dedicated sheet tab.', error);
+      }
+      return existingQuestions;
+    }
     if (normalizedTargetBankType !== 'game') return existingQuestions;
     const needsTopUp = snap.empty || isStarterOnlyQuestionBank(existingQuestions);
     if (!needsTopUp) return existingQuestions;
@@ -15341,6 +15450,29 @@ function ProductionApp() {
     }
   }, [bankQuestions, firestore, sheetInput, trueFalseBankQuestions.length, user]);
 
+  const topUpThisOrThatBankFromDedicatedSheet = useCallback(async () => {
+    if (!user || !firestore) return false;
+    if (autoThisOrThatSheetSyncInFlightRef.current) return false;
+    if (thisOrThatBankQuestions.length >= THIS_OR_THAT_AUTO_SYNC_MIN_COUNT) return false;
+    autoThisOrThatSheetSyncInFlightRef.current = true;
+    try {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'thisOrThatGame',
+      });
+      if (!result.imports.length && !result.updates.length) return false;
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      return true;
+    } catch (error) {
+      console.warn('Automatic This or That sheet top-up failed.', error);
+      return false;
+    } finally {
+      autoThisOrThatSheetSyncInFlightRef.current = false;
+    }
+  }, [bankQuestions, firestore, sheetInput, thisOrThatBankQuestions.length, user]);
+
   useEffect(() => {
     if (!user || !firestore || !deferredLobbyDataReady || autoSheetImportAttemptedRef.current) return;
     if (gameId || game?.id) return;
@@ -15365,6 +15497,21 @@ function ProductionApp() {
         console.warn('Automatic Google Sheet top-up failed.', error);
       });
   }, [deferredLobbyDataReady, user, firestore, bankQuestions, sheetInput, gameId, game?.id]);
+
+  useEffect(() => {
+    if (!user || !firestore || !deferredLobbyDataReady) return;
+    if (gameId || game?.id) return;
+    if (thisOrThatBankQuestions.length >= THIS_OR_THAT_AUTO_SYNC_MIN_COUNT) return;
+    void topUpThisOrThatBankFromDedicatedSheet();
+  }, [
+    deferredLobbyDataReady,
+    user,
+    firestore,
+    gameId,
+    game?.id,
+    thisOrThatBankQuestions.length,
+    topUpThisOrThatBankFromDedicatedSheet,
+  ]);
 
   useEffect(() => {
     if (!user || !firestore || !deferredLobbyDataReady) return;
@@ -16270,17 +16417,17 @@ function ProductionApp() {
       }
 
       const gameRef = doc(firestore, 'games', makeId('game'));
-      const joinCode = await makeUniqueJoinCode(requestedCreateCode);
       const initialHoldemState = isHoldemGame
         ? initializeHoldemSessionState(creatorSeat, false)
         : null;
       const initialHoldemStats = isHoldemGame ? defaultHoldemStats() : null;
-      const openingGameState = {
+      const optimisticJoinCode = requestedCreateCode || '';
+      const optimisticOpeningGameState = {
         id: gameRef.id,
-        joinCode,
-        code: joinCode,
-        roomCode: joinCode,
-        gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
+        joinCode: optimisticJoinCode,
+        code: optimisticJoinCode,
+        roomCode: optimisticJoinCode,
+        gameName: effectiveGameName || `Jay vs Kim ${optimisticJoinCode || 'opening'}`,
         status: isHoldemGame ? 'active' : 'opening',
         hostUid: user.uid,
         hostDisplayName: profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player',
@@ -16330,6 +16477,20 @@ function ProductionApp() {
         updatedAt: new Date().toISOString(),
         ...(isHoldemGame ? buildHoldemSummaryFields(initialHoldemState, initialHoldemStats) : {}),
       };
+      autoResumedGameIdRef.current = '';
+      resetRoomLoadState();
+      setGame(optimisticOpeningGameState);
+      setRounds([]);
+      setChatMessages([]);
+      setNotice(`Opening ${effectiveGameName || 'new game'}…`);
+      const joinCode = await makeUniqueJoinCode(requestedCreateCode);
+      const openingGameState = {
+        ...optimisticOpeningGameState,
+        joinCode,
+        code: joinCode,
+        roomCode: joinCode,
+        gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
+      };
       const openingGameDoc = {
         ...openingGameState,
         createdAt: serverTimestamp(),
@@ -16338,15 +16499,14 @@ function ProductionApp() {
       let roomCreated = false;
 
       try {
-        autoResumedGameIdRef.current = '';
         armRoomLoadTimeout(gameRef.id, 'opening game');
         await setDoc(gameRef, openingGameDoc);
         roomCreated = true;
         setGame(openingGameState);
         setRounds([]);
+        setChatMessages([]);
         setGameId(gameRef.id);
         safeLocalStorageSet(activeGameKey, gameRef.id);
-        setNotice(`Opening ${effectiveGameName || 'new game'}…`);
 
         let queue = [];
         let warning = '';
@@ -17382,6 +17542,13 @@ function ProductionApp() {
       normalizedCorrectAnswer: nextQuestionItem.normalizedCorrectAnswer || '',
       notes: nextQuestionItem.notes || '',
       tags: nextQuestionItem.tags || [],
+      intensity: Number(nextQuestionItem.intensity || 0),
+      tone: nextQuestionItem.tone || '',
+      relationshipArea: nextQuestionItem.relationshipArea || '',
+      avoidIf: nextQuestionItem.avoidIf || [],
+      gameSuitability: nextQuestionItem.gameSuitability || [],
+      aiUseCase: nextQuestionItem.aiUseCase || [],
+      repeatGroup: nextQuestionItem.repeatGroup || '',
       unitLabel: nextQuestionItem.unitLabel || '',
       status: startOpen ? 'open' : 'ready',
       ready: startOpen ? { jay: true, kim: true } : { jay: false, kim: false },
@@ -18288,11 +18455,15 @@ function ProductionApp() {
     const sourceIsThisOrThatGame = isThisOrThatGameMode(sourceGame?.gameMode || 'standard');
     const sourcePool = sourceBankType === 'quiz'
       ? quizBankQuestions
+      : sourceBankType === 'thisOrThatGame'
+        ? thisOrThatBankQuestions
       : sourceBankType === 'trueFalseGame'
         ? trueFalseBankQuestions
         : gameBankQuestions;
     const retiredQuestionIds = sourceBankType === 'quiz'
       ? trackedUsedQuizQuestionIds
+      : sourceBankType === 'thisOrThatGame'
+        ? trackedUsedThisOrThatQuestionIds
       : sourceBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
         : effectiveRetiredQuestionIds;
@@ -18311,7 +18482,7 @@ function ProductionApp() {
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
-    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame'
+    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame'
       ? []
       : standardSelectableQuestions.filter(
           (question) =>
@@ -19334,6 +19505,38 @@ function ProductionApp() {
       setNotice('Quiz bank synced from Google Sheet.');
     }, 'Could not sync the quiz bank.');
 
+  const importThisOrThatSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'thisOrThatGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = thisOrThatBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new This or That questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. This or That bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice(`This or That import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import This or That questions from the Google Sheet.');
+
+  const syncThisOrThatSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: true,
+        targetBankType: 'thisOrThatGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = thisOrThatBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Synced This or That bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. This or That bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice('This or That bank synced from Google Sheet.');
+    }, 'Could not sync the This or That bank.');
+
   const importTrueFalseSheet = async () =>
     withBusy(async () => {
       const result = await syncGoogleSheetQuestions({
@@ -19529,9 +19732,11 @@ function ProductionApp() {
         onDismissGameInvite={dismissGameInviteAction}
         onSyncQuestionBank={syncSheet}
         onSyncQuizBank={syncQuizSheet}
+        onSyncThisOrThatBank={syncThisOrThatSheet}
         onSyncTrueFalseBank={syncTrueFalseSheet}
         onImportQuestions={importSheet}
         onImportQuizQuestions={importQuizSheet}
+        onImportThisOrThatQuestions={importThisOrThatSheet}
         onImportTrueFalseQuestions={importTrueFalseSheet}
         onResumeGame={resumeGame}
         onViewSummary={setSelectedGameId}
@@ -19553,6 +19758,9 @@ function ProductionApp() {
         quizQuestionCount={quizBankCount}
         usedQuizQuestionCount={usedQuizQuestionCount}
         remainingQuizQuestionCount={remainingQuizQuestionCount}
+        thisOrThatQuestionCount={thisOrThatBankCount}
+        usedThisOrThatQuestionCount={usedThisOrThatQuestionCount}
+        remainingThisOrThatQuestionCount={remainingThisOrThatQuestionCount}
         trueFalseQuestionCount={trueFalseBankCount}
         usedTrueFalseQuestionCount={usedTrueFalseQuestionCount}
         remainingTrueFalseQuestionCount={remainingTrueFalseQuestionCount}

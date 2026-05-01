@@ -14,6 +14,13 @@ const FIELD_ALIASES = {
   category: ['category', 'cat', 'theme', 'section', 'group', 'topic'],
   tags: ['tags', 'tag'],
   roundType: ['roundtype', 'type', 'questiontype', 'style', 'format', 'kind', 'round'],
+  intensity: ['intensity', 'heat', 'spiciness'],
+  tone: ['tone', 'mood', 'vibe'],
+  relationshipArea: ['relationshiparea', 'relationship', 'area'],
+  avoidIf: ['avoidif', 'avoid', 'avoidwhen'],
+  gameSuitability: ['gamesuitability', 'gamesuitablefor', 'suitability'],
+  aiUseCase: ['aiusecase', 'aiuse', 'usecase'],
+  repeatGroup: ['repeatgroup', 'repeatbucket', 'repeatcluster'],
   addedBy: ['addedby', 'sourceaddedby'],
   active: ['active', 'enabled'],
   unitLabel: ['unitlabel', 'unit', 'units'],
@@ -34,7 +41,7 @@ const FIELD_ALIASES = {
 const GOOGLE_SHEET_DIRECT_ID = /^[A-Za-z0-9-_]{20,}$/;
 const GOOGLE_SHEET_GID_REGEX = /[?&#]gid=([0-9]+)/g;
 const OPTION_FIELD_ALIASES = new Set(['options', 'choices', 'answeroptions', 'rankoptions', 'orderoptions', 'optionlist']);
-const OPTION_INDEX_FIELD_REGEX = /^(option|choice|item|rankitem|orderitem|answeroption|preferenceoption|thisorthatoption)([0-9]+|[a-z])$/;
+const OPTION_INDEX_FIELD_REGEX = /^(option|choice|item|rankitem|orderitem|answeroption|preferenceoption|thisorthatoption|multi|multioption|multianswer)([0-9]+|[a-z])$/;
 
 const normalizeHeader = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -116,6 +123,13 @@ const hasQuestionTemplateChanged = (existingQuestion, nextQuestion) => {
       sourceLabel: question.sourceLabel || '',
       addedBy: question.addedBy || '',
       importedFromGoogleSheet: Boolean(question.importedFromGoogleSheet),
+      intensity: Number(question.intensity || 0),
+      tone: question.tone || '',
+      relationshipArea: question.relationshipArea || '',
+      avoidIf: question.avoidIf || [],
+      gameSuitability: question.gameSuitability || [],
+      aiUseCase: question.aiUseCase || [],
+      repeatGroup: question.repeatGroup || '',
       unitLabel: question.unitLabel,
       scoringDivisor: question.scoringDivisor,
       roundingMode: question.roundingMode,
@@ -125,7 +139,7 @@ const hasQuestionTemplateChanged = (existingQuestion, nextQuestion) => {
       defaultAnswerType: question.defaultAnswerType,
       answerType: question.answerType,
       multipleChoiceOptions: question.multipleChoiceOptions || [],
-      bankType: question.bankType || 'game',
+      bankType: normalizeQuestionBankType(question.bankType),
       correctAnswer: question.correctAnswer || '',
       normalizedCorrectAnswer: question.normalizedCorrectAnswer || '',
     });
@@ -139,7 +153,7 @@ const findSheetQuestionMatch = (questions = [], candidateQuestion, { allowTypeMi
   const candidateCategoryKey = normalizeQuestionCategoryKey(candidateQuestion?.question, candidateQuestion?.category);
   if (!candidateCategoryKey) return null;
   return questions.find((question) => {
-    if ((question?.bankType || 'game') !== (candidateQuestion?.bankType || 'game')) return false;
+    if (normalizeQuestionBankType(question?.bankType) !== normalizeQuestionBankType(candidateQuestion?.bankType)) return false;
     if (normalizeQuestionCategoryKey(question?.question, question?.category) !== candidateCategoryKey) return false;
     return Boolean(question?.importedFromGoogleSheet || question?.source === 'googleSheet' || question?.source === 'googleSheetQuiz');
   }) || null;
@@ -530,6 +544,7 @@ export const parseGoogleSheetQuizImport = ({
     if (roundType === 'multipleChoice' && options.length < 2) errors.push('Multiple choice needs at least 2 options');
 
     const question = createQuestionTemplate({
+      ...row,
       question: questionText,
       category,
       roundType,
@@ -734,6 +749,150 @@ export const parseGoogleSheetTrueFalseImport = ({
 
   return {
     format: 'googleSheetTrueFalseCsv',
+    preview,
+    imports,
+    updates,
+    summary: {
+      total: rows.length,
+      imported: imports.length,
+      updated: updates.length,
+      duplicates,
+      invalid,
+      skipped,
+    },
+  };
+};
+
+export const parseGoogleSheetThisOrThatImport = ({
+  rawText,
+  existingQuestions = [],
+  overwriteExisting = true,
+  importedAt = new Date().toISOString(),
+  sourceLabel = '',
+}) => {
+  const parsed = parseCsvRows(rawText);
+  const rows = parsed.rows.map((row) => enrichMappedRow(row));
+  const seenQuestions = [];
+  const imports = [];
+  const updates = [];
+  let duplicates = 0;
+  let invalid = 0;
+  let skipped = 0;
+
+  const preview = rows.map((row, index) => {
+    const rawQuestion = normalizeText(row.question);
+    const rawCategory = normalizeText(row.category) || 'Uncategorised';
+    const isActive = parseBooleanish(row.active, true);
+    const errors = [];
+
+    if (!rawQuestion) errors.push('Missing question text');
+
+    const question = createQuestionTemplate({
+      ...row,
+      category: rawCategory,
+      roundType: 'preference',
+      answerType: 'multipleChoice',
+      defaultAnswerType: 'multipleChoice',
+      source: 'googleSheetThisOrThat',
+      sourceLabel,
+      addedBy: row.addedBy,
+      importedFromGoogleSheet: true,
+      importDate: importedAt,
+      bankType: 'thisOrThatGame',
+    });
+
+    if (errors.length) {
+      invalid += 1;
+      return {
+        index,
+        question,
+        errors,
+        status: 'invalid',
+      };
+    }
+
+    if (!isActive) {
+      skipped += 1;
+      return {
+        index,
+        question,
+        errors,
+        status: 'inactive',
+      };
+    }
+
+    const duplicateImport = seenQuestions.some((seenQuestion) => matchesQuestionTemplate(seenQuestion, question));
+    if (duplicateImport) {
+      duplicates += 1;
+      return {
+        index,
+        question,
+        errors,
+        status: 'duplicate',
+      };
+    }
+    seenQuestions.push(question);
+
+    const existingMatch = findSheetQuestionMatch(
+      existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'thisOrThatGame'),
+      question,
+      { allowTypeMigration: overwriteExisting },
+    );
+    if (!existingMatch) {
+      imports.push(question);
+      return {
+        index,
+        question,
+        errors,
+        status: 'import',
+      };
+    }
+
+    if (!overwriteExisting) {
+      duplicates += 1;
+      return {
+        index,
+        question,
+        errors,
+        status: 'duplicate',
+        existingId: existingMatch.id,
+      };
+    }
+
+    const updatedQuestion = createQuestionTemplate({
+      ...existingMatch,
+      ...question,
+      id: existingMatch.id,
+      used: existingMatch.used,
+      timesPlayed: existingMatch.timesPlayed,
+      lastPlayedAt: existingMatch.lastPlayedAt,
+      createdAt: existingMatch.createdAt,
+      importDate: importedAt,
+    });
+
+    if (hasQuestionTemplateChanged(existingMatch, updatedQuestion)) {
+      updates.push(updatedQuestion);
+      return {
+        index,
+        question: updatedQuestion,
+        errors,
+        status: 'update',
+        existingId: existingMatch.id,
+      };
+    }
+
+    skipped += 1;
+    return {
+      index,
+      question: existingMatch,
+      errors,
+      status: 'skipped',
+      existingId: existingMatch.id,
+    };
+  });
+
+  return {
+    format: 'googleSheetThisOrThatCsv',
     preview,
     imports,
     updates,

@@ -4,8 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import { arrayRemove, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, getFirestore, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore';
-import { parseGoogleSheetImport, parseGoogleSheetReference } from '../src/utils/importers.js';
-import { DEFAULT_SETTINGS, makeId, normalizeText } from '../src/utils/game.js';
+import {
+  parseGoogleSheetImport,
+  parseGoogleSheetQuizImport,
+  parseGoogleSheetReference,
+  parseGoogleSheetThisOrThatImport,
+  parseGoogleSheetTrueFalseImport,
+} from '../src/utils/importers.js';
+import { DEFAULT_SETTINGS, makeId, normalizeQuestionBankType, normalizeText } from '../src/utils/game.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,18 +111,26 @@ const shuffleArray = (items) => {
   return next;
 };
 
-const syncGoogleSheetQuestions = async ({ sheetValue: nextSheetValue, existingQuestions }) => {
+const syncGoogleSheetQuestions = async ({ sheetValue: nextSheetValue, existingQuestions, targetBankType = 'game' }) => {
   const reference = parseGoogleSheetReference(nextSheetValue);
   if (!reference) throw new Error('Enter a valid Google Sheet URL or ID.');
-  const gids = [...new Set((reference.gids?.length ? reference.gids : [reference.gid]).filter(Boolean))];
-  const targets = gids.length
-    ? gids.map((gid) => ({
-        gid,
-        csvUrl: `https://docs.google.com/spreadsheets/d/${reference.id}/export?format=csv&gid=${gid}`,
-      }))
-    : [{ gid: '', csvUrl: reference.csvUrl }];
+  const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+  const sheetName = normalizedTargetBankType === 'quiz'
+    ? 'Quiz'
+    : normalizedTargetBankType === 'thisOrThatGame'
+      ? 'This or That'
+      : normalizedTargetBankType === 'trueFalseGame'
+        ? 'True or False'
+        : 'Questions';
+  const targets = [{
+    gid: '',
+    csvUrl: `https://docs.google.com/spreadsheets/d/${reference.id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`,
+    sheetName,
+  }];
 
-  const nextExistingQuestions = [...existingQuestions];
+  const nextExistingQuestions = [...existingQuestions].filter(
+    (question) => normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType,
+  );
   const imports = [];
   const updates = [];
   const summary = {
@@ -133,13 +147,37 @@ const syncGoogleSheetQuestions = async ({ sheetValue: nextSheetValue, existingQu
       throw new Error(`Google Sheet fetch failed (${response.status}) for gid ${target.gid || 'default'}.`);
     }
     const rawText = await response.text();
-    const result = parseGoogleSheetImport({
-      rawText,
-      existingQuestions: nextExistingQuestions,
-      overwriteExisting: false,
-      importedAt: new Date().toISOString(),
-      sourceLabel: `${reference.id}${target.gid ? `:${target.gid}` : ''}`,
-    });
+    const result = normalizedTargetBankType === 'quiz'
+      ? parseGoogleSheetQuizImport({
+          rawText,
+          existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'quiz'),
+          overwriteExisting: false,
+          importedAt: new Date().toISOString(),
+          sourceLabel: `${reference.id}:${target.sheetName || 'Quiz'}`,
+        })
+      : normalizedTargetBankType === 'thisOrThatGame'
+        ? parseGoogleSheetThisOrThatImport({
+            rawText,
+            existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'thisOrThatGame'),
+            overwriteExisting: false,
+            importedAt: new Date().toISOString(),
+            sourceLabel: `${reference.id}:${target.sheetName || 'This or That'}`,
+          })
+        : normalizedTargetBankType === 'trueFalseGame'
+          ? parseGoogleSheetTrueFalseImport({
+              rawText,
+              existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
+              overwriteExisting: false,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'True or False'}`,
+            })
+          : parseGoogleSheetImport({
+              rawText,
+              existingQuestions: nextExistingQuestions,
+              overwriteExisting: false,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'Questions'}`,
+            });
     imports.push(...result.imports);
     updates.push(...result.updates);
     nextExistingQuestions.push(...result.imports, ...result.updates);
@@ -176,17 +214,35 @@ const run = async () => {
   const existingQuestions = bankSnap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
   console.log(`Current questionBank count: ${existingQuestions.length}`);
 
-  const result = await syncGoogleSheetQuestions({
-    sheetValue,
-    existingQuestions,
-  });
+  const bankTypes = ['game', 'thisOrThatGame', 'quiz', 'trueFalseGame'];
+  const aggregate = {
+    imports: [],
+    updates: [],
+    summary: { imported: 0, updated: 0, duplicates: 0, invalid: 0, skipped: 0 },
+  };
+  let workingQuestions = [...existingQuestions];
+  for (const targetBankType of bankTypes) {
+    const result = await syncGoogleSheetQuestions({
+      sheetValue,
+      existingQuestions: workingQuestions,
+      targetBankType,
+    });
+    aggregate.imports.push(...result.imports);
+    aggregate.updates.push(...result.updates);
+    aggregate.summary.imported += result.summary.imported;
+    aggregate.summary.updated += result.summary.updated;
+    aggregate.summary.duplicates += result.summary.duplicates;
+    aggregate.summary.invalid += result.summary.invalid;
+    aggregate.summary.skipped += result.summary.skipped;
+    workingQuestions = [...workingQuestions, ...result.imports, ...result.updates];
+  }
 
   console.log(
-    `Parsed sheet: ${result.summary.imported} new, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid, ${result.summary.skipped} skipped.`,
+    `Parsed sheets: ${aggregate.summary.imported} new, ${aggregate.summary.updated} updated, ${aggregate.summary.duplicates} duplicates, ${aggregate.summary.invalid} invalid, ${aggregate.summary.skipped} skipped.`,
   );
 
-  if (result.imports.length || result.updates.length) {
-    await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+  if (aggregate.imports.length || aggregate.updates.length) {
+    await upsertQuestionBankBatch(firestore, [...aggregate.imports, ...aggregate.updates]);
   }
 
   const afterSnap = await getDocs(collection(firestore, 'questionBank'));
