@@ -671,6 +671,132 @@ button:disabled {
   }
 }
 
+@media (max-width: 640px) {
+  .lobby-carousel-shell {
+    --lobby-carousel-card-height: clamp(430px, 62svh, 560px);
+    gap: 10px;
+  }
+
+  .lobby-carousel-stage {
+    min-height: var(--lobby-carousel-card-height);
+    height: var(--lobby-carousel-card-height);
+    padding: 2px 18px 6px;
+  }
+
+  .lobby-carousel-slide {
+    width: 100%;
+  }
+
+  .lobby-carousel-slide--left,
+  .lobby-carousel-slide--right {
+    top: 8px;
+    width: min(82%, 300px);
+    max-height: calc(100% - 16px);
+    opacity: 0.34;
+  }
+
+  .lobby-carousel-slide--left {
+    transform: translateX(-114%) scale(0.84);
+  }
+
+  .lobby-carousel-slide--right {
+    transform: translateX(14%) scale(0.84);
+  }
+
+  .lobby-carousel-stage-arrow {
+    min-width: 74px;
+    min-height: 46px;
+    height: 46px;
+    gap: 6px;
+    padding-inline: 10px;
+    border-radius: 16px;
+    font-size: 1rem;
+  }
+
+  .lobby-carousel-stage-arrow small {
+    font-size: 0.62rem;
+  }
+
+  .lobby-carousel-stage-arrow--left {
+    left: 2px;
+  }
+
+  .lobby-carousel-stage-arrow--right {
+    right: 2px;
+  }
+
+  .lobby-image-tile-face {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .lobby-image-tile-front-copy {
+    gap: 8px;
+  }
+
+  .lobby-image-tile-front-heading-side {
+    gap: 6px;
+  }
+
+  .lobby-image-tile-info-button {
+    width: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    height: 32px;
+    font-size: 0.92rem;
+  }
+
+  .lobby-image-tile-front-footer,
+  .lobby-image-tile-front-actions {
+    gap: 8px;
+  }
+
+  .lobby-image-tile-front-meta {
+    min-height: 46px;
+    padding: 0 12px;
+    font-size: 0.74rem;
+  }
+
+  .lobby-image-tile-front-control {
+    min-width: 0;
+  }
+
+  .lobby-image-tile-front-control span {
+    font-size: 0.62rem;
+  }
+
+  .lobby-image-tile-front-control input {
+    min-height: 40px;
+    padding-inline: 10px;
+    font-size: 0.92rem;
+  }
+
+  .lobby-image-tile-action {
+    min-height: 46px;
+    padding-inline: 14px;
+    font-size: 0.76rem;
+  }
+
+  .lobby-image-tile .panel-copy,
+  .lobby-image-tile .field-note {
+    padding: 8px 10px;
+    font-size: 0.82rem;
+  }
+
+  .lobby-carousel-dot {
+    width: 8px;
+    height: 8px;
+  }
+
+  .lobby-carousel-dot.is-active {
+    width: 22px;
+  }
+
+  .lobby-chat-card {
+    min-height: 320px;
+  }
+}
+
 .lobby-invite-top {
   width: min(860px, 100%);
   margin: 0 auto 10px;
