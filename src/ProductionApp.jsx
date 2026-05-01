@@ -11500,7 +11500,7 @@ function ProductionApp() {
   const isMobileDashboard = useMediaQuery('(max-width: 900px)');
   const leavePendingGameRef = useRef('');
   const autoSheetImportAttemptedRef = useRef(false);
-  const autoTrueFalseSheetImportAttemptedRef = useRef(false);
+  const autoTrueFalseSheetSyncInFlightRef = useRef(false);
   const roomLoadTimeoutRef = useRef(null);
   const amaStoreSeededRef = useRef({ jay: false, kim: false });
   const autoResumedGameIdRef = useRef(gameId || '');
@@ -14494,6 +14494,29 @@ function ProductionApp() {
     );
   };
 
+  const topUpTrueFalseBankFromDedicatedSheet = useCallback(async () => {
+    if (!user || !firestore) return false;
+    if (autoTrueFalseSheetSyncInFlightRef.current) return false;
+    if (trueFalseBankQuestions.length >= TRUE_FALSE_AUTO_SYNC_MIN_COUNT) return false;
+    autoTrueFalseSheetSyncInFlightRef.current = true;
+    try {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'trueFalseGame',
+      });
+      if (!result.imports.length && !result.updates.length) return false;
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      return true;
+    } catch (error) {
+      console.warn('Automatic True or False sheet top-up failed.', error);
+      return false;
+    } finally {
+      autoTrueFalseSheetSyncInFlightRef.current = false;
+    }
+  }, [bankQuestions, firestore, sheetInput, trueFalseBankQuestions.length, user]);
+
   useEffect(() => {
     if (!user || !firestore || autoSheetImportAttemptedRef.current) return;
     if (gameId || game?.id) return;
@@ -14520,28 +14543,18 @@ function ProductionApp() {
   }, [user, firestore, bankQuestions, sheetInput, gameId, game?.id]);
 
   useEffect(() => {
-    if (!user || !firestore || autoTrueFalseSheetImportAttemptedRef.current) return;
+    if (!user || !firestore) return;
     if (gameId || game?.id) return;
     if (trueFalseBankQuestions.length >= TRUE_FALSE_AUTO_SYNC_MIN_COUNT) return;
-    autoTrueFalseSheetImportAttemptedRef.current = true;
-    syncGoogleSheetQuestions({
-      sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
-      existingQuestions: bankQuestions,
-      overwriteExisting: false,
-      targetBankType: 'trueFalseGame',
-    })
-      .then(async (result) => {
-        if (!result.imports.length && !result.updates.length) return;
-        await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
-        setSyncNotice(
-          `Imported ${result.summary.imported} new True or False sheet questions automatically. Duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}.`,
-        );
-        setNotice(`True or False bank topped up from the dedicated sheet with ${result.summary.imported} new questions.`);
-      })
-      .catch((error) => {
-        console.warn('Automatic True or False sheet top-up failed.', error);
-      });
-  }, [user, firestore, trueFalseBankQuestions.length, bankQuestions, sheetInput, gameId, game?.id]);
+    void topUpTrueFalseBankFromDedicatedSheet();
+  }, [
+    user,
+    firestore,
+    gameId,
+    game?.id,
+    trueFalseBankQuestions.length,
+    topUpTrueFalseBankFromDedicatedSheet,
+  ]);
 
   const saveDisplayNameProfile = async (nextDisplayName) =>
     withBusy(async () => {
