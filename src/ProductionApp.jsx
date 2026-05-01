@@ -39,6 +39,7 @@ import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
 import normalGameTileImage from './assets/lobby-normal-game.webp';
 import pokerTileImage from './assets/lobby-poker.webp';
 import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
+import thisOrThatTileImage from './assets/lobby-this-or-that.webp';
 import trueOrFalseTileImage from './assets/lobby-true-or-false.webp';
 import {
   calculateAnalytics,
@@ -2956,12 +2957,15 @@ function LobbyScreen({
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
   const [trueFalseCreateCodeDraft, setTrueFalseCreateCodeDraft] = useState('');
   const [trueFalseQuestionCountDraft, setTrueFalseQuestionCountDraft] = useState('10');
+  const [thisOrThatCreateCodeDraft, setThisOrThatCreateCodeDraft] = useState('');
+  const [thisOrThatQuestionCountDraft, setThisOrThatQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
   const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
   const [flippedLobbyTiles, setFlippedLobbyTiles] = useState(() => ({
     standard: false,
     quiz: false,
     trueFalse: false,
+    thisOrThat: false,
     holdem: false,
   }));
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
@@ -3062,6 +3066,10 @@ function LobbyScreen({
       categories: [],
       ...(sendInvite ? { sendInvite: true } : {}),
     });
+
+  const handleOpenThisOrThatPreview = () => {
+    setLobbyTileFlipped('thisOrThat', true);
+  };
 
   const setLobbyTileFlipped = (cardId, nextValue) => {
     if (typeof document !== 'undefined') {
@@ -3647,6 +3655,7 @@ function LobbyScreen({
     { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
     { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
     { id: 'trueFalse', label: 'True or False', image: trueOrFalseTileImage },
+    { id: 'thisOrThat', label: 'This or That', image: thisOrThatTileImage },
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
 
@@ -3696,6 +3705,7 @@ function LobbyScreen({
   const isStandardTileFlipped = Boolean(flippedLobbyTiles.standard);
   const isQuizTileFlipped = Boolean(flippedLobbyTiles.quiz);
   const isTrueFalseTileFlipped = Boolean(flippedLobbyTiles.trueFalse);
+  const isThisOrThatTileFlipped = Boolean(flippedLobbyTiles.thisOrThat);
   const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
   const getLobbyTileImageStyle = (imageUrl) => ({
     '--lobby-tile-image': lobbyTileImagesEnabled && imageUrl ? `url("${imageUrl}")` : 'none',
@@ -4259,6 +4269,89 @@ function LobbyScreen({
                     className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(3)}`}
                     inert={getLobbyCarouselPosition(3) !== 'center'}
                     aria-hidden={getLobbyCarouselPosition(3) !== 'center'}
+                  >
+                    <section
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--this-or-that"
+                      style={getLobbyTileImageStyle(thisOrThatTileImage)}
+                    >
+                      <div className={`lobby-image-tile-flip ${isThisOrThatTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'thisOrThat',
+                          eyebrow: 'Planned',
+                          title: 'This or That',
+                          statusText: 'Coming Soon',
+                          description: 'A prediction-first mode where both players choose between two options, lock what they would pick, and also guess which option the other person will choose.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={thisOrThatQuestionCountDraft}
+                                onChange={(event) => setThisOrThatQuestionCountDraft(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
+                          onCreateAndInvite: handleOpenThisOrThatPreview,
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isThisOrThatTileFlipped} aria-hidden={!isThisOrThatTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Planned</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('thisOrThat', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Planned</p>
+                              <h2>This or That</h2>
+                            </div>
+                            <span className="status-pill">Artwork Pending</span>
+                          </div>
+                          <p className="panel-copy">This tile is now in the lobby and ready for final artwork. The game flow is still being locked before it gets a live create flow.</p>
+                          <label className="field">
+                            <span>This or That Code</span>
+                            <input
+                              value={thisOrThatCreateCodeDraft}
+                              onChange={(event) => setThisOrThatCreateCodeDraft(normalizeJoinCode(event.target.value))}
+                              placeholder="Optional"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Number of Questions</span>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min="1"
+                              value={thisOrThatQuestionCountDraft}
+                              onChange={(event) => setThisOrThatQuestionCountDraft(event.target.value)}
+                              placeholder="10"
+                            />
+                          </label>
+                          <p className="field-note">Planned shape: both players lock their own pick and their guess for the other person, then the reveal scores prediction accuracy automatically.</p>
+                          <div className="button-row">
+                            <Button className="primary-button compact" disabled>
+                              Create This or That
+                            </Button>
+                            <Button className="ghost-button compact" disabled>
+                              Create + Invite
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(4)}`}
+                    inert={getLobbyCarouselPosition(4) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(4) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"

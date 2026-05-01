@@ -556,6 +556,10 @@ button:disabled {
   --lobby-tile-position: center 18%;
 }
 
+.lobby-image-tile--this-or-that {
+  --lobby-tile-position: center 18%;
+}
+
 .lobby-image-tile--holdem {
   --lobby-tile-position: center 20%;
 }
