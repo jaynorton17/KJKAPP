@@ -259,6 +259,8 @@ const oppositeSeatOf = (seat = 'jay') => (seat === 'kim' ? 'jay' : 'kim');
 const preferredSeatForUser = (user, profile) => inferSeatFromUser(user, profile) || seatFromPlayerRef(user?.uid) || 'jay';
 const buildGameInviteId = (targetGameId = '', invitedForUserId = '') =>
   targetGameId && invitedForUserId ? `game-invite-${targetGameId}-${invitedForUserId}` : '';
+const buildGameRoomInviteKey = (targetGameId = '', invitedForUserId = '', invitedForSeat = '') =>
+  [targetGameId, invitedForUserId || invitedForSeat || 'pending'].filter(Boolean).join(':');
 const resolveGameMode = (value = 'standard') =>
   value === 'quiz'
     ? 'quiz'
@@ -12357,6 +12359,7 @@ function ProductionApp() {
   const [redemptionHistory, setRedemptionHistory] = useState([]);
   const [forfeitPriceRequests, setForfeitPriceRequests] = useState([]);
   const [gameInvites, setGameInvites] = useState([]);
+  const [roomGameInvites, setRoomGameInvites] = useState([]);
   const [amaRequests, setAmaRequests] = useState([]);
   const [diaryEntries, setDiaryEntries] = useState([]);
   const [questionNotes, setQuestionNotes] = useState([]);
@@ -12917,6 +12920,55 @@ function ProductionApp() {
   }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
+      setRoomGameInvites([]);
+      return undefined;
+    }
+    const inferredInviteSeat = preferredSeatForUser(user, profile) || 'jay';
+    const roomInviteLookupTokens = mergeUniqueIds(
+      user.uid,
+      playerIdForSeat(inferredInviteSeat),
+      inferredInviteSeat,
+      PLAYER_LABEL[inferredInviteSeat] || '',
+    ).filter(Boolean).slice(0, 10);
+    if (!roomInviteLookupTokens.length) {
+      setRoomGameInvites([]);
+      return undefined;
+    }
+    const roomInviteRef = roomInviteLookupTokens.length === 1
+      ? query(collection(firestore, 'games'), where('pendingInviteTargets', 'array-contains', roomInviteLookupTokens[0]))
+      : query(collection(firestore, 'games'), where('pendingInviteTargets', 'array-contains-any', roomInviteLookupTokens));
+    const unsubscribe = onSnapshot(roomInviteRef, (snapshot) => {
+      const roomInvites = snapshot.docs.map((entry) => {
+        const data = entry.data() || {};
+        const inviteSeat = data.pendingInviteForSeat || inferredInviteSeat || 'jay';
+        const inviteUserId = data.pendingInviteForUserId || playerIdForSeat(inviteSeat);
+        return {
+          id: `room-invite:${buildGameRoomInviteKey(entry.id, inviteUserId, inviteSeat)}`,
+          source: 'room',
+          gameId: entry.id,
+          roomCode: gameRoomCodeForLookup(data) || normalizeJoinCode(data?.joinCode || data?.code || ''),
+          joinCode: gameRoomCodeForLookup(data) || normalizeJoinCode(data?.joinCode || data?.code || ''),
+          gameName: data.gameName || data.name || `Game ${gameRoomCodeForLookup(data) || entry.id}`,
+          invitedByUserId: data.pendingInviteByUserId || data.hostUid || '',
+          invitedByDisplayName: data.pendingInviteByDisplayName || data.hostDisplayName || '',
+          invitedBySeat: data.pendingInviteBySeat || '',
+          invitedForUserId: inviteUserId,
+          invitedForSeat: inviteSeat,
+          requestedQuestionCount: Number(data.requestedQuestionCount || 0),
+          actualQuestionCount: Number(data.actualQuestionCount || getGameQuestionGoal(data) || 0),
+          status: data.pendingInviteStatus || 'pending',
+          gameStatus: data.status || data.pendingInviteGameStatus || 'active',
+          createdAt: data.pendingInviteCreatedAt || data.createdAt || null,
+          updatedAt: data.pendingInviteUpdatedAt || data.updatedAt || null,
+        };
+      });
+      setRoomGameInvites(roomInvites.sort(sortByNewest));
+    }, (error) => debugRoom('roomInviteSnapshotError', { message: error?.message || String(error) }));
+    return unsubscribe;
+  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession]);
+
+  useEffect(() => {
     if (!shouldLoadStoreCollections) {
       setAmaRequests([]);
       return undefined;
@@ -13222,8 +13274,20 @@ function ProductionApp() {
     ? `${PLAYER_LABEL[dashboardSeat] || dashboardSeat}: ${formatScore(Number(playerAccounts?.[dashboardSeat]?.lifetimePenaltyPoints || 0))} penalty points`
     : '';
   const incomingGameInvites = useMemo(
-    () =>
-      gameInvites
+    () => {
+      const mergedInvites = new Map();
+      [...roomGameInvites, ...gameInvites].forEach((invite) => {
+        const key = invite.gameId || invite.id || '';
+        if (!key) return;
+        const existing = mergedInvites.get(key) || {};
+        mergedInvites.set(key, {
+          ...existing,
+          ...invite,
+          id: existing.id || invite.id,
+          source: existing.source === 'collection' ? existing.source : (invite.source || existing.source || 'collection'),
+        });
+      });
+      return [...mergedInvites.values()]
         .filter(
           (invite) => (
             matchesCurrentPlayerIdentity(invite.invitedForUserId)
@@ -13247,8 +13311,9 @@ function ProductionApp() {
           };
         })
         .filter((invite) => ['pending', 'expired'].includes(invite.displayStatus))
-        .sort(sortByNewest),
-    [dashboardSeat, gameInvites, matchesCurrentPlayerIdentity, user?.uid, game?.id, game, gameLibrary],
+        .sort(sortByNewest);
+    },
+    [dashboardSeat, gameInvites, roomGameInvites, matchesCurrentPlayerIdentity, user?.uid, game?.id, game, gameLibrary],
   );
   const pendingIncomingGameInvites = useMemo(
     () => incomingGameInvites.filter((invite) => invite.displayStatus === 'pending'),
@@ -13878,6 +13943,34 @@ function ProductionApp() {
       hasWrites = true;
     });
     if (hasWrites) await batch.commit();
+  };
+
+  const buildGameRoomInviteFields = ({ targetUserId, targetSeat = '', sourceGame = null }) => {
+    if (!user || !targetUserId) throw new Error('Could not prepare the room invite.');
+    const baseGame = sourceGame || game || null;
+    const hostSeat = seatForUid(baseGame, user.uid) || preferredSeatForUser(user, profile);
+    const inviteSeat = targetSeat || oppositeSeatOf(hostSeat);
+    return {
+      pendingInviteForUserId: targetUserId,
+      pendingInviteForSeat: inviteSeat,
+      pendingInviteTargets: mergeUniqueIds(
+        targetUserId,
+        canonicalPlayerIdForRef(targetUserId, inviteSeat),
+        inviteSeat,
+        PLAYER_LABEL[inviteSeat] || '',
+      ).filter(Boolean),
+      pendingInviteStatus: 'pending',
+      pendingInviteByUserId: user.uid,
+      pendingInviteByDisplayName: profile?.displayName || user.displayName || user.email?.split('@')[0] || gameSeatDisplayName(baseGame, hostSeat),
+      pendingInviteBySeat: hostSeat,
+      pendingInviteCreatedAt: serverTimestamp(),
+      pendingInviteUpdatedAt: serverTimestamp(),
+      pendingInviteAcceptedAt: null,
+      pendingInviteDismissedAt: null,
+      pendingInviteDismissedByUserId: '',
+      pendingInviteJoinedByUserId: '',
+      pendingInviteGameStatus: baseGame?.status || 'active',
+    };
   };
 
   const buildGameInviteRecord = ({ targetGameId, targetUserId, targetSeat = '', sourceGame = null }) => {
@@ -16882,6 +16975,28 @@ function ProductionApp() {
           ...createdGameState,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
+          ...(options.sendInvite
+            ? buildGameRoomInviteFields({
+                targetUserId: inviteTargetUserId,
+                targetSeat: inviteTargetSeat,
+                sourceGame: createdGameState,
+              })
+            : {
+                pendingInviteForUserId: '',
+                pendingInviteForSeat: '',
+                pendingInviteTargets: [],
+                pendingInviteStatus: '',
+                pendingInviteByUserId: '',
+                pendingInviteByDisplayName: '',
+                pendingInviteBySeat: '',
+                pendingInviteCreatedAt: null,
+                pendingInviteUpdatedAt: null,
+                pendingInviteAcceptedAt: null,
+                pendingInviteDismissedAt: null,
+                pendingInviteDismissedByUserId: '',
+                pendingInviteJoinedByUserId: '',
+                pendingInviteGameStatus: '',
+              }),
         };
         const trueFalseQueueIds = isTrueFalseGame ? mergeUniqueIds(queue.map((question) => question.id)) : [];
         const batch = writeBatch(firestore);
@@ -16917,16 +17032,6 @@ function ProductionApp() {
             { merge: true },
           );
         }
-        if (options.sendInvite) {
-          const inviteRecord = buildGameInviteRecord({
-            targetGameId: gameRef.id,
-            targetUserId: inviteTargetUserId,
-            targetSeat: inviteTargetSeat,
-            sourceGame: createdGameState,
-          });
-          batch.set(inviteRecord.inviteRef, inviteRecord.inviteDoc, { merge: true });
-        }
-
         armRoomLoadTimeout(gameRef.id, 'opening game');
         await batch.commit();
         roomCreated = true;
@@ -17047,6 +17152,12 @@ function ProductionApp() {
           bothPlayersJoined: true,
         });
       }
+      const hadPendingRoomInvite = Boolean(
+        (Array.isArray(data?.pendingInviteTargets) && data.pendingInviteTargets.length)
+        || data?.pendingInviteForUserId
+        || data?.pendingInviteForSeat,
+      );
+      const shouldClearPendingRoomInvite = hadPendingRoomInvite && !alreadyJoined && Boolean(nextSeats.jay && nextSeats.kim);
 
       const batch = writeBatch(firestore);
       batch.set(roomRef, {
@@ -17058,6 +17169,16 @@ function ProductionApp() {
         playerUids: nextPlayerUids,
         playerProfiles: nextPlayerProfiles,
         status: 'active',
+        ...(shouldClearPendingRoomInvite
+          ? {
+              pendingInviteTargets: [],
+              pendingInviteStatus: 'accepted',
+              pendingInviteAcceptedAt: serverTimestamp(),
+              pendingInviteJoinedByUserId: user.uid,
+              pendingInviteUpdatedAt: serverTimestamp(),
+              pendingInviteGameStatus: 'active',
+            }
+          : {}),
         ...(nextHoldemState ? { holdemState: nextHoldemState } : {}),
         updatedAt: serverTimestamp(),
       }, { merge: true });
@@ -17088,7 +17209,7 @@ function ProductionApp() {
       }
       await batch.commit();
 
-      if (!inviteId) {
+      if (!inviteId && !shouldClearPendingRoomInvite) {
         const linkedInviteId = buildGameInviteId(targetGameId, user.uid);
         if (linkedInviteId) {
           const linkedInviteSnap = await getDoc(doc(firestore, 'gameInvites', linkedInviteId)).catch(() => null);
@@ -17140,7 +17261,7 @@ function ProductionApp() {
       if (!invite?.gameId) throw new Error('This invite is missing a live game session.');
       await joinGameSessionById(invite.gameId, {
         fallbackCode: invite.roomCode || invite.joinCode || '',
-        inviteId: invite.id || '',
+        inviteId: invite.source === 'collection' ? invite.id || '' : '',
       });
     }, 'Could not join invited game.');
 
@@ -17149,13 +17270,31 @@ function ProductionApp() {
       if (!invite?.id) throw new Error('This invite could not be dismissed.');
       const inviteStatus = invite.displayStatus || invite.status || 'pending';
       if (inviteStatus === 'pending') throw new Error('Active invites can only be joined, not dismissed.');
-      await setGameInviteStatus(invite.id, {
-        status: 'dismissed',
-        gameStatus: invite.gameStatus || 'unavailable',
-        dismissedAt: serverTimestamp(),
-        dismissedByUserId: user?.uid || '',
-      });
+      if (invite.source === 'room' && invite.gameId) {
+        await setDoc(
+          doc(firestore, 'games', invite.gameId),
+          {
+            pendingInviteTargets: [],
+            pendingInviteStatus: 'dismissed',
+            pendingInviteDismissedAt: serverTimestamp(),
+            pendingInviteDismissedByUserId: user?.uid || '',
+            pendingInviteUpdatedAt: serverTimestamp(),
+            pendingInviteGameStatus: invite.gameStatus || 'unavailable',
+          },
+          { merge: true },
+        );
+      } else {
+        await setGameInviteStatus(invite.id, {
+          status: 'dismissed',
+          gameStatus: invite.gameStatus || 'unavailable',
+          dismissedAt: serverTimestamp(),
+          dismissedByUserId: user?.uid || '',
+        });
+      }
       setGameInvites((current) => current.filter((entry) => entry.id !== invite.id));
+      if (invite.source === 'room') {
+        setRoomGameInvites((current) => current.filter((entry) => entry.id !== invite.id));
+      }
       setNotice('Invite dismissed.');
     }, 'Could not dismiss invite.');
 
