@@ -5138,6 +5138,10 @@ button:disabled {
   gap: 8px;
 }
 
+.ranked-input-hint {
+  margin: 4px 0 0;
+}
+
 .ranked-field input {
   min-height: 40px;
 }
@@ -5146,6 +5150,10 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.rating-choice-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .choice-button {
@@ -12556,6 +12564,10 @@ select:focus-visible {
   .mobile-board-panel .choice-grid--embedded {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 10px;
+  }
+
+  .mobile-board-panel .rating-choice-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .mobile-board-panel .choice-button {

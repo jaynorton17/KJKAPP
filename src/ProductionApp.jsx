@@ -80,6 +80,19 @@ import {
   getHoldemVisibleCommunityCards,
   mergeHoldemStats,
 } from './utils/holdem.js';
+import {
+  formatAnswerForDisplay,
+  getDefaultOptionsForQuestionType,
+  getQuestionTypeListCount,
+  getQuestionTypeListLabels,
+  normalizeQuestionType,
+  serialiseAnswerForQuestionType,
+  usesChoiceInputForQuestionType,
+  usesListInputForQuestionType,
+  usesNumberInputForQuestionType,
+  usesRatingInputForQuestionType,
+  usesTextareaInputForQuestionType,
+} from './utils/questionTypes.js';
 import { loadThemeIndex, saveThemeIndex } from './utils/storage.js';
 import { firebaseAuth, firebaseIsConfigured, firestore, storage } from './lib/firebase.js';
 import { parseGoogleSheetImport, parseGoogleSheetQuizImport, parseGoogleSheetReference } from './utils/importers.js';
@@ -718,7 +731,7 @@ const pickDiverseQuestions = (questions = [], requestedCount = 10) => {
   const safeRequestedCount = Math.max(1, Number.parseInt(requestedCount, 10) || 10);
   const grouped = new Map();
   shuffleArray(questions).forEach((question) => {
-    const roundType = String(question?.roundType || 'numeric').trim() || 'numeric';
+    const roundType = normalizeQuestionType(question?.roundType, 'text');
     if (!grouped.has(roundType)) grouped.set(roundType, []);
     grouped.get(roundType).push(question);
   });
@@ -787,42 +800,13 @@ const isStarterOnlyQuestionBank = (questions = []) =>
   Boolean(questions.length) &&
   questions.length <= STARTER_QUESTIONS.length &&
   questions.every((question) => starterQuestionIds.has(question.id) || question.source === 'starter');
-const DEFAULT_PLAYER_CHOICE_OPTIONS = ['Me', 'Them', 'Both', 'Neither'];
-
-const buildEitherOrOptions = (question = '') => {
-  const cleaned = normalizeText(question).replace(/[?!.]+$/, '');
-  const patterns = [
-    /would you rather (.+?) or (.+)$/i,
-    /do you prefer (.+?) or (.+)$/i,
-    /are you more of (.+?) or (.+)$/i,
-    /would you choose (.+?) or (.+)$/i,
-    /between (.+?) and (.+),/i,
-  ];
-  for (const pattern of patterns) {
-    const match = cleaned.match(pattern);
-    if (!match) continue;
-    const left = normalizeText(match[1]).replace(/^(to |be |have )/i, '');
-    const right = normalizeText(match[2]).replace(/^(to |be |have )/i, '');
-    if (left && right) return [left, right];
-  }
-  return [];
-};
 
 const inferChoiceOptions = (round = {}) => {
-  const roundType = round?.roundType || 'text';
-  if (roundType === 'trueFalse') return ['True', 'False'];
-  if (Array.isArray(round?.multipleChoiceOptions) && round.multipleChoiceOptions.length) {
-    return round.multipleChoiceOptions;
-  }
-  const question = normalizeText(round?.question);
-  if (/who is more likely|who is most likely/i.test(question)) {
-    return DEFAULT_PLAYER_CHOICE_OPTIONS;
-  }
-  const eitherOrOptions = buildEitherOrOptions(question);
-  if (eitherOrOptions.length) return eitherOrOptions;
-  if (roundType === 'multipleChoice') return DEFAULT_PLAYER_CHOICE_OPTIONS;
-  if (roundType === 'preference') return ['Option A', 'Option B'];
-  return [];
+  const roundType = normalizeQuestionType(round?.roundType, 'text');
+  return getDefaultOptionsForQuestionType(roundType, {
+    question: round?.question || '',
+    options: round?.multipleChoiceOptions || [],
+  });
 };
 
 const decodeRankedAnswer = (value, count = 3) => {
@@ -1740,17 +1724,12 @@ const normalizeRevealAnswer = (value) =>
     .trim();
 
 const formatRoundAnswerValue = (value, roundType = 'numeric') => {
-  const normalizedType = String(roundType || 'numeric');
-  if (normalizedType === 'ranked' || normalizedType === 'sortIntoOrder') {
-    const list = parseAnswerList(value);
-    return list.length ? list.join(' • ') : '-';
-  }
-  return normalizeText(value) || '-';
+  return formatAnswerForDisplay(roundType, value, { emptyFallback: '-' });
 };
 
 const getRevealComparison = ({ roundType = 'numeric', actualAnswer = '', guessedAnswer = '' }) => {
-  const normalizedType = String(roundType || 'numeric');
-  if (normalizedType === 'numeric') {
+  const normalizedType = normalizeQuestionType(roundType, 'text');
+  if (usesNumberInputForQuestionType(normalizedType)) {
     const actual = parseNumber(actualAnswer, Number.NaN);
     const guessed = parseNumber(guessedAnswer, Number.NaN);
     if (Number.isFinite(actual) && Number.isFinite(guessed) && actual === guessed) {
@@ -1759,7 +1738,7 @@ const getRevealComparison = ({ roundType = 'numeric', actualAnswer = '', guessed
     return { label: 'Compared via penalty entry', tone: 'neutral' };
   }
 
-  if (normalizedType === 'ranked' || normalizedType === 'sortIntoOrder') {
+  if (usesListInputForQuestionType(normalizedType)) {
     const actualList = parseAnswerList(actualAnswer).map(normalizeRevealAnswer).filter(Boolean);
     const guessedList = parseAnswerList(guessedAnswer).map(normalizeRevealAnswer).filter(Boolean);
     const exactOrderMatch =
@@ -1783,7 +1762,7 @@ const buildGameQuestion = (question) => ({
   id: question.id,
   question: question.question,
   category: question.category,
-  roundType: question.roundType || 'numeric',
+  roundType: normalizeQuestionType(question.roundType, 'text'),
   defaultAnswerType: question.defaultAnswerType || getDefaultAnswerType(question.roundType),
   multipleChoiceOptions: question.multipleChoiceOptions || [],
   tags: question.tags || [],
@@ -4904,18 +4883,19 @@ function QuestionAnswerEntryBase({
   embedded = false,
 }) {
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
-  const roundType = currentRound?.roundType || 'numeric';
+  const roundType = normalizeQuestionType(currentRound?.roundType, 'text');
   const choiceOptions = inferChoiceOptions(currentRound);
   const otherPlayer = currentPlayer === 'jay' ? 'kim' : 'jay';
   const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const currentPlayerGuessForOther = currentPlayerAnswer?.guessedOther || '';
   const otherPlayerAnswer = currentRound?.answers?.[otherPlayer]?.ownAnswer || '';
   const otherPlayerGuessForCurrent = currentRound?.answers?.[otherPlayer]?.guessedOther || '';
-  const promptLabel = roundType === 'numeric' ? 'Number' : roundType === 'multipleChoice' || roundType === 'trueFalse' || roundType === 'preference' ? 'Choice' : 'Answer';
+  const promptLabel = usesNumberInputForQuestionType(roundType) ? 'Number' : usesRatingInputForQuestionType(roundType) ? 'Rating' : usesChoiceInputForQuestionType(roundType) ? 'Choice' : 'Answer';
   const options = choiceOptions.length ? choiceOptions : ['Option A', 'Option B'];
-  const isChoiceRound = roundType === 'multipleChoice' || roundType === 'trueFalse' || roundType === 'preference';
-  const isListRound = roundType === 'ranked' || roundType === 'sortIntoOrder';
-  const listCount = roundType === 'ranked' ? 3 : Math.max(3, Math.min(5, options.length || 4));
+  const isChoiceRound = usesChoiceInputForQuestionType(roundType);
+  const isListRound = usesListInputForQuestionType(roundType);
+  const isRatingRound = usesRatingInputForQuestionType(roundType);
+  const listCount = getQuestionTypeListCount(roundType, currentRound?.multipleChoiceOptions || []);
   const isRoundOpen = (currentRound?.status || 'open') === 'open';
   const hasServerSubmittedAnswer = submissionState === 'submitted' || Boolean(normalizeText(currentPlayerAnswer?.ownAnswer || ''));
   // IMPORTANT: This must not flip during Firestore snapshots (e.g. when a field
@@ -5076,7 +5056,7 @@ function QuestionAnswerEntryBase({
     : isQuizRound ? 'Submit Answer' : 'Submit Round';
 
   const renderField = (fieldName, value, setter, placeholder) => {
-    if (roundType === 'numeric') {
+    if (usesNumberInputForQuestionType(roundType)) {
       return (
         <input
           ref={fieldName === 'guessedOther' ? guessedOtherRef : ownAnswerRef}
@@ -5094,6 +5074,25 @@ function QuestionAnswerEntryBase({
           placeholder={placeholder}
           disabled={isLocked || !isRoundOpen}
         />
+      );
+    }
+
+    if (isRatingRound) {
+      const ratingOptions = Array.from({ length: 10 }, (_, index) => String(index + 1));
+      return (
+        <div className={`choice-grid rating-choice-grid ${embedded ? 'choice-grid--embedded' : ''}`} role="list" aria-label={`${placeholder} rating`}>
+          {ratingOptions.map((option) => (
+            <button
+              key={`${fieldName}-rating-${option}`}
+              type="button"
+              className={`choice-button ${value === option ? 'is-on' : ''}`}
+              onClick={() => setter(option)}
+              disabled={isLocked || !isRoundOpen}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
       );
     }
 
@@ -5116,38 +5115,60 @@ function QuestionAnswerEntryBase({
     }
 
     if (isListRound) {
-      const labels =
-        roundType === 'ranked'
-          ? ['#1', '#2', '#3']
-          : Array.from({ length: listCount }, (_, index) => `Step ${index + 1}`);
+      const labels = getQuestionTypeListLabels(roundType, currentRound?.multipleChoiceOptions || []);
       const values = decodeRankedAnswer(value, listCount);
+      const listHint = Array.isArray(currentRound?.multipleChoiceOptions) && currentRound.multipleChoiceOptions.length
+        ? currentRound.multipleChoiceOptions.join(' • ')
+        : '';
       return (
-        <div className={`ranked-input-grid ${embedded ? 'ranked-input-grid--embedded' : ''}`}>
-          {values.map((entry, index) => (
-            <label className="field ranked-field" key={`${placeholder}-${labels[index]}`}>
-              <span>{labels[index]}</span>
-              <input
-                ref={(node) => {
-                  const key = `${fieldName}:${index}`;
-                  if (node) rankedInputRefs.current[key] = node;
-                  else delete rankedInputRefs.current[key];
-                }}
-                value={entry}
-                onFocus={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
-                onSelect={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
-                onChange={(event) => {
-                  rememberFocusedField(`${fieldName}:${index}`, event);
-                  const next = [...values];
-                  next[index] = event.target.value;
-                  setter(encodeRankedAnswer(next));
-                }}
-                onBlur={() => forgetFocusedField(`${fieldName}:${index}`)}
-                placeholder={roundType === 'ranked' ? `Rank ${index + 1}` : `Position ${index + 1}`}
-                disabled={isLocked || !isRoundOpen}
-              />
-            </label>
-          ))}
-        </div>
+        <>
+          <div className={`ranked-input-grid ${embedded ? 'ranked-input-grid--embedded' : ''}`}>
+            {values.map((entry, index) => (
+              <label className="field ranked-field" key={`${placeholder}-${labels[index]}`}>
+                <span>{labels[index]}</span>
+                <input
+                  ref={(node) => {
+                    const key = `${fieldName}:${index}`;
+                    if (node) rankedInputRefs.current[key] = node;
+                    else delete rankedInputRefs.current[key];
+                  }}
+                  value={entry}
+                  onFocus={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
+                  onSelect={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
+                  onChange={(event) => {
+                    rememberFocusedField(`${fieldName}:${index}`, event);
+                    const next = [...values];
+                    next[index] = event.target.value;
+                    setter(encodeRankedAnswer(next));
+                  }}
+                  onBlur={() => forgetFocusedField(`${fieldName}:${index}`)}
+                  placeholder={roundType === 'ranked' ? `Rank ${index + 1}` : `Position ${index + 1}`}
+                  disabled={isLocked || !isRoundOpen}
+                />
+              </label>
+            ))}
+          </div>
+          {listHint ? <p className="field-note ranked-input-hint">Available options: {listHint}</p> : null}
+        </>
+      );
+    }
+
+    if (usesTextareaInputForQuestionType(roundType)) {
+      return (
+        <textarea
+          ref={fieldName === 'guessedOther' ? guessedOtherRef : ownAnswerRef}
+          rows={3}
+          value={value}
+          onFocus={(event) => rememberFocusedField(fieldName, event)}
+          onSelect={(event) => rememberFocusedField(fieldName, event)}
+          onChange={(event) => {
+            rememberFocusedField(fieldName, event);
+            setter(event.target.value);
+          }}
+          onBlur={() => forgetFocusedField(fieldName)}
+          placeholder={placeholder}
+          disabled={isLocked || !isRoundOpen}
+        />
       );
     }
 
@@ -6403,10 +6424,10 @@ function RevealCards({ currentRound }) {
           <span>{answer.displayName || '-'}</span>
         </div>
         <p>
-          <span>My answer:</span> {answer.ownAnswer || '-'}
+          <span>My answer:</span> {formatRoundAnswerValue(answer.ownAnswer, currentRound?.roundType)}
         </p>
         <p>
-          <span>I guessed:</span> {answer.guessedOther || '-'}
+          <span>I guessed:</span> {formatRoundAnswerValue(answer.guessedOther, currentRound?.roundType)}
         </p>
       </article>
     );
@@ -7337,10 +7358,10 @@ function GameSummaryContent({
                             Jay {formatScore(round.penaltyAdded?.jay || 0)} · Kim {formatScore(round.penaltyAdded?.kim || 0)} · Winner {round.winner || 'tie'}
                           </small>
                           <small>
-                            Jay answered {round.actualAnswers?.jay || '-'} / guessed {round.guessedAnswers?.jay || '-'}
+                            Jay answered {formatRoundAnswerValue(round.actualAnswers?.jay, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.jay, round.roundType)}
                           </small>
                           <small>
-                            Kim answered {round.actualAnswers?.kim || '-'} / guessed {round.guessedAnswers?.kim || '-'}
+                            Kim answered {formatRoundAnswerValue(round.actualAnswers?.kim, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.kim, round.roundType)}
                           </small>
                         </article>
                       ))
@@ -15204,15 +15225,21 @@ function ProductionApp() {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
     const quizRoundKey = sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question';
+    const roundType = normalizeQuestionType(nextQuestionItem.roundType, 'text');
+    const multipleChoiceOptions = inferChoiceOptions({
+      roundType,
+      question: nextQuestionItem.question,
+      multipleChoiceOptions: nextQuestionItem.multipleChoiceOptions || [],
+    });
     return {
       id: isQuizGame ? `round-quiz-${nextRoundNumber}-${quizRoundKey}` : makeId('round'),
       number: nextRoundNumber,
       questionId: nextQuestionItem.id,
       question: nextQuestionItem.question,
       category: nextQuestionItem.category || '',
-      roundType: nextQuestionItem.roundType || 'numeric',
-      defaultAnswerType: nextQuestionItem.defaultAnswerType || getDefaultAnswerType(nextQuestionItem.roundType),
-      multipleChoiceOptions: nextQuestionItem.multipleChoiceOptions || [],
+      roundType,
+      defaultAnswerType: nextQuestionItem.defaultAnswerType || getDefaultAnswerType(roundType),
+      multipleChoiceOptions,
       correctAnswer: nextQuestionItem.correctAnswer || '',
       normalizedCorrectAnswer: nextQuestionItem.normalizedCorrectAnswer || '',
       notes: nextQuestionItem.notes || '',
@@ -15479,6 +15506,9 @@ function ProductionApp() {
         guessedOther: String(game.currentRound.answers?.[currentSeat]?.guessedOther ?? ''),
       };
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+      const roundType = normalizeQuestionType(game.currentRound?.roundType, 'text');
+      const serialisedOwnAnswer = serialiseAnswerForQuestionType(roundType, draft.ownAnswer);
+      const serialisedGuessedOther = isQuizGame ? '' : serialiseAnswerForQuestionType(roundType, draft.guessedOther);
       const submittedAtIso = new Date().toISOString();
       const quizEndsAtMs = Date.parse(game.currentRound?.quizTimerEndsAt || '');
       const nowMs = Date.now();
@@ -15486,11 +15516,11 @@ function ProductionApp() {
         ? Math.max(0, quizEndsAtMs - nowMs)
         : QUIZ_TIMER_SECONDS * 1000;
       const timerSecondsLeft = Math.max(0, Math.ceil(timerMsLeft / 1000));
-      const quizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, draft.ownAnswer.trim()) : false;
+      const quizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, serialisedOwnAnswer.trim()) : false;
       const quizPointsAwarded = isQuizGame && quizWasCorrect ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
       const baseAnswerPayload = {
-        ownAnswer: draft.ownAnswer.trim(),
-        guessedOther: isQuizGame ? '' : draft.guessedOther.trim(),
+        ownAnswer: serialisedOwnAnswer.trim(),
+        guessedOther: serialisedGuessedOther.trim(),
         submittedBy: user?.uid || '',
         displayName: profile?.displayName || user?.displayName || '',
         submittedAt: submittedAtIso,
@@ -15514,12 +15544,18 @@ function ProductionApp() {
           [currentSeat]: baseAnswerPayload,
         };
         if (!nextAnswers[otherSeat]?.ownAnswer) {
-          const autoOwnAnswer = game.currentRound.roundType === 'numeric' ? '0' : choiceOptions[0] || 'Test mode response';
+          const autoOwnAnswer = usesNumberInputForQuestionType(roundType)
+            ? '0'
+            : usesRatingInputForQuestionType(roundType)
+              ? '5'
+              : usesListInputForQuestionType(roundType)
+                ? 'Item 1\nItem 2\nItem 3'
+                : choiceOptions[0] || 'Test mode response';
           const autoQuizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, autoOwnAnswer) : false;
           const autoQuizPoints = isQuizGame && autoQuizWasCorrect ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
           nextAnswers[otherSeat] = {
             ownAnswer: autoOwnAnswer,
-            guessedOther: isQuizGame ? '' : draft.ownAnswer.trim() || draft.guessedOther.trim() || choiceOptions[1] || choiceOptions[0] || 'Test guess',
+            guessedOther: isQuizGame ? '' : serialisedOwnAnswer.trim() || serialisedGuessedOther.trim() || choiceOptions[1] || choiceOptions[0] || 'Test guess',
             submittedBy: 'editing-mode',
             displayName: otherSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)',
             submittedAt: new Date().toISOString(),
@@ -15617,7 +15653,7 @@ function ProductionApp() {
             category: normalizeText(game.currentRound?.category || ''),
             questionType: normalizeText(game.currentRound?.roundType || ''),
             correctAnswer: normalizeText(game.currentRound?.correctAnswer || ''),
-            playerAnswer: draft.ownAnswer.trim(),
+            playerAnswer: serialisedOwnAnswer.trim(),
             playerId: user.uid,
             playerSeat: currentSeat,
             wasCorrect: quizWasCorrect,

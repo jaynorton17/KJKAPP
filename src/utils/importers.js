@@ -6,6 +6,7 @@ import {
   normalizeQuestionKey,
   normalizeText,
 } from './game.js';
+import { QUESTION_TYPE_CONFIGS, normalizeQuestionType } from './questionTypes.js';
 
 const FIELD_ALIASES = {
   question: ['question', 'text', 'prompt', 'title'],
@@ -25,57 +26,14 @@ const FIELD_ALIASES = {
   sourceLabel: ['sourcelabel', 'importsourcelabel', 'originlabel'],
   defaultAnswerType: ['defaultanswertype'],
   answerType: ['answertype'],
+  multipleChoiceOptions: ['multiplechoiceoptions', 'options', 'choices', 'optionlist', 'answeroptions', 'rankoptions', 'orderoptions'],
+  correctAnswer: ['correctanswer', 'answer', 'correct', 'solution'],
 };
 
 const GOOGLE_SHEET_DIRECT_ID = /^[A-Za-z0-9-_]{20,}$/;
-const GOOGLE_SHEET_TYPE_ALIASES = new Set([
-  'numeric',
-  'number',
-  'closestwins',
-  'closest',
-  'multiplechoice',
-  'multiple',
-  'mcq',
-  'multiselect',
-  'truefalse',
-  'trueorfalse',
-  'truefalsequestion',
-  'boolean',
-  'bool',
-  'tf',
-  'binary',
-  'yesno',
-  'yesorno',
-  'text',
-  'textanswer',
-  'written',
-  'sortintoorder',
-  'sorting',
-  'ordering',
-  'sequence',
-  'sortorder',
-  'matchpair',
-  'matchthepair',
-  'matching',
-  'preference',
-  'thisorthat',
-  'choice',
-  'favourite',
-  'favorite',
-  'favourites',
-  'favorites',
-  'petpeeve',
-  'petpeeves',
-  'peeve',
-  'ranked',
-  'top3',
-  'topthree',
-  'multianswer',
-  'manual',
-  'custom',
-]);
-
 const GOOGLE_SHEET_GID_REGEX = /[?&#]gid=([0-9]+)/g;
+const OPTION_FIELD_ALIASES = new Set(['options', 'choices', 'answeroptions', 'rankoptions', 'orderoptions', 'optionlist']);
+const OPTION_INDEX_FIELD_REGEX = /^(option|choice|item|rankitem|orderitem|answeroption|preferenceoption|thisorthatoption)([0-9]+|[a-z])$/;
 
 const normalizeHeader = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -89,6 +47,49 @@ const mapRow = (row) => {
   return mapped;
 };
 
+const extractOptionsFromRawRow = (row = {}) => {
+  const options = [];
+
+  Object.entries(row || {}).forEach(([key, value]) => {
+    const normalizedKey = normalizeHeader(key);
+    if (!normalizedKey || !String(value ?? '').trim()) return;
+    if (normalizedKey === 'correctanswer' || normalizedKey === 'answer') return;
+    if (OPTION_FIELD_ALIASES.has(normalizedKey)) {
+      String(value)
+        .split(/\n|,|;/)
+        .map((item) => normalizeText(item))
+        .filter(Boolean)
+        .forEach((item) => options.push(item));
+      return;
+    }
+    if (OPTION_INDEX_FIELD_REGEX.test(normalizedKey)) {
+      options.push(normalizeText(value));
+    }
+  });
+
+  return [...new Set(options.filter(Boolean))];
+};
+
+const enrichMappedRow = (row = {}) => {
+  const mapped = mapRow(row);
+  const extractedOptions = extractOptionsFromRawRow(row);
+
+  if (!mapped.multipleChoiceOptions && extractedOptions.length) {
+    mapped.multipleChoiceOptions = extractedOptions.join('\n');
+  }
+
+  if (!mapped.correctAnswer) {
+    const correctAnswerKey = Object.keys(row || {}).find((key) => ['correctanswer', 'correct', 'solution'].includes(normalizeHeader(key)));
+    if (correctAnswerKey) mapped.correctAnswer = row[correctAnswerKey];
+  }
+
+  if (mapped.roundType) {
+    mapped.roundType = normalizeQuestionType(mapped.roundType, 'text');
+  }
+
+  return mapped;
+};
+
 const parseBooleanish = (value, fallback = true) => {
   const normalized = normalizeHeader(value);
   if (!normalized) return fallback;
@@ -97,7 +98,10 @@ const parseBooleanish = (value, fallback = true) => {
   return fallback;
 };
 
-const isSupportedGoogleSheetType = (value) => GOOGLE_SHEET_TYPE_ALIASES.has(normalizeHeader(value));
+const isSupportedGoogleSheetType = (value) =>
+  QUESTION_TYPE_CONFIGS.some((config) =>
+    [config.id, ...(config.aliases || [])].some((entry) => normalizeHeader(entry) === normalizeHeader(value)),
+  );
 
 const hasQuestionTemplateChanged = (existingQuestion, nextQuestion) => {
   const comparable = (question) =>
@@ -208,7 +212,7 @@ const parseCsvRows = (rawText) => {
 
 export const parseCsv = (rawText) => {
   const parsed = parseCsvRows(rawText);
-  return parsed.rows.map((row) => mapRow(row));
+  return parsed.rows.map((row) => enrichMappedRow(row));
 };
 
 const parseBlockText = (rawText) => {
@@ -327,7 +331,8 @@ export const parseGoogleSheetImport = ({
   importedAt = new Date().toISOString(),
   sourceLabel = '',
 }) => {
-  const rows = parseCsv(rawText);
+  const parsed = parseCsvRows(rawText);
+  const rows = parsed.rows.map((row) => enrichMappedRow(row));
   const seenQuestions = [];
   const imports = [];
   const updates = [];
@@ -338,7 +343,7 @@ export const parseGoogleSheetImport = ({
   const preview = rows.map((row, index) => {
     const rawQuestion = normalizeText(row.question);
     const rawCategory = normalizeText(row.category) || 'Uncategorised';
-    const rawType = normalizeText(row.roundType) || 'text';
+    const rawType = normalizeQuestionType(row.roundType, 'text');
     const isActive = parseBooleanish(row.active, true);
     const errors = [];
 

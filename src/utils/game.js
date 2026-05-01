@@ -6,6 +6,14 @@
  * @typedef {import('../types').RoundType} RoundType
  */
 
+import {
+  DEFAULT_TRUE_FALSE_OPTIONS,
+  QUESTION_TYPE_CONFIGS,
+  getQuestionTypeConfig,
+  normalizeQuestionType,
+  parseQuestionTypeAnswerList,
+} from './questionTypes.js';
+
 export const SCHEMA_VERSION = 6;
 
 export const PLAYERS = [
@@ -19,18 +27,11 @@ export const PLAYER_LABEL = {
   tie: 'Tie',
 };
 
-export const ROUND_TYPES = [
-  { id: 'numeric', label: 'Numeric', shortLabel: 'Numeric' },
-  { id: 'multipleChoice', label: 'Multiple Choice', shortLabel: 'Multiple Choice' },
-  { id: 'trueFalse', label: 'True or False', shortLabel: 'True / False' },
-  { id: 'text', label: 'Text Answer', shortLabel: 'Text Answer' },
-  { id: 'sortIntoOrder', label: 'Sort Into Order', shortLabel: 'Sort Into Order' },
-  { id: 'preference', label: 'Preference / This-or-That', shortLabel: 'Preference' },
-  { id: 'favourite', label: 'Favourite', shortLabel: 'Favourite' },
-  { id: 'petPeeve', label: 'Pet Peeve', shortLabel: 'Pet Peeve' },
-  { id: 'ranked', label: 'Ranked / Top 3', shortLabel: 'Ranked / Top 3' },
-  { id: 'manual', label: 'Manual / Custom', shortLabel: 'Manual / Custom' },
-];
+export const ROUND_TYPES = QUESTION_TYPE_CONFIGS.map(({ id, label, shortLabel }) => ({
+  id,
+  label,
+  shortLabel,
+}));
 
 export const ROUND_TYPE_LABEL = Object.fromEntries(ROUND_TYPES.map((type) => [type.id, type.shortLabel]));
 
@@ -38,6 +39,7 @@ export const TEXT_ROUND_TYPES = new Set([
   'favourite',
   'petPeeve',
   'preference',
+  'rating',
   'ranked',
   'sortIntoOrder',
   'manual',
@@ -47,7 +49,6 @@ export const TEXT_ROUND_TYPES = new Set([
 ]);
 
 export const ANSWER_MASK = 'Answered';
-export const DEFAULT_TRUE_FALSE_OPTIONS = ['True', 'False'];
 
 export const SCORING_MODES = [
   { id: 'direct_penalty_entry', label: 'Direct Penalty Entry' },
@@ -432,50 +433,16 @@ export const parseTags = (value) => {
     .filter(Boolean);
 };
 
-export const normalizeRoundType = (value) => {
-  const raw = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (['favorite', 'favourite', 'favourites', 'favorites'].includes(raw)) return 'favourite';
-  if (['petpeeve', 'petpeeves', 'peeve'].includes(raw)) return 'petPeeve';
-  if (['preference', 'thisorthat', 'preferencethisorthat', 'choice'].includes(raw)) return 'preference';
-  if (
-    [
-      'truefalse',
-      'trueorfalse',
-      'truefalsequestion',
-      'trueorfalsequestion',
-      'binary',
-      'yesno',
-      'yesorno',
-      'boolean',
-      'bool',
-      'tf',
-      'tfquestion',
-    ].includes(raw)
-    || raw.startsWith('truefalse')
-    || raw.startsWith('trueorfalse')
-    || raw.startsWith('boolean')
-  ) {
-    return 'trueFalse';
-  }
-  if (['sortintoorder', 'sorting', 'ordering', 'sequence', 'sequenceordering', 'sortorder', 'matchpair', 'matchthepair', 'matching'].includes(raw)) {
-    return 'sortIntoOrder';
-  }
-  if (['ranked', 'top3', 'topthree', 'rankedtop3', 'multianswer', 'multi'].includes(raw)) return 'ranked';
-  if (['manual', 'custom', 'manualcustom'].includes(raw)) return 'manual';
-  if (['multiplechoice', 'multiple', 'mcq', 'multiselect'].includes(raw)) return 'multipleChoice';
-  if (['text', 'textanswer', 'written', 'exactmatch'].includes(raw)) return 'text';
-  if (['closestwins', 'closest'].includes(raw)) return 'numeric';
-  return 'numeric';
-};
+export const normalizeRoundType = (value, fallback = 'numeric') => normalizeQuestionType(value, fallback);
 
-export const isNumericRoundType = (roundType) => normalizeRoundType(roundType) === 'numeric';
+export const isNumericRoundType = (roundType) => getQuestionTypeConfig(roundType, 'numeric').scoringFamily === 'numeric';
 export const isListRoundType = (roundType) => {
-  const normalizedRoundType = normalizeRoundType(roundType);
-  return normalizedRoundType === 'ranked' || normalizedRoundType === 'sortIntoOrder';
+  const normalizedRoundType = getQuestionTypeConfig(roundType, 'text');
+  return normalizedRoundType.scoringFamily === 'list';
 };
 export const isChoiceRoundType = (roundType) => {
-  const normalizedRoundType = normalizeRoundType(roundType);
-  return normalizedRoundType === 'multipleChoice' || normalizedRoundType === 'trueFalse';
+  const normalizedRoundType = getQuestionTypeConfig(roundType, 'text');
+  return normalizedRoundType.scoringFamily === 'choice';
 };
 export const isSingleAnswerRoundType = (roundType) => {
   const normalizedRoundType = normalizeRoundType(roundType);
@@ -485,12 +452,8 @@ export const isPairedTextRoundType = (roundType) =>
   !isNumericRoundType(roundType) && !isListRoundType(roundType) && !isSingleAnswerRoundType(roundType);
 
 export const getDefaultAnswerType = (roundType) => {
-  const normalizedRoundType = normalizeRoundType(roundType);
-  if (isChoiceRoundType(normalizedRoundType)) return 'multipleChoice';
-  if (normalizedRoundType === 'text') return 'text';
-  if (isListRoundType(normalizedRoundType)) return 'ranked';
-  if (normalizedRoundType === 'numeric') return 'number';
-  return 'pairedText';
+  const normalizedRoundType = getQuestionTypeConfig(roundType, 'numeric');
+  return normalizedRoundType.defaultAnswerType || 'pairedText';
 };
 
 export const normalizeAnswerType = (value, roundType = 'numeric') => {
@@ -613,7 +576,7 @@ export const normalizeRoundingMode = (value) => {
 export const createQuestionTemplate = (input = {}) => {
   const now = new Date().toISOString();
   const question = normalizeText(input.question ?? input.text ?? input.title);
-  const roundType = normalizeRoundType(input.roundType ?? input.type);
+  const roundType = normalizeRoundType(input.roundType ?? input.type, 'text');
   const roundPenaltyValue = Math.max(0, parseNumber(input.roundPenaltyValue ?? input.fixedPenalty ?? input.penalty, roundType === 'preference' ? 3 : 5));
   const defaultAnswerType = normalizeAnswerType(input.defaultAnswerType, roundType);
   const multipleChoiceOptions = parseAnswerList(input.multipleChoiceOptions ?? input.options);
@@ -678,13 +641,7 @@ const normalizeAnswer = (value) =>
     .trim();
 
 export const parseAnswerList = (value) => {
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeText(item)).filter(Boolean);
-  }
-  return String(value || '')
-    .split(/\n|,|;/)
-    .map((item) => item.replace(/^\d+[.)]\s*/, '').trim())
-    .filter(Boolean);
+  return parseQuestionTypeAnswerList(value);
 };
 
 export const calculateTextMatchScore = ({
