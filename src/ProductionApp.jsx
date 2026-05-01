@@ -2543,6 +2543,17 @@ const isFirestoreRateLimitedError = (error = null) => {
   );
 };
 
+const isLocalStorageQuotaError = (error = null) => {
+  const normalizedMessage = normalizeText(error?.message || error || '').toLowerCase();
+  const normalizedCode = normalizeText(error?.code || error?.name || '').toLowerCase();
+  if (isFirestoreRateLimitedError(error)) return false;
+  return (
+    normalizedCode.includes('quotaexceedederror')
+    || normalizedMessage.includes('storage quota')
+    || (normalizedMessage.includes('storage') && normalizedMessage.includes('quota'))
+  );
+};
+
 const getGameQuestionGoal = (game, rounds = []) => {
   const playedRounds = Math.max(Number(game?.roundsPlayed || 0), Array.isArray(rounds) ? rounds.length : 0);
   const queuedRounds = Array.isArray(game?.questionQueueIds) ? game.questionQueueIds.filter(Boolean).length : 0;
@@ -13620,6 +13631,7 @@ function ProductionApp() {
 
   const ensureQuestionBankReadyForQueue = async (targetBankType = 'game') => {
     const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    if (normalizedTargetBankType === 'game' && standardSelectableQuestions.length) return;
     if (getLocalQuestionPoolForBankType(normalizedTargetBankType).length) return;
     const seedTimeoutMarker = { timedOut: true };
     let timeoutId = 0;
@@ -13644,26 +13656,9 @@ function ProductionApp() {
     const requestedBankType = normalizeQuestionBankType(filters.bankType);
     const requestedGameMode = resolveGameMode(filters.gameMode || 'standard');
     const isThisOrThatQueue = isThisOrThatGameMode(requestedGameMode);
-    const localPool = getLocalQuestionPoolForBankType(requestedBankType);
-    let allQuestions = [];
-    if (requestedBankType === 'game') {
-      if (bankQuestions.length) {
-        allQuestions = bankQuestions;
-      } else {
-        const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
-        allQuestions = bankSnapshot.empty
-          ? STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))
-          : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
-      }
-    } else if (localPool.length) {
-      allQuestions = bankQuestions;
-    } else {
-      const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
-      allQuestions = bankSnapshot.empty
-        ? []
-        : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
-    }
-    const questionBankPool = allQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === requestedBankType);
+    const questionBankPool = requestedBankType === 'game'
+      ? standardSelectableQuestions
+      : getLocalQuestionPoolForBankType(requestedBankType);
     const retiredQuestionIds = requestedBankType === 'quiz'
       ? trackedUsedQuizQuestionIds
       : requestedBankType === 'thisOrThatGame'
@@ -13759,12 +13754,18 @@ function ProductionApp() {
       return normalizedSeed;
     }
 
+    const localActiveCodes = new Set(
+      gameLibrary
+        .filter((entry) => isGameSessionJoinable(entry))
+        .map((entry) => gameRoomCodeForLookup(entry))
+        .filter(Boolean),
+    );
     for (let attempt = 0; attempt < 12; attempt += 1) {
       const candidate = makeJoinCode();
-      if (!(await isJoinCodeTaken(candidate))) return candidate;
+      if (!localActiveCodes.has(candidate)) return candidate;
     }
 
-    throw new Error('Could not generate an available room code.');
+    return makeJoinCode();
   };
 
   const setGameInviteStatus = async (inviteId, patch = {}) => {
@@ -15449,13 +15450,12 @@ function ProductionApp() {
       return await work();
     } catch (error) {
       const message = String(error?.message || fallback || '');
-      const normalizedMessage = normalizeText(message);
-      if (
-        normalizedMessage.includes('quota exceeded')
-        || normalizedMessage.includes('quotaexceeded')
-        || (normalizedMessage.includes('storage') && normalizedMessage.includes('quota'))
-      ) {
+      if (isLocalStorageQuotaError(error)) {
         console.warn('Suppressed storage quota warning from gameplay UI.', error);
+        return null;
+      }
+      if (isFirestoreRateLimitedError(error)) {
+        setNotice('Firebase is rate-limiting the app right now. Please wait a moment and try again.');
         return null;
       }
       setNotice(message || fallback);
@@ -18407,13 +18407,12 @@ function ProductionApp() {
         });
       }
       const message = String(error?.message || 'Could not submit answer.');
-      const normalizedMessage = normalizeText(message);
-      if (
-        normalizedMessage.includes('quota exceeded')
-        || normalizedMessage.includes('quotaexceeded')
-        || (normalizedMessage.includes('storage') && normalizedMessage.includes('quota'))
-      ) {
+      if (isLocalStorageQuotaError(error)) {
         console.warn('Suppressed storage quota warning from answer submit.', error);
+        return null;
+      }
+      if (isFirestoreRateLimitedError(error)) {
+        setNotice('Firebase is rate-limiting answer sync right now. Wait a moment and try again.');
         return null;
       }
       setNotice(message);
