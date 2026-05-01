@@ -2711,7 +2711,10 @@ function LobbyScreen({
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('kjk-dashboard-tab') || 'gameLobby');
   const [activityTab, setActivityTab] = useState(() => localStorage.getItem('kjk-activity-tab') || 'activeGames');
   const [createMode, setCreateMode] = useState('random');
+  const [quizCreateCodeDraft, setQuizCreateCodeDraft] = useState('');
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
+  const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
+  const [holdemQuestionCountDraft, setHoldemQuestionCountDraft] = useState('10');
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
@@ -3458,6 +3461,14 @@ function LobbyScreen({
 	                  </div>
 	                </div>
 	                <label className="field">
+	                  <span>Quiz Code</span>
+	                  <input
+	                    value={quizCreateCodeDraft}
+	                    onChange={(event) => setQuizCreateCodeDraft(normalizeJoinCode(event.target.value))}
+	                    placeholder="Optional"
+	                  />
+	                </label>
+	                <label className="field">
 	                  <span>Number of Quiz Questions</span>
 	                  <input
 	                    type="number"
@@ -3473,6 +3484,7 @@ function LobbyScreen({
 	                    className="primary-button compact"
 	                    onClick={() =>
 	                      onCreateGame({
+	                        createCode: quizCreateCodeDraft,
 	                        mode: 'random',
 	                        gameMode: 'quiz',
 	                        roundTypes: [],
@@ -3487,6 +3499,7 @@ function LobbyScreen({
 	                    className="ghost-button compact"
 	                    onClick={() =>
 	                      onCreateGame({
+	                        createCode: quizCreateCodeDraft,
 	                        mode: 'random',
 	                        gameMode: 'quiz',
 	                        roundTypes: [],
@@ -3500,6 +3513,77 @@ function LobbyScreen({
 	                  </Button>
 	                </div>
 	              </section>
+
+              <section className="panel lobby-panel lobby-panel--lobby hold-em-game-card">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Cards</p>
+                    <h2>Texas Hold Em'</h2>
+                  </div>
+                  <span className="status-pill">{questionCount} ready</span>
+                </div>
+                <p className="panel-copy">Open a Texas Hold Em' room with its own code and invite flow. This currently uses the standard live room flow behind the scenes.</p>
+                <div className="hold-em-card-hero" aria-hidden="true">
+                  <span className="hold-em-card-chip">A♠</span>
+                  <span className="hold-em-card-chip">K♥</span>
+                  <span className="hold-em-card-chip">Q♣</span>
+                  <span className="hold-em-card-chip">J♦</span>
+                </div>
+                <label className="field">
+                  <span>Texas Hold Em' Code</span>
+                  <input
+                    value={holdemCreateCodeDraft}
+                    onChange={(event) => setHoldemCreateCodeDraft(normalizeJoinCode(event.target.value))}
+                    placeholder="Optional"
+                  />
+                </label>
+                <label className="field">
+                  <span>Number of Questions</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    value={holdemQuestionCountDraft}
+                    onChange={(event) => setHoldemQuestionCountDraft(event.target.value)}
+                    placeholder="10"
+                  />
+                </label>
+                <div className="button-row">
+                  <Button
+                    className="primary-button compact"
+                    onClick={() =>
+                      onCreateGame({
+                        createCode: holdemCreateCodeDraft,
+                        gameName: "Texas Hold Em'",
+                        mode: 'random',
+                        gameMode: 'standard',
+                        roundTypes: [],
+                        categories: [],
+                        requestedQuestionCount: holdemQuestionCountDraft,
+                      })}
+                    disabled={isBusy}
+                  >
+                    Create Texas Hold Em'
+                  </Button>
+                  <Button
+                    className="ghost-button compact"
+                    onClick={() =>
+                      onCreateGame({
+                        createCode: holdemCreateCodeDraft,
+                        gameName: "Texas Hold Em'",
+                        mode: 'random',
+                        gameMode: 'standard',
+                        roundTypes: [],
+                        categories: [],
+                        sendInvite: true,
+                        requestedQuestionCount: holdemQuestionCountDraft,
+                      })}
+                    disabled={isBusy}
+                  >
+                    Create + Invite
+                  </Button>
+                </div>
+              </section>
             
 
                 {!isMobileDashboardNav ? (
@@ -13010,12 +13094,13 @@ function ProductionApp() {
       setLocalEndedGameSummary(null);
       if (!firestore || !user) throw new Error('Firebase is not configured.');
       const gameMode = options.gameMode === 'quiz' ? 'quiz' : 'standard';
-      const trimmedGameName = normalizeText(lobbyGameName);
+      const requestedCreateCode = normalizeJoinCode(options.createCode ?? lobbyCode);
+      const trimmedGameName = normalizeText(options.gameName ?? lobbyGameName);
       const effectiveGameName = trimmedGameName || (gameMode === 'quiz' ? 'Quick Fire Quiz' : 'Jay vs Kim');
       console.debug('Create New Game clicked', {
         gameName: effectiveGameName || lobbyGameName,
         requestedQuestionCount: options.requestedQuestionCount ?? lobbyQuestionCount,
-        createCode: lobbyCode,
+        createCode: requestedCreateCode,
         mode: options.mode || 'random',
         gameMode,
         roundTypes: options.roundTypes || [],
@@ -13063,7 +13148,7 @@ function ProductionApp() {
           }
         }
         const localGameId = `${TEST_GAME_PREFIX}${makeId('local')}`;
-        const localJoinCode = `TEST${makeJoinCode().slice(0, 2)}`;
+        const localJoinCode = requestedCreateCode || `TEST${makeJoinCode().slice(0, 2)}`;
         const hostName = profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player';
         const localOtherPlayerName = inviteTargetSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)';
         const createdAt = new Date().toISOString();
@@ -13141,7 +13226,7 @@ function ProductionApp() {
       }
 
       const gameRef = doc(firestore, 'games', makeId('game'));
-      const joinCode = await makeUniqueJoinCode(lobbyCode);
+      const joinCode = await makeUniqueJoinCode(requestedCreateCode);
       const openingGameState = {
         id: gameRef.id,
         joinCode,
