@@ -12073,6 +12073,7 @@ function ProductionApp() {
   const [lobbyCode, setLobbyCode] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [lobbyQuestionCount, setLobbyQuestionCount] = useState('10');
+  const [deferredLobbyDataReady, setDeferredLobbyDataReady] = useState(false);
   const [editingModeEnabled, setEditingModeEnabled] = useState(() => {
     try {
       return window.localStorage.getItem(editingModeKey) === 'true';
@@ -12369,6 +12370,44 @@ function ProductionApp() {
   }, []);
 
   useEffect(() => {
+    if (!user) {
+      setDeferredLobbyDataReady(false);
+      return undefined;
+    }
+    if (!firestore || hasOpenRoomSession || deferredLobbyDataReady) return undefined;
+    let cancelled = false;
+    let frameId = 0;
+    let timeoutId = 0;
+    let idleId = null;
+    const markReady = () => {
+      if (cancelled) return;
+      setDeferredLobbyDataReady(true);
+    };
+    const handleFirstInteraction = () => {
+      markReady();
+    };
+    window.addEventListener('pointerdown', handleFirstInteraction, { once: true, passive: true });
+    window.addEventListener('keydown', handleFirstInteraction, { once: true });
+    frameId = window.requestAnimationFrame(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(markReady, { timeout: 900 });
+        return;
+      }
+      timeoutId = window.setTimeout(markReady, 600);
+    });
+    return () => {
+      cancelled = true;
+      window.removeEventListener('pointerdown', handleFirstInteraction);
+      window.removeEventListener('keydown', handleFirstInteraction);
+      if (frameId) window.cancelAnimationFrame(frameId);
+      if (idleId !== null && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleId);
+      }
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
+  }, [deferredLobbyDataReady, firestore, hasOpenRoomSession, user]);
+
+  useEffect(() => {
     if (!user || !firestore) return undefined;
     const profileRef = doc(firestore, 'users', user.uid);
     const unsubscribe = onSnapshot(profileRef, (snapshot) => {
@@ -12518,7 +12557,7 @@ function ProductionApp() {
   }, [user, firestore]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setRedemptionItems([]);
       return undefined;
     }
@@ -12527,10 +12566,10 @@ function ProductionApp() {
       setRedemptionItems(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('redemptionItemsSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setRedemptionHistory([]);
       return undefined;
     }
@@ -12539,10 +12578,10 @@ function ProductionApp() {
       setRedemptionHistory(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('redemptionHistorySnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setForfeitPriceRequests([]);
       return undefined;
     }
@@ -12551,10 +12590,10 @@ function ProductionApp() {
       setForfeitPriceRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('forfeitRequestsSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setGameInvites([]);
       return undefined;
     }
@@ -12563,10 +12602,10 @@ function ProductionApp() {
       setGameInvites(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('gameInvitesSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setAmaRequests([]);
       return undefined;
     }
@@ -12575,10 +12614,10 @@ function ProductionApp() {
       setAmaRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('amaRequestsSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setDiaryEntries([]);
       return undefined;
     }
@@ -12587,10 +12626,10 @@ function ProductionApp() {
       setDiaryEntries(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => debugRoom('diaryEntriesSnapshotError', { message: error?.message || String(error) }));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user?.uid || hasOpenRoomSession) {
+    if (!firestore || !user?.uid || hasOpenRoomSession || !deferredLobbyDataReady) {
       setQuestionNotes([]);
       return undefined;
     }
@@ -12601,10 +12640,10 @@ function ProductionApp() {
       (error) => debugRoom('questionNotesSnapshotError', { message: error?.message || String(error) }),
     );
     return unsubscribe;
-  }, [user?.uid, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user?.uid, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user?.uid || hasOpenRoomSession) {
+    if (!firestore || !user?.uid || hasOpenRoomSession || !deferredLobbyDataReady) {
       setAiChatMessages([]);
       setOptimisticAiChatMessages([]);
       return undefined;
@@ -12625,10 +12664,10 @@ function ProductionApp() {
       },
     );
     return unsubscribe;
-  }, [user?.uid, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user?.uid, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!firestore || !user || !deferredLobbyDataReady) {
       setQuestionFeedback([]);
       return undefined;
     }
@@ -12639,10 +12678,10 @@ function ProductionApp() {
       (error) => debugRoom('questionFeedbackSnapshotError', { message: error?.message || String(error) }),
     );
     return unsubscribe;
-  }, [user, firestore]);
+  }, [deferredLobbyDataReady, user, firestore]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!firestore || !user || !deferredLobbyDataReady) {
       setQuestionReplays([]);
       return undefined;
     }
@@ -12653,10 +12692,10 @@ function ProductionApp() {
       (error) => debugRoom('questionReplaysSnapshotError', { message: error?.message || String(error) }),
     );
     return unsubscribe;
-  }, [user, firestore]);
+  }, [deferredLobbyDataReady, user, firestore]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setQuizAnswers([]);
       return undefined;
     }
@@ -12667,7 +12706,7 @@ function ProductionApp() {
       (error) => debugRoom('quizAnswersSnapshotError', { message: error?.message || String(error) }),
     );
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, firestore, hasOpenRoomSession]);
 
   useEffect(() => {
     if (!user || !firestore) return undefined;
@@ -14894,7 +14933,7 @@ function ProductionApp() {
     }, 'Could not save redemption item.');
 
   useEffect(() => {
-    if (!user || !firestore) return;
+    if (!user || !firestore || !deferredLobbyDataReady) return;
     seats.forEach((seat) => {
       const ownerPlayerId = playerIdForSeat(seat);
       const existingAmaItem = redemptionItems.find((item) => {
@@ -14936,7 +14975,7 @@ function ProductionApp() {
         amaStoreSeededRef.current[seat] = false;
       });
     });
-  }, [firestore, redemptionItems, user]);
+  }, [deferredLobbyDataReady, firestore, redemptionItems, user]);
 
   const deleteRedemptionItemAction = async (itemId) =>
     withBusy(async () => {
@@ -15303,7 +15342,7 @@ function ProductionApp() {
   }, [bankQuestions, firestore, sheetInput, trueFalseBankQuestions.length, user]);
 
   useEffect(() => {
-    if (!user || !firestore || autoSheetImportAttemptedRef.current) return;
+    if (!user || !firestore || !deferredLobbyDataReady || autoSheetImportAttemptedRef.current) return;
     if (gameId || game?.id) return;
     if (!bankQuestions.length || bankQuestions.length > STARTER_QUESTIONS.length) return;
     const looksStarterOnly = isStarterOnlyQuestionBank(bankQuestions);
@@ -15325,14 +15364,15 @@ function ProductionApp() {
       .catch((error) => {
         console.warn('Automatic Google Sheet top-up failed.', error);
       });
-  }, [user, firestore, bankQuestions, sheetInput, gameId, game?.id]);
+  }, [deferredLobbyDataReady, user, firestore, bankQuestions, sheetInput, gameId, game?.id]);
 
   useEffect(() => {
-    if (!user || !firestore) return;
+    if (!user || !firestore || !deferredLobbyDataReady) return;
     if (gameId || game?.id) return;
     if (trueFalseBankQuestions.length >= TRUE_FALSE_AUTO_SYNC_MIN_COUNT) return;
     void topUpTrueFalseBankFromDedicatedSheet();
   }, [
+    deferredLobbyDataReady,
     user,
     firestore,
     gameId,
