@@ -112,6 +112,14 @@ const TRUE_FALSE_UNANSWERED_PENALTY = 10;
 const TRUE_FALSE_TIMER_SECONDS = 8;
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const categoryColorMap = CATEGORY_COLOR_MAP;
+const HOLDEM_READY_SESSION_STATUSES = new Set(['ready_to_deal', 'hand_complete']);
+const HOLDEM_SESSION_PROGRESS_RANK = {
+  waiting_for_players: 0,
+  bankroll_blocked: 1,
+  ready_to_deal: 2,
+  hand_live: 3,
+  hand_complete: 4,
+};
 const buildHoldemBankrollsFromAccounts = (accounts = {}) => ({
   jay: Math.max(0, Math.floor(Number(accounts?.jay?.lifetimePenaltyPoints || 0) || 0)),
   kim: Math.max(0, Math.floor(Number(accounts?.kim?.lifetimePenaltyPoints || 0) || 0)),
@@ -119,6 +127,67 @@ const buildHoldemBankrollsFromAccounts = (accounts = {}) => ({
 const hasHoldemBankrollSnapshot = (balances = null) =>
   Number.isFinite(Number(balances?.jay))
   && Number.isFinite(Number(balances?.kim));
+const normalizeHoldemReadyBySeat = (readyBySeat = {}) => ({
+  jay: Boolean(readyBySeat?.jay),
+  kim: Boolean(readyBySeat?.kim),
+});
+const countHoldemReadySeats = (readyBySeat = {}) =>
+  seats.reduce((count, seatName) => count + (readyBySeat?.[seatName] ? 1 : 0), 0);
+const buildHoldemDealReadyStatusCopy = (readyBySeat = {}, currentReadySeat = '') => {
+  const normalizedReadyBySeat = normalizeHoldemReadyBySeat(readyBySeat);
+  const readySeats = seats.filter((seatName) => normalizedReadyBySeat[seatName]);
+  if (readySeats.length >= 2) return 'Both players are ready. Dealing the next hand…';
+  if (readySeats.length === 1) {
+    const waitingSeat = seats.find((seatName) => seatName !== readySeats[0]) || currentReadySeat || '';
+    return `${PLAYER_LABEL[readySeats[0]] || readySeats[0]} is ready. Waiting for ${PLAYER_LABEL[waitingSeat] || waitingSeat || 'the other player'} to click deal.`;
+  }
+  return 'Players are seated. Both players must click deal to start the hand.';
+};
+const mergeHoldemSnapshotState = (currentState = null, incomingState = null) => {
+  if (!currentState) return incomingState;
+  if (!incomingState) return currentState;
+  const currentHandNumber = Number(currentState?.handNumber || 0);
+  const incomingHandNumber = Number(incomingState?.handNumber || 0);
+  if (currentHandNumber > incomingHandNumber) return currentState;
+  if (incomingHandNumber > currentHandNumber) return incomingState;
+
+  const currentStatus = String(currentState?.sessionStatus || '');
+  const incomingStatus = String(incomingState?.sessionStatus || '');
+  const currentRank = HOLDEM_SESSION_PROGRESS_RANK[currentStatus] ?? 0;
+  const incomingRank = HOLDEM_SESSION_PROGRESS_RANK[incomingStatus] ?? 0;
+  if (currentRank > incomingRank) return currentState;
+  if (incomingRank > currentRank) return incomingState;
+
+  if (!HOLDEM_READY_SESSION_STATUSES.has(currentStatus) && !HOLDEM_READY_SESSION_STATUSES.has(incomingStatus)) {
+    return incomingState;
+  }
+
+  const currentReadyBySeat = normalizeHoldemReadyBySeat(currentState?.dealReadyBySeat || {});
+  const incomingReadyBySeat = normalizeHoldemReadyBySeat(incomingState?.dealReadyBySeat || {});
+  const mergedReadyBySeat = {
+    jay: currentReadyBySeat.jay || incomingReadyBySeat.jay,
+    kim: currentReadyBySeat.kim || incomingReadyBySeat.kim,
+  };
+  if (
+    mergedReadyBySeat.jay === incomingReadyBySeat.jay
+    && mergedReadyBySeat.kim === incomingReadyBySeat.kim
+  ) {
+    return incomingState;
+  }
+
+  const currentReadyCount = countHoldemReadySeats(currentReadyBySeat);
+  const incomingReadyCount = countHoldemReadySeats(incomingReadyBySeat);
+  return {
+    ...(currentReadyCount > incomingReadyCount ? currentState : incomingState),
+    ...incomingState,
+    sessionStatus: incomingStatus || currentStatus || 'ready_to_deal',
+    dealReadyBySeat: mergedReadyBySeat,
+    statusMessage: buildHoldemDealReadyStatusCopy(mergedReadyBySeat),
+    updatedAt: currentReadyCount >= incomingReadyCount
+      ? (currentState?.updatedAt || incomingState?.updatedAt || '')
+      : (incomingState?.updatedAt || currentState?.updatedAt || ''),
+  };
+};
 const defaultAuthForm = { displayName: '', email: '', password: '', resetEmail: '' };
 const defaultDraft = { ownAnswer: '', guessedOther: '' };
 const defaultPenaltyDraft = { jay: '0', kim: '0' };
@@ -2073,8 +2142,14 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
       const currentAgreementRank = getQuizWagerAgreementRank(currentGame?.quizWagerAgreement || null);
       const incomingAgreementRank = getQuizWagerAgreementRank(incomingGame?.quizWagerAgreement || null);
       const preserveCurrentAgreement = currentAgreementRank > incomingAgreementRank;
+      const isHoldemRoom = isHoldemGameMode(incomingGame?.gameMode || currentGame?.gameMode || 'standard');
       const mergedGame = {
         ...incomingGame,
+        ...(isHoldemRoom
+          ? {
+              holdemState: mergeHoldemSnapshotState(currentGame?.holdemState || null, incomingGame?.holdemState || null),
+            }
+          : {}),
         quizWagerAgreement: preserveCurrentAgreement
           ? (currentGame?.quizWagerAgreement || incomingGame?.quizWagerAgreement || null)
           : (incomingGame?.quizWagerAgreement || currentGame?.quizWagerAgreement || null),
@@ -16243,15 +16318,10 @@ function ProductionApp() {
       bothPlayersJoined,
     }), [playerAccounts]);
 
-  const buildHoldemDealReadyStatusMessage = useCallback((readyBySeat = {}, currentReadySeat = '') => {
-    const readySeats = seats.filter((seatName) => Boolean(readyBySeat?.[seatName]));
-    if (readySeats.length >= 2) return 'Both players are ready. Dealing the next hand…';
-    if (readySeats.length === 1) {
-      const waitingSeat = seats.find((seatName) => seatName !== readySeats[0]) || currentReadySeat || '';
-      return `${PLAYER_LABEL[readySeats[0]] || readySeats[0]} is ready. Waiting for ${PLAYER_LABEL[waitingSeat] || waitingSeat || 'the other player'} to click deal.`;
-    }
-    return 'Players are seated. Both players must click deal to start the hand.';
-  }, []);
+  const buildHoldemDealReadyStatusMessage = useCallback(
+    (readyBySeat = {}, currentReadySeat = '') => buildHoldemDealReadyStatusCopy(readyBySeat, currentReadySeat),
+    [],
+  );
 
   const startHoldemHand = async () => {
     if (isHoldemStartBusy) return null;
@@ -16287,6 +16357,66 @@ function ProductionApp() {
       if (!firestore) throw new Error('Firebase is not configured.');
       if (!currentSeat) throw new Error('Could not determine your Hold’em seat.');
       const gameRef = doc(firestore, 'games', game.id);
+      const localSourceState = game?.holdemState || initializeHoldemSessionState(currentSeat, true);
+      const localReadyBySeat = {
+        jay: Boolean(localSourceState?.dealReadyBySeat?.jay),
+        kim: Boolean(localSourceState?.dealReadyBySeat?.kim),
+      };
+      const localNextReadyBySeat = {
+        ...localReadyBySeat,
+        [currentSeat]: true,
+      };
+      const localSessionStatus = String(localSourceState?.sessionStatus || '');
+      const shouldOptimisticallyReadySeat = !localReadyBySeat[currentSeat]
+        && localSessionStatus !== 'hand_live'
+        && localSessionStatus !== 'waiting_for_players'
+        && localSessionStatus !== 'bankroll_blocked';
+      const previousLocalHoldemState = shouldOptimisticallyReadySeat ? localSourceState : null;
+      if (shouldOptimisticallyReadySeat) {
+        const optimisticUpdatedAt = new Date().toISOString();
+        const optimisticState = {
+          ...localSourceState,
+          dealReadyBySeat: localNextReadyBySeat,
+          statusMessage: buildHoldemDealReadyStatusMessage(localNextReadyBySeat, currentSeat),
+          updatedAt: optimisticUpdatedAt,
+        };
+        setGame((current) =>
+          current?.id === game.id
+            ? {
+                ...current,
+                holdemState: optimisticState,
+                updatedAt: optimisticUpdatedAt,
+              }
+            : current,
+        );
+        try {
+          await updateDoc(gameRef, {
+            [`holdemState.dealReadyBySeat.${currentSeat}`]: true,
+            'holdemState.statusMessage': optimisticState.statusMessage,
+            'holdemState.updatedAt': serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          setNotice(
+            localNextReadyBySeat.jay && localNextReadyBySeat.kim
+              ? 'Both Hold’em players are ready. Dealing the cards next.'
+              : 'Hold’em deal ready updated.',
+          );
+          return true;
+        } catch (error) {
+          if (!isFirestoreRateLimitedError(error)) {
+            setGame((current) =>
+              current?.id === game.id
+                ? {
+                    ...current,
+                    holdemState: previousLocalHoldemState,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : current,
+            );
+          }
+          throw error;
+        }
+      }
       const dealResult = await runTransaction(firestore, async (transaction) => {
         const gameSnap = await transaction.get(gameRef);
         if (!gameSnap.exists()) throw new Error('The Hold’em game no longer exists.');
