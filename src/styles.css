@@ -191,7 +191,7 @@ button:disabled {
 }
 
 .lobby-carousel-shell {
-  --lobby-carousel-card-height: clamp(640px, 74vh, 820px);
+  --lobby-carousel-card-height: clamp(560px, 68vh, 720px);
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -255,7 +255,7 @@ button:disabled {
 
 .lobby-carousel-slide {
   grid-area: 1 / 1;
-  width: min(780px, 100%);
+  width: min(700px, 100%);
   height: 100%;
   transition: transform 220ms ease, opacity 220ms ease, filter 220ms ease;
 }
@@ -274,7 +274,7 @@ button:disabled {
   top: 4px;
   left: 50%;
   z-index: 1;
-  width: min(620px, 74%);
+  width: min(560px, 72%);
   max-height: calc(100% - 12px);
   overflow: hidden;
   opacity: 0.48;
@@ -338,10 +338,22 @@ button:disabled {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  background:
-    linear-gradient(180deg, rgba(5, 10, 19, 0.08), rgba(5, 10, 19, 0.22)),
-    var(--lobby-tile-image) var(--lobby-tile-position, center center) / cover no-repeat,
-    linear-gradient(180deg, rgba(11, 20, 38, 0.96), rgba(5, 11, 21, 0.98));
+  background-image:
+    linear-gradient(180deg, rgba(5, 10, 19, 0.02), rgba(5, 10, 19, 0.18)),
+    var(--lobby-tile-image),
+    linear-gradient(180deg, rgba(11, 20, 38, 0.94), rgba(5, 11, 21, 0.97));
+  background-position:
+    center center,
+    var(--lobby-tile-position, center center),
+    center center;
+  background-size:
+    cover,
+    cover,
+    cover;
+  background-repeat:
+    no-repeat,
+    no-repeat,
+    no-repeat;
 }
 
 .lobby-image-tile::before {
@@ -350,9 +362,9 @@ button:disabled {
   inset: 0;
   z-index: 0;
   background:
-    linear-gradient(180deg, rgba(4, 9, 17, 0.1) 0%, rgba(4, 9, 17, 0.56) 34%, rgba(4, 9, 17, 0.86) 100%),
-    radial-gradient(circle at top right, rgba(255, 224, 138, 0.2), transparent 30%),
-    radial-gradient(circle at left center, rgba(63, 121, 255, 0.18), transparent 34%);
+    linear-gradient(180deg, rgba(4, 9, 17, 0.2) 0%, rgba(4, 9, 17, 0.42) 32%, rgba(4, 9, 17, 0.78) 100%),
+    radial-gradient(circle at top right, rgba(255, 224, 138, 0.18), transparent 32%),
+    radial-gradient(circle at left center, rgba(63, 121, 255, 0.14), transparent 36%);
   pointer-events: none;
 }
 
@@ -362,15 +374,15 @@ button:disabled {
 }
 
 .lobby-image-tile--normal {
-  --lobby-tile-position: center 18%;
-}
-
-.lobby-image-tile--quiz {
   --lobby-tile-position: center 16%;
 }
 
+.lobby-image-tile--quiz {
+  --lobby-tile-position: center 14%;
+}
+
 .lobby-image-tile--holdem {
-  --lobby-tile-position: center 24%;
+  --lobby-tile-position: center 20%;
 }
 
 .lobby-image-tile .field,
@@ -389,7 +401,7 @@ button:disabled {
 .lobby-image-tile .field input,
 .lobby-image-tile .field select,
 .lobby-image-tile .field textarea {
-  background: rgba(8, 15, 28, 0.74);
+  background: rgba(8, 15, 28, 0.72);
   border-color: rgba(255, 255, 255, 0.16);
   color: #fff;
 }
@@ -398,7 +410,7 @@ button:disabled {
 .lobby-image-tile .field-note {
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(6, 13, 24, 0.52);
+  background: rgba(6, 13, 24, 0.46);
 }
 
 .lobby-carousel-slide .lobby-panel {
@@ -441,7 +453,7 @@ button:disabled {
     grid-template-columns: 1fr;
   }
   .lobby-carousel-shell {
-    --lobby-carousel-card-height: clamp(600px, 76svh, 760px);
+    --lobby-carousel-card-height: clamp(520px, 70svh, 660px);
   }
   .lobby-carousel-header {
     align-items: start;
