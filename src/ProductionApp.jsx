@@ -7400,6 +7400,8 @@ function HoldemActionControls({
   );
   const dealReadyBySeat = holdemState?.dealReadyBySeat || { jay: false, kim: false };
   const viewerDealReady = Boolean(dealReadyBySeat?.[viewerSeat]);
+  const bothPlayersDealReady = Boolean(dealReadyBySeat.jay && dealReadyBySeat.kim);
+  const isFirstHoldemHand = Number(holdemState?.handNumber || 0) <= 0;
   const otherSeatWaitingOnDeal = dealReadyBySeat.jay && !dealReadyBySeat.kim
     ? 'kim'
     : dealReadyBySeat.kim && !dealReadyBySeat.jay
@@ -7439,19 +7441,25 @@ function HoldemActionControls({
     return (
       <div className="holdem-action-stack">
         <p className="panel-copy holdem-action-copy">
-          {viewerDealReady && otherSeatWaitingOnDeal
+          {bothPlayersDealReady
+            ? 'Both players are ready. The table is dealing now.'
+            : viewerDealReady && otherSeatWaitingOnDeal
             ? `You are ready. Waiting for ${PLAYER_LABEL[otherSeatWaitingOnDeal] || otherSeatWaitingOnDeal} to click Deal First Hand.`
-            : holdemState.statusMessage || 'Players are seated. Both players must click Deal First Hand to begin.'}
+            : isFirstHoldemHand
+              ? 'Use the ready popup to lock in the first hand.'
+              : holdemState.statusMessage || 'Players are seated. Both players must click Deal First Hand to begin.'}
         </p>
-        <div className="button-row holdem-action-row">
-          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || viewerDealReady}>
-            {viewerDealReady
-              ? 'Ready'
-              : Number(holdemState.handNumber || 0) > 0
-                ? 'Deal Next Hand'
-                : 'Deal First Hand'}
-          </Button>
-        </div>
+        {(!isFirstHoldemHand || bothPlayersDealReady) ? (
+          <div className="button-row holdem-action-row">
+            <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || (viewerDealReady && !bothPlayersDealReady)}>
+              {bothPlayersDealReady
+                ? 'Deal Now'
+                : viewerDealReady
+                  ? 'Ready'
+                  : 'Deal Next Hand'}
+            </Button>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -7466,13 +7474,15 @@ function HoldemActionControls({
     return (
       <div className="holdem-action-stack">
         <p className="panel-copy holdem-action-copy">
-          {resultLabel}. {viewerDealReady && otherSeatWaitingOnDeal
-            ? `You are ready for the next hand. Waiting for ${PLAYER_LABEL[otherSeatWaitingOnDeal] || otherSeatWaitingOnDeal}.`
-            : holdemState.statusMessage || 'Review the showdown, then both players can deal the next hand.'}
+          {resultLabel}. {bothPlayersDealReady
+            ? 'Both players are ready. The next hand should deal now.'
+            : viewerDealReady && otherSeatWaitingOnDeal
+              ? `You are ready for the next hand. Waiting for ${PLAYER_LABEL[otherSeatWaitingOnDeal] || otherSeatWaitingOnDeal}.`
+              : holdemState.statusMessage || 'Review the showdown, then both players can deal the next hand.'}
         </p>
         <div className="button-row holdem-action-row">
-          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || viewerDealReady}>
-            {viewerDealReady ? 'Ready' : 'Deal Next Hand'}
+          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || (viewerDealReady && !bothPlayersDealReady)}>
+            {bothPlayersDealReady ? 'Deal Now' : viewerDealReady ? 'Ready' : 'Deal Next Hand'}
           </Button>
         </div>
       </div>
@@ -7542,6 +7552,76 @@ function HoldemActionControls({
         </div>
       )}
     </div>
+  );
+}
+
+function HoldemReadyModal({
+  holdemState,
+  viewerSeat,
+  isBusy,
+  onStartHand,
+}) {
+  if (!holdemState || holdemState.sessionStatus !== 'ready_to_deal' || Number(holdemState.handNumber || 0) > 0) {
+    return null;
+  }
+
+  const dealReadyBySeat = holdemState?.dealReadyBySeat || { jay: false, kim: false };
+  const viewerDealReady = Boolean(dealReadyBySeat?.[viewerSeat]);
+  const bothPlayersDealReady = Boolean(dealReadyBySeat.jay && dealReadyBySeat.kim);
+  const waitingSeat = dealReadyBySeat.jay && !dealReadyBySeat.kim
+    ? 'kim'
+    : dealReadyBySeat.kim && !dealReadyBySeat.jay
+      ? 'jay'
+      : '';
+  const title = bothPlayersDealReady
+    ? 'Both Players Ready'
+    : viewerDealReady
+      ? 'Ready Locked In'
+      : 'Ready For First Hand';
+  const body = bothPlayersDealReady
+    ? 'Both players have clicked ready. The cards should deal immediately, and you can tap below to retry the deal if the table is still waiting.'
+    : viewerDealReady && waitingSeat
+      ? `Your ready click is locked in. Waiting for ${PLAYER_LABEL[waitingSeat] || waitingSeat} to confirm the first hand.`
+      : 'Both players need to click ready before the first Hold’em hand will be dealt.';
+
+  return (
+    <section className="modal-backdrop holdem-ready-modal-backdrop" role="presentation">
+      <div
+        className="panel modal-panel holdem-ready-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Ready for first hand"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Texas Hold'em</p>
+            <h2>{title}</h2>
+          </div>
+          <span className="status-pill">
+            {viewerDealReady ? 'Ready' : 'Waiting'}
+          </span>
+        </div>
+        <p className="panel-copy">{body}</p>
+        <div className="holdem-ready-modal-status">
+          {seats.map((seatName) => (
+            <article className="mini-list-row" key={`holdem-ready-seat-${seatName}`}>
+              <strong>{PLAYER_LABEL[seatName] || seatName}</strong>
+              <span>{dealReadyBySeat?.[seatName] ? 'Ready' : 'Waiting'}</span>
+            </article>
+          ))}
+        </div>
+        <div className="button-row holdem-ready-modal-actions">
+          <Button className="primary-button compact" onClick={onStartHand} disabled={isBusy || (viewerDealReady && !bothPlayersDealReady)}>
+            {bothPlayersDealReady
+              ? 'Deal Cards Now'
+              : viewerDealReady
+                ? 'Ready Locked'
+                : 'Ready For First Hand'}
+          </Button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -7741,6 +7821,36 @@ function HoldemGameRoom({
       : Number(holdemState?.lastSettledBalances?.kim || holdemState?.players?.kim?.stack || playerAccounts?.kim?.lifetimePenaltyPoints || 0),
   };
   const roomMenuRef = useRef(null);
+  const autoDealAttemptRef = useRef('');
+  const readySeats = holdemState?.dealReadyBySeat || { jay: false, kim: false };
+  const bothPlayersDealReady = Boolean(readySeats.jay && readySeats.kim);
+  const shouldAutoRetryReadyDeal = Boolean(
+    game?.id
+    && bothPlayersDealReady
+    && (holdemState?.sessionStatus === 'ready_to_deal' || holdemState?.sessionStatus === 'hand_complete'),
+  );
+  const autoDealAttemptKey = [
+    game?.id || '',
+    holdemState?.sessionStatus || '',
+    Number(holdemState?.handNumber || 0),
+    Number(readySeats.jay),
+    Number(readySeats.kim),
+  ].join(':');
+
+  useEffect(() => {
+    if (!shouldAutoRetryReadyDeal || isBusy || typeof onStartHoldemHand !== 'function') return;
+    if (autoDealAttemptRef.current === autoDealAttemptKey) return;
+    autoDealAttemptRef.current = autoDealAttemptKey;
+    Promise.resolve(onStartHoldemHand()).catch((error) => {
+      console.warn('Could not auto-start the ready Hold’em hand.', error);
+      autoDealAttemptRef.current = '';
+    });
+  }, [autoDealAttemptKey, isBusy, onStartHoldemHand, shouldAutoRetryReadyDeal]);
+
+  useEffect(() => {
+    if (!shouldAutoRetryReadyDeal) autoDealAttemptRef.current = '';
+  }, [shouldAutoRetryReadyDeal]);
+
   const closeRoomMenu = () => {
     roomMenuRef.current?.removeAttribute('open');
   };
@@ -7881,6 +7991,12 @@ function HoldemGameRoom({
         </section>
       )}
       {notice ? <div className="toast">{notice}</div> : null}
+      <HoldemReadyModal
+        holdemState={holdemState}
+        viewerSeat={resolvedViewerSeat}
+        isBusy={isBusy}
+        onStartHand={onStartHoldemHand}
+      />
       <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
     </main>
   );
