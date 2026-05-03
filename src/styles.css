@@ -4294,6 +4294,19 @@ button:disabled {
     rgba(8, 12, 24, 0.94);
 }
 
+.diary-heading-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.diary-ai-status {
+  margin-top: 10px;
+}
+
+.diary-ai-status.has-error {
+  color: #ffd3d3;
+}
+
 .shared-diary-intro {
   display: grid;
   gap: 12px;
@@ -4509,6 +4522,17 @@ button:disabled {
   margin: 0;
   color: rgba(255, 244, 230, 0.84);
   line-height: 1.6;
+}
+
+.shared-diary-answer-block--error {
+  padding: 12px;
+  border: 1px solid rgba(255, 135, 135, 0.28);
+  border-radius: 16px;
+  background: rgba(120, 20, 26, 0.18);
+}
+
+.diary-ai-prose {
+  white-space: pre-line;
 }
 
 .shared-diary-snapshot-grid {

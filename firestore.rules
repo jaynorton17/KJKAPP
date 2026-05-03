@@ -66,6 +66,14 @@ service cloud.firestore {
       allow read, write: if signedIn();
     }
 
+    match /amaRequests/{requestId} {
+      allow read, write: if signedIn();
+    }
+
+    match /diaryEntries/{entryId} {
+      allow read, write: if signedIn();
+    }
+
     match /forfeitPriceRequests/{requestId} {
       allow read, write: if signedIn();
     }

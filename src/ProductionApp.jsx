@@ -101,6 +101,11 @@ import {
 import { loadThemeIndex, saveThemeIndex } from './utils/storage.js';
 import { firebaseAuth, firebaseIsConfigured, firestore, storage } from './lib/firebase.js';
 import {
+  geminiConfig,
+  geminiIsConfigured,
+  generateGeminiDiaryWriteup,
+} from './lib/gemini.js';
+import {
   parseGoogleSheetImport,
   parseGoogleSheetQuizImport,
   parseGoogleSheetReference,
@@ -310,6 +315,9 @@ const QUIZ_SETUP_COUNTDOWN_MS = 3000;
 const QUIZ_REVEAL_FLASH_MS = 3000;
 const AI_CHAT_MESSAGE_LIMIT = 160;
 const AI_EVIDENCE_PREVIEW_LIMIT = 4;
+const AI_DIARY_PROMPT_VERSION = '2026-05-03-v1';
+const AI_DIARY_GAME_HIGHLIGHT_LIMIT = 8;
+const AI_DIARY_SIGNAL_LIMIT = 4;
 const AI_SEARCH_STOPWORDS = new Set([
   'a',
   'about',
@@ -1213,6 +1221,456 @@ const getAiRoundSeatOwnAnswer = (round = {}, seat = 'jay') => {
   );
 };
 
+const isGameDiaryEntry = (entry = {}) =>
+  normalizeIdentity(entry.sourceType || entry.entryType || entry.linkedType) === 'game';
+
+const isDiaryBookEntry = (entry = {}) => isAmaDiaryEntry(entry) || isGameDiaryEntry(entry);
+
+const buildGameDiaryEntryId = (gameId = '') => `game-diary-${normalizeText(gameId) || 'unknown'}`;
+
+const buildAiDiaryGenerationKey = (sourceType = '', sourceId = '') =>
+  `${normalizeIdentity(sourceType || 'game')}::${normalizeText(sourceId) || 'unknown'}`;
+
+const getDiaryGameModeLabel = (gameMode = 'standard') => {
+  if (resolveGameMode(gameMode) === 'quiz') return 'Quick Fire Quiz';
+  if (isThisOrThatGameMode(gameMode)) return 'This or That';
+  if (isTrueFalseGameMode(gameMode)) return 'True or False';
+  return 'Standard Game';
+};
+
+const buildGameDiaryScoreContext = (gameSummary = {}) => {
+  const gameMode = resolveGameMode(gameSummary?.gameMode || 'standard');
+  const winnerSeat = gameSummary?.winner === 'kim' ? 'kim' : gameSummary?.winner === 'jay' ? 'jay' : '';
+  const winnerLabel = winnerSeat ? PLAYER_LABEL[winnerSeat] || winnerSeat : 'No one';
+  if (gameMode === 'quiz') {
+    const quizTotals = {
+      jay: Number(gameSummary?.quizTotals?.jay || 0),
+      kim: Number(gameSummary?.quizTotals?.kim || 0),
+    };
+    const summary = winnerSeat
+      ? `${winnerLabel} won the Quick Fire Quiz ${quizTotals.jay}-${quizTotals.kim} on quiz points.`
+      : `The Quick Fire Quiz finished level at ${quizTotals.jay}-${quizTotals.kim}.`;
+    return {
+      gameMode,
+      winnerSeat,
+      winnerLabel,
+      scoreLabel: 'Quiz points',
+      scoreStyle: 'Higher quiz points wins.',
+      scoreDisplay: `Jay ${quizTotals.jay} · Kim ${quizTotals.kim}`,
+      summary,
+      finalScores: null,
+      quizTotals,
+    };
+  }
+
+  const finalScores = {
+    jay: Number(gameSummary?.finalScores?.jay ?? gameSummary?.totals?.jay ?? 0),
+    kim: Number(gameSummary?.finalScores?.kim ?? gameSummary?.totals?.kim ?? 0),
+  };
+  const summary = winnerSeat
+    ? `${winnerLabel} won on penalty points ${formatScore(finalScores.jay)} to ${formatScore(finalScores.kim)}.`
+    : `The game ended level on penalty points at ${formatScore(finalScores.jay)} each.`;
+  return {
+    gameMode,
+    winnerSeat,
+    winnerLabel,
+    scoreLabel: 'Penalty points',
+    scoreStyle: 'Lower penalty points wins.',
+    scoreDisplay: `Jay ${formatScore(finalScores.jay)} · Kim ${formatScore(finalScores.kim)}`,
+    summary,
+    finalScores,
+    quizTotals: null,
+  };
+};
+
+const collectDiaryTopCategories = (rounds = [], limit = AI_DIARY_SIGNAL_LIMIT) =>
+  [...(rounds || []).reduce((bucket, round) => {
+    const key = normalizeText(round?.category) || 'Uncategorised';
+    bucket.set(key, Number(bucket.get(key) || 0) + 1);
+    return bucket;
+  }, new Map()).entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([label, count]) => ({ label, count }));
+
+const buildDiaryFeedbackSummary = (questionFeedback = [], gameId = '') => {
+  const feedbackRows = (questionFeedback || []).filter(
+    (entry) => normalizeText(entry?.gameId || '') === normalizeText(gameId),
+  );
+  const byQuestion = new Map();
+  const bySeat = {
+    jay: { liked: 0, disliked: 0 },
+    kim: { liked: 0, disliked: 0 },
+  };
+
+  feedbackRows.forEach((entry) => {
+    const seat = seatFromPlayerRef(entry?.userSeat || entry?.userId) || '';
+    const value = entry?.feedbackValue === 'liked' ? 'liked' : entry?.feedbackValue === 'disliked' ? 'disliked' : '';
+    if (!seat || !value) return;
+    bySeat[seat][value] += 1;
+    const questionKey = normalizeText(entry?.questionId || entry?.questionText || entry?.id);
+    if (!questionKey) return;
+    const current = byQuestion.get(questionKey) || {
+      questionText: normalizeText(entry?.questionText || entry?.questionId || 'Question'),
+      category: normalizeText(entry?.category || ''),
+      roundType: normalizeText(entry?.roundType || ''),
+      feedbackBySeat: {},
+    };
+    current.feedbackBySeat[seat] = value;
+    byQuestion.set(questionKey, current);
+  });
+
+  const sharedLiked = [];
+  const splitOpinions = [];
+  const bothDisliked = [];
+
+  [...byQuestion.values()].forEach((row) => {
+    const jayFeedback = row?.feedbackBySeat?.jay || '';
+    const kimFeedback = row?.feedbackBySeat?.kim || '';
+    const summaryRow = {
+      questionText: row.questionText,
+      category: row.category || 'Uncategorised',
+      roundType: ROUND_TYPE_LABEL[row.roundType] || row.roundType || 'Question',
+    };
+    if (jayFeedback === 'liked' && kimFeedback === 'liked') sharedLiked.push(summaryRow);
+    else if (jayFeedback === 'disliked' && kimFeedback === 'disliked') bothDisliked.push(summaryRow);
+    else if ((jayFeedback && kimFeedback) && jayFeedback !== kimFeedback) splitOpinions.push(summaryRow);
+  });
+
+  return {
+    bySeat,
+    sharedLiked: sharedLiked.slice(0, AI_DIARY_SIGNAL_LIMIT),
+    bothDisliked: bothDisliked.slice(0, AI_DIARY_SIGNAL_LIMIT),
+    splitOpinions: splitOpinions.slice(0, AI_DIARY_SIGNAL_LIMIT),
+  };
+};
+
+const buildDiaryReplaySummary = (questionReplays = [], gameId = '') => {
+  const replayMap = new Map();
+  (questionReplays || [])
+    .filter((entry) => Boolean(entry?.replayRequested) && normalizeText(entry?.gameId || '') === normalizeText(gameId))
+    .forEach((entry) => {
+      const key = normalizeText(entry?.questionId || entry?.questionText || entry?.id);
+      if (!key) return;
+      const current = replayMap.get(key) || {
+        questionText: normalizeText(entry?.questionText || entry?.questionId || 'Question'),
+        category: normalizeText(entry?.category || '') || 'Uncategorised',
+        requestedBy: new Set(),
+      };
+      current.requestedBy.add(playerLabelForRef(entry?.userSeat || entry?.userId || ''));
+      replayMap.set(key, current);
+    });
+
+  return [...replayMap.values()]
+    .map((entry) => ({
+      questionText: entry.questionText,
+      category: entry.category,
+      requestedBy: [...entry.requestedBy].filter(Boolean),
+    }))
+    .slice(0, AI_DIARY_SIGNAL_LIMIT);
+};
+
+const buildDiaryQuizSummary = (quizAnswers = [], gameId = '') => {
+  const rows = (quizAnswers || []).filter(
+    (entry) => normalizeText(entry?.quizSessionId || entry?.gameId || '') === normalizeText(gameId),
+  );
+  if (!rows.length) return null;
+
+  const bySeat = {
+    jay: { answered: 0, correct: 0, incorrect: 0, points: 0, totalTimeMs: 0, fastestMs: null },
+    kim: { answered: 0, correct: 0, incorrect: 0, points: 0, totalTimeMs: 0, fastestMs: null },
+  };
+  const categoryMap = new Map();
+
+  rows.forEach((entry) => {
+    const seat = seatFromPlayerRef(entry?.playerSeat || entry?.playerId) || '';
+    if (!seat) return;
+    const wasCorrect = Boolean(entry?.finalResult === 'correct' || entry?.wasCorrect);
+    const pointsAwarded = Number(entry?.pointsAwarded || 0);
+    const answerTimeMs = Math.max(0, Number(entry?.answerTimeMs || entry?.answerTime || 0));
+    bySeat[seat].answered += 1;
+    if (wasCorrect) bySeat[seat].correct += 1;
+    else bySeat[seat].incorrect += 1;
+    bySeat[seat].points += pointsAwarded;
+    bySeat[seat].totalTimeMs += answerTimeMs;
+    if (bySeat[seat].fastestMs === null || answerTimeMs < bySeat[seat].fastestMs) {
+      bySeat[seat].fastestMs = answerTimeMs;
+    }
+
+    const categoryKey = normalizeText(entry?.category || '') || 'Uncategorised';
+    const categoryRow = categoryMap.get(categoryKey) || {
+      category: categoryKey,
+      bySeat: {
+        jay: { answered: 0, correct: 0, points: 0 },
+        kim: { answered: 0, correct: 0, points: 0 },
+      },
+    };
+    categoryRow.bySeat[seat].answered += 1;
+    if (wasCorrect) categoryRow.bySeat[seat].correct += 1;
+    categoryRow.bySeat[seat].points += pointsAwarded;
+    categoryMap.set(categoryKey, categoryRow);
+  });
+
+  const strongestCategoryForSeat = (seat = 'jay') =>
+    [...categoryMap.values()]
+      .map((row) => {
+        const answered = Number(row.bySeat?.[seat]?.answered || 0);
+        const correct = Number(row.bySeat?.[seat]?.correct || 0);
+        return {
+          category: row.category,
+          answered,
+          correct,
+          accuracy: answered ? Math.round((correct / answered) * 100) : 0,
+          points: Number(row.bySeat?.[seat]?.points || 0),
+        };
+      })
+      .filter((row) => row.answered > 0)
+      .sort((left, right) => right.accuracy - left.accuracy || right.points - left.points || right.answered - left.answered)
+      .slice(0, 2);
+
+  return {
+    totalQuestions: rows.length,
+    bySeat: {
+      jay: {
+        ...bySeat.jay,
+        accuracy: bySeat.jay.answered ? Math.round((bySeat.jay.correct / bySeat.jay.answered) * 100) : 0,
+        averageTimeMs: bySeat.jay.answered ? Math.round(bySeat.jay.totalTimeMs / bySeat.jay.answered) : 0,
+      },
+      kim: {
+        ...bySeat.kim,
+        accuracy: bySeat.kim.answered ? Math.round((bySeat.kim.correct / bySeat.kim.answered) * 100) : 0,
+        averageTimeMs: bySeat.kim.answered ? Math.round(bySeat.kim.totalTimeMs / bySeat.kim.answered) : 0,
+      },
+    },
+    strongestCategories: {
+      jay: strongestCategoryForSeat('jay'),
+      kim: strongestCategoryForSeat('kim'),
+    },
+  };
+};
+
+const buildGameDiaryRoundHighlights = (gameSummary = {}) => {
+  const gameMode = resolveGameMode(gameSummary?.gameMode || 'standard');
+  return normalizeStoredRounds(gameSummary?.rounds || [])
+    .slice(0, AI_DIARY_GAME_HIGHLIGHT_LIMIT)
+    .map((round, index) => ({
+      round: Number(round?.number || index + 1),
+      question: truncateAiText(round?.question || 'Question', 148),
+      category: normalizeText(round?.category || '') || 'Uncategorised',
+      roundType: ROUND_TYPE_LABEL[round?.roundType] || round?.roundType || 'Question',
+      jayAnswer: truncateAiText(getAiRoundSeatOwnAnswer(round, 'jay') || 'No answer recorded', 110),
+      kimAnswer: truncateAiText(getAiRoundSeatOwnAnswer(round, 'kim') || 'No answer recorded', 110),
+      jayGuess: gameMode === 'quiz' ? '' : truncateAiText(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '', 84),
+      kimGuess: gameMode === 'quiz' ? '' : truncateAiText(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '', 84),
+      winner: round?.winner ? PLAYER_LABEL[round.winner] || round.winner : 'Tie',
+      jayPenalty: Number(round?.penaltyAdded?.jay ?? round?.scores?.jay ?? 0),
+      kimPenalty: Number(round?.penaltyAdded?.kim ?? round?.scores?.kim ?? 0),
+    }));
+};
+
+const buildGameDiaryAnalyticsSummary = (analytics = null) => {
+  if (!analytics) return null;
+  return {
+    leaderboardSummary: analytics?.leaderboardSummary || '',
+    mostCommonCategory: analytics?.mostCommonCategory || '',
+    strongestCategoryJay: analytics?.bestCategory?.jay || '',
+    strongestCategoryKim: analytics?.bestCategory?.kim || '',
+    weakestCategoryJay: analytics?.worstCategory?.jay || '',
+    weakestCategoryKim: analytics?.worstCategory?.kim || '',
+    closestCategory: analytics?.closestCategory || '',
+    mostOneSidedCategory: analytics?.mostOneSidedCategory || '',
+    currentStreakLabel: analytics?.currentStreak?.count
+      ? `${PLAYER_LABEL[analytics.currentStreak.winner] || analytics.currentStreak.winner} x${analytics.currentStreak.count}`
+      : '',
+    favouriteRoundType: analytics?.favouriteRoundType || '',
+    roundWins: {
+      jay: Number(analytics?.roundWins?.jay || 0),
+      kim: Number(analytics?.roundWins?.kim || 0),
+    },
+  };
+};
+
+const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = null) => {
+  const baseLabel = getDiaryGameModeLabel(gameSummary?.gameMode || 'standard');
+  const winnerLabel = scoreContext?.winnerSeat ? PLAYER_LABEL[scoreContext.winnerSeat] || scoreContext.winnerSeat : 'Tie Game';
+  if ((scoreContext?.gameMode || resolveGameMode(gameSummary?.gameMode || 'standard')) === 'quiz') {
+    return scoreContext?.winnerSeat ? `${winnerLabel} took the ${baseLabel}` : `${baseLabel} ended all square`;
+  }
+  return scoreContext?.winnerSeat ? `${winnerLabel} edged the ${baseLabel}` : `${baseLabel} finished level`;
+};
+
+const buildAiGameDiaryFacts = ({
+  gameSummary = {},
+  questionFeedback = [],
+  questionReplays = [],
+  quizAnswers = [],
+} = {}) => {
+  const rounds = normalizeStoredRounds(gameSummary?.rounds || []);
+  const gameMode = resolveGameMode(gameSummary?.gameMode || 'standard');
+  const scoreContext = buildGameDiaryScoreContext(gameSummary);
+  const analytics = gameMode === 'quiz' ? null : calculateAnalytics(rounds);
+  const feedbackSummary = buildDiaryFeedbackSummary(questionFeedback, gameSummary?.id || '');
+  const replaySummary = buildDiaryReplaySummary(questionReplays, gameSummary?.id || '');
+  const quizSummary = gameMode === 'quiz' ? buildDiaryQuizSummary(quizAnswers, gameSummary?.id || '') : null;
+  const topCategories = collectDiaryTopCategories(rounds);
+
+  return {
+    promptVersion: AI_DIARY_PROMPT_VERSION,
+    sourceType: 'game',
+    game: {
+      id: normalizeText(gameSummary?.id || ''),
+      name: normalizeText(gameSummary?.name || gameSummary?.gameName || '') || `Game ${normalizeText(gameSummary?.joinCode || gameSummary?.id || '').trim() || 'session'}`,
+      joinCode: normalizeText(gameSummary?.joinCode || ''),
+      gameMode,
+      gameModeLabel: getDiaryGameModeLabel(gameMode),
+      roundsPlayed: Math.max(Number(gameSummary?.roundsPlayed || 0), rounds.length),
+      createdAt: gameSummary?.createdAt || null,
+      endedAt: gameSummary?.endedAt || null,
+      winnerSeat: scoreContext?.winnerSeat || '',
+      winner: scoreContext?.winnerSeat ? scoreContext.winnerLabel : 'Tie',
+      scoreLabel: scoreContext?.scoreLabel || '',
+      scoreStyle: scoreContext?.scoreStyle || '',
+      scoreDisplay: scoreContext?.scoreDisplay || '',
+      scoreSummary: scoreContext?.summary || '',
+      finalScores: scoreContext?.finalScores,
+      quizTotals: scoreContext?.quizTotals,
+      wagerSettlement: gameSummary?.wagerSettlement || null,
+    },
+    categories: topCategories,
+    analytics: buildGameDiaryAnalyticsSummary(analytics),
+    questionHighlights: buildGameDiaryRoundHighlights(gameSummary),
+    feedback: feedbackSummary,
+    replayRequests: replaySummary,
+    quiz: quizSummary,
+    privacy: {
+      privateNotesIncluded: false,
+      privateNotesReason: 'Shared diary chapters omit private question notes so nothing user-specific leaks across players.',
+    },
+  };
+};
+
+const buildAiAmaDiaryFacts = ({
+  requestData = {},
+  answer = '',
+  story = '',
+  relatedCategories = [],
+  analyticsSnapshot = null,
+  attachments = [],
+} = {}) => {
+  const categoryList = Array.isArray(relatedCategories) ? relatedCategories.filter(Boolean) : [];
+  const snapshotInsights = Array.isArray(analyticsSnapshot?.categoryInsights)
+    ? analyticsSnapshot.categoryInsights.slice(0, AI_DIARY_SIGNAL_LIMIT).map((entry) => entry?.summary || '').filter(Boolean)
+    : [];
+  return {
+    promptVersion: AI_DIARY_PROMPT_VERSION,
+    sourceType: 'ama',
+    ama: {
+      sourceId: normalizeText(requestData?.id || requestData?.requestId || ''),
+      itemTitle: normalizeText(requestData?.itemTitle || 'AMA / Ask Me Anything'),
+      askedBy: playerLabelForRef(requestData?.requestedByUserId || requestData?.requestedByPlayerId || ''),
+      answeredBy: playerLabelForRef(requestData?.storeOwnerUserId || requestData?.requestedFromUserId || requestData?.ownerPlayerId || ''),
+      question: normalizeText(requestData?.question || ''),
+      answer: normalizeText(answer || requestData?.answer || ''),
+      story: normalizeText(story || requestData?.story || ''),
+      relatedCategories: categoryList,
+      mediaCount: Array.isArray(attachments) ? attachments.length : Array.isArray(requestData?.media) ? requestData.media.length : 0,
+    },
+    snapshot: analyticsSnapshot
+      ? {
+          capturedAt: analyticsSnapshot?.capturedAt || null,
+          leaderboardSummary: analyticsSnapshot?.summary?.leaderboardSummary || '',
+          currentStreakLabel: analyticsSnapshot?.summary?.currentStreakLabel || '',
+          mostCommonCategory: analyticsSnapshot?.summary?.mostCommonCategory || '',
+          categoryInsights: snapshotInsights,
+        }
+      : null,
+    privacy: {
+      privateNotesIncluded: false,
+      privateNotesReason: 'Shared AMA diary chapters omit private question notes so nothing user-specific leaks across players.',
+    },
+  };
+};
+
+const buildAiDiarySystemInstruction = (sourceType = 'game') => [
+  'You are KJK AI, writing a private shared diary chapter for Jay and Kim inside the KJK app.',
+  sourceType === 'ama'
+    ? 'Turn the supplied AMA facts into a funny, warm, affectionate diary chapter.'
+    : 'Turn the supplied game facts into a funny, warm, affectionate diary chapter.',
+  'Use only the supplied facts. Do not invent hidden events, feelings, scores, or questions.',
+  'Mention the result and winner if the facts include one.',
+  'Explain what Jay and Kim learned about each other, what went well, and who struggled where, while staying kind and playful.',
+  'Do not sound clinical, robotic, mean, or generic.',
+  'Keep quiz scoring and penalty-point scoring separate: quiz points are higher-is-better, penalty points are lower-is-better.',
+  'Do not mention private notes, prompts, raw JSON, Firestore, databases, or internal tooling.',
+  'Return strict JSON only in the requested schema.',
+].join('\n');
+
+const buildLocalGameDiaryWriteup = (facts = {}) => {
+  const game = facts?.game || {};
+  const feedback = facts?.feedback || {};
+  const replayRequests = facts?.replayRequests || [];
+  const analytics = facts?.analytics || null;
+  const quiz = facts?.quiz || null;
+  const firstMoment = facts?.questionHighlights?.[0] || null;
+  const secondMoment = facts?.questionHighlights?.[1] || null;
+  const sharedLikedQuestion = feedback?.sharedLiked?.[0]?.questionText || '';
+  const splitQuestion = feedback?.splitOpinions?.[0]?.questionText || '';
+  const replayQuestion = replayRequests?.[0]?.questionText || '';
+  const headline = buildGameDiaryChapterTitleFallback(game, {
+    gameMode: game?.gameMode,
+    winnerSeat: game?.winnerSeat || '',
+  });
+  const summary = game?.scoreSummary || `${game?.gameModeLabel || 'Game night'} finished with plenty to talk about.`;
+
+  const opening = `${summary} ${game?.name ? `${game.name} gave them ${Math.max(1, Number(game?.roundsPlayed || 0))} rounds of evidence, banter, and at least one answer that probably deserves to be quoted again later.` : ''}`.trim();
+  const middle = analytics
+    ? `${analytics.leaderboardSummary || 'The score stayed lively.'} Jay looked strongest in ${analytics.strongestCategoryJay || 'a few familiar lanes'}, while Kim shone in ${analytics.strongestCategoryKim || 'some sharp little moments'}. ${analytics.weakestCategoryJay ? `Jay had a wobble around ${analytics.weakestCategoryJay}.` : ''} ${analytics.weakestCategoryKim ? `Kim had a wobble around ${analytics.weakestCategoryKim}.` : ''}`.trim()
+    : quiz
+      ? `Quick Fire stayed true to its name: Jay finished on ${quiz.bySeat?.jay?.points || 0} points with ${quiz.bySeat?.jay?.accuracy || 0}% accuracy, while Kim landed ${quiz.bySeat?.kim?.points || 0} points at ${quiz.bySeat?.kim?.accuracy || 0}% accuracy. ${quiz.strongestCategories?.jay?.[0]?.category ? `Jay looked especially comfortable in ${quiz.strongestCategories.jay[0].category}.` : ''} ${quiz.strongestCategories?.kim?.[0]?.category ? `Kim looked especially comfortable in ${quiz.strongestCategories.kim[0].category}.` : ''}`.trim()
+      : 'The scoreline told one story, but the answers underneath it were where the real charm lived.';
+  const learning = [
+    firstMoment ? `One memorable clue came when Jay answered "${firstMoment.jayAnswer}" and Kim answered "${firstMoment.kimAnswer}" to "${firstMoment.question}".` : '',
+    secondMoment ? `Later, "${secondMoment.question}" quietly added another layer: Jay went with "${secondMoment.jayAnswer}", while Kim went with "${secondMoment.kimAnswer}".` : '',
+    sharedLikedQuestion ? `They were nicely in sync on "${sharedLikedQuestion}", which feels like a very good sign for future plotting.` : '',
+    splitQuestion ? `They were less aligned on "${splitQuestion}", which honestly is half the fun and gives them something to tease each other about later.` : '',
+    replayQuestion ? `"${replayQuestion}" even earned a replay request, which is basically the app version of saying, "we are absolutely not done with this conversation."` : '',
+  ].filter(Boolean).join(' ');
+
+  return {
+    headline,
+    summary,
+    writeup: [opening, middle, learning || 'What came through most clearly was that the game gave both of them fresh little windows into each other, and the score was only part of the story.']
+      .filter(Boolean)
+      .join('\n\n'),
+    model: 'local-fallback',
+  };
+};
+
+const buildLocalAmaDiaryWriteup = (facts = {}) => {
+  const ama = facts?.ama || {};
+  const snapshot = facts?.snapshot || null;
+  const headline = ama?.question ? buildAmaChapterTitle(ama.question, 0) : `${ama?.askedBy || 'Someone'} asked and ${ama?.answeredBy || 'someone'} answered`;
+  const summary = `${ama?.askedBy || 'Jay or Kim'} asked "${truncateAiText(ama?.question || 'an AMA question', 90)}" and ${ama?.answeredBy || 'the other player'} answered with "${truncateAiText(ama?.answer || 'a very KJK-style answer', 90)}".`;
+  const opening = `${ama?.itemTitle || 'AMA time'} delivered exactly what it was supposed to: a direct question, a real answer, and a little more context than either of them would have gotten from a scorecard alone.`;
+  const middle = ama?.story
+    ? `${ama.answeredBy || 'The answer'} added the extra story too: "${truncateAiText(ama.story, 220)}" It gives the chapter that nice afterglow where the answer is not just true, it is properly theirs.`
+    : `${ama?.answeredBy || 'The answer'} kept it simple and direct, which still says plenty when the question itself is doing the heavy lifting.`;
+  const closing = [
+    ama?.relatedCategories?.length ? `The moment landed somewhere around ${formatAiList(ama.relatedCategories)}.` : '',
+    snapshot?.leaderboardSummary ? `At the time, the frozen snapshot read: ${snapshot.leaderboardSummary}` : '',
+    snapshot?.categoryInsights?.[0] ? snapshot.categoryInsights[0] : '',
+  ].filter(Boolean).join(' ');
+
+  return {
+    headline,
+    summary,
+    writeup: [opening, middle, closing || 'It is the kind of chapter that will almost certainly become funnier and sweeter every time they come back to reread it.']
+      .filter(Boolean)
+      .join('\n\n'),
+    model: 'local-fallback',
+  };
+};
+
 const buildAiEvidenceSnapshot = ({
   previousGames = [],
   questionFeedback = [],
@@ -1389,6 +1847,7 @@ const buildAiEvidenceSnapshot = ({
   });
 
   (diaryEntries || []).forEach((entry) => {
+    if (isGameDiaryEntry(entry) && entry?.aiGenerated) return;
     const seat = seatFromPlayerRef(entry?.ownerPlayerId || entry?.receiverPlayerId || entry?.requestedByPlayerId) || '';
     const question = normalizeText(entry?.question || entry?.chapterTitle || '');
     const answer = normalizeText(entry?.answer || '');
@@ -3382,6 +3841,9 @@ function LobbyScreen({
   redemptionHistory,
   amaRequests,
   diaryEntries,
+  onBackfillGameDiaryEntries,
+  gameDiaryBackfillState,
+  missingGameDiaryCount,
   pendingAmaInbox,
   pendingAmaOutbox,
   forfeitPriceRequests,
@@ -5916,6 +6378,9 @@ function LobbyScreen({
               roundAnalytics={lobbyRoundAnalytics}
               onSubmitAmaQuestion={onSubmitAmaQuestion}
               onAnswerAmaRequest={onAnswerAmaRequest}
+              onBackfillGameDiaryEntries={onBackfillGameDiaryEntries}
+              gameDiaryBackfillState={gameDiaryBackfillState}
+              missingGameDiaryCount={missingGameDiaryCount}
               isBusy={isBusy}
             />
           </section>
@@ -10088,6 +10553,9 @@ function DiaryDashboardSection({
   roundAnalytics = null,
   onSubmitAmaQuestion,
   onAnswerAmaRequest,
+  onBackfillGameDiaryEntries,
+  gameDiaryBackfillState = {},
+  missingGameDiaryCount = 0,
   isBusy = false,
 }) {
   const viewerSeat = currentPlayerSeat || inferSeatFromUser(user, profile) || '';
@@ -10101,24 +10569,54 @@ function DiaryDashboardSection({
   const chapters = useMemo(
     () =>
       diaryEntries
-        .filter((entry) => isAmaDiaryEntry(entry))
+        .filter((entry) => isDiaryBookEntry(entry))
         .sort(sortByOldest)
         .map((entry, index) => {
-          const chapterNumber = Number(entry.chapterNumber || index + 1);
-          const askedByPlayerId = entry.requestedByPlayerId || entry.requestedByUserId || '';
-          const answeredByPlayerId = entry.ownerPlayerId || entry.receiverPlayerId || entry.storeOwnerUserId || '';
-          const chapterTitle = normalizeText(entry.question)
-            ? buildAmaChapterTitle(entry.question, chapterNumber)
-            : normalizeText(entry.chapterTitle) || buildAmaChapterTitle(entry.title || '', chapterNumber);
-          const snapshotInsights = Array.isArray(entry.analyticsSnapshot?.categoryInsights) && entry.analyticsSnapshot.categoryInsights.length
+          const bookChapterNumber = index + 1;
+          const baseSnapshotInsights = Array.isArray(entry.analyticsSnapshot?.categoryInsights) && entry.analyticsSnapshot.categoryInsights.length
             ? entry.analyticsSnapshot.categoryInsights
             : Array.isArray(entry.analyticsSnapshot?.categoryRows)
               ? entry.analyticsSnapshot.categoryRows.map((row) => buildDiarySnapshotInsight(row))
               : [];
+          if (isGameDiaryEntry(entry)) {
+            const aiDiaryStatus = normalizeIdentity(entry.aiDiaryStatus || (entry.aiGenerated ? 'ready' : ''));
+            const scoreContext = buildGameDiaryScoreContext(entry);
+            return {
+              ...entry,
+              entryType: 'game',
+              bookChapterNumber,
+              chapterNumber: bookChapterNumber,
+              chapterTitle: normalizeText(entry.chapterTitle) || buildGameDiaryChapterTitleFallback(entry, scoreContext),
+              createdLabel: formatShortDateTime(entry.endedAt || entry.createdAt || entry.updatedAt),
+              answeredLabel: formatShortDateTime(entry.generatedAt || entry.updatedAt || entry.endedAt || entry.createdAt),
+              statusLabel: aiDiaryStatus === 'generating'
+                ? 'Writing'
+                : aiDiaryStatus === 'error'
+                  ? 'Needs retry'
+                  : 'Ready',
+              gameModeLabel: normalizeText(entry.gameModeLabel) || getDiaryGameModeLabel(entry.gameMode || 'standard'),
+              resultSummary: normalizeText(entry.resultSummary || entry.aiDiarySummary || ''),
+              snapshotInsights: baseSnapshotInsights,
+              askedByPlayerId: '',
+              answeredByPlayerId: '',
+              askedByLabel: '',
+              answeredByLabel: '',
+            };
+          }
+
+          const amaChapterNumber = Number(entry.chapterNumber || index + 1);
+          const askedByPlayerId = entry.requestedByPlayerId || entry.requestedByUserId || '';
+          const answeredByPlayerId = entry.ownerPlayerId || entry.receiverPlayerId || entry.storeOwnerUserId || '';
+          const chapterTitle = normalizeText(entry.question)
+            ? buildAmaChapterTitle(entry.question, amaChapterNumber)
+            : normalizeText(entry.chapterTitle) || buildAmaChapterTitle(entry.title || '', amaChapterNumber);
           const status = normalizeIdentity(entry.chapterState || entry.status);
           return {
             ...entry,
-            chapterNumber,
+            entryType: 'ama',
+            bookChapterNumber,
+            chapterNumber: bookChapterNumber,
+            amaChapterNumber,
             chapterTitle,
             askedByPlayerId,
             answeredByPlayerId,
@@ -10131,22 +10629,27 @@ function DiaryDashboardSection({
               : entry.question
                 ? 'Awaiting answer'
                 : 'Awaiting question',
-            snapshotInsights,
+            snapshotInsights: baseSnapshotInsights,
           };
         }),
     [diaryEntries],
   );
+  const gameChapterCount = chapters.filter((entry) => entry.entryType === 'game').length;
+  const amaChapterCount = chapters.filter((entry) => entry.entryType === 'ama').length;
   const selectedChapter = chapters.find((entry) => entry.id === selectedChapterId) || chapters.at(-1) || null;
   const selectedCategories = Array.isArray(selectedChapter?.relatedCategories) ? selectedChapter.relatedCategories.filter(Boolean) : [];
   const analyticsSnapshot = selectedChapter?.analyticsSnapshot || null;
+  const selectedAiDiaryStatus = normalizeIdentity(selectedChapter?.aiDiaryStatus || (selectedChapter?.aiGenerated ? 'ready' : ''));
   const canAskQuestion = Boolean(
     selectedChapter
+    && selectedChapter.entryType === 'ama'
     && viewerSeat
     && seatFromPlayerRef(selectedChapter.askedByPlayerId) === viewerSeat
     && !normalizeText(selectedChapter.question),
   );
   const canAnswerChapter = Boolean(
     selectedChapter
+    && selectedChapter.entryType === 'ama'
     && viewerSeat
     && seatFromPlayerRef(selectedChapter.answeredByPlayerId) === viewerSeat
     && normalizeText(selectedChapter.question)
@@ -10210,29 +10713,61 @@ function DiaryDashboardSection({
     });
     setMediaFiles([]);
   };
+  const backfillStatusCopy = gameDiaryBackfillState?.status === 'running'
+    ? `Backfilling game chapters: ${Number(gameDiaryBackfillState?.processed || 0)} processed, ${Number(gameDiaryBackfillState?.created || 0)} created or refreshed.`
+    : gameDiaryBackfillState?.status === 'done'
+      ? `Backfill finished: ${Number(gameDiaryBackfillState?.created || 0)} created or refreshed, ${Number(gameDiaryBackfillState?.skipped || 0)} skipped.`
+      : gameDiaryBackfillState?.status === 'done-with-errors'
+        ? `Backfill finished with some misses: ${Number(gameDiaryBackfillState?.created || 0)} created or refreshed, ${Number(gameDiaryBackfillState?.skipped || 0)} skipped.`
+        : '';
+  const selectedGameFeedbackHighlights = selectedChapter?.feedbackHighlights || {};
+  const selectedGameReplayHighlights = Array.isArray(selectedChapter?.replayHighlights) ? selectedChapter.replayHighlights : [];
+  const selectedGameQuestionHighlights = Array.isArray(selectedChapter?.questionHighlights) ? selectedChapter.questionHighlights : [];
 
   return (
     <section className="panel lobby-panel lobby-panel--archive lobby-diary-card dashboard-page-card">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">Shared AMA Diary</p>
-          <h2>KJK Kinks AMA Stories & Secrets</h2>
+          <p className="eyebrow">Shared Diary</p>
+          <h2>KJK Game Stories & AMA Secrets</h2>
         </div>
-        <span className="status-pill">{chapters.length} chapters</span>
+        <div className="button-row diary-heading-actions">
+          <span className="status-pill">{chapters.length} chapters</span>
+          <span className="status-pill">{gameChapterCount} game</span>
+          <span className="status-pill">{amaChapterCount} AMA</span>
+          <Button
+            className="ghost-button compact"
+            onClick={() => onBackfillGameDiaryEntries?.()}
+            disabled={isBusy || gameDiaryBackfillState?.status === 'running'}
+          >
+            {gameDiaryBackfillState?.status === 'running'
+              ? 'Backfilling...'
+              : missingGameDiaryCount > 0
+                ? `Backfill ${missingGameDiaryCount} Games`
+                : 'Refresh Game Chapters'}
+          </Button>
+        </div>
       </div>
+      {backfillStatusCopy ? (
+        <p className={`field-note diary-ai-status ${gameDiaryBackfillState?.status === 'done-with-errors' ? 'has-error' : ''}`}>
+          {backfillStatusCopy}
+          {gameDiaryBackfillState?.error ? ` ${gameDiaryBackfillState.error}` : ''}
+        </p>
+      ) : null}
 
       <div className={`diary-book shared-diary-book ${isDiaryOpen ? 'is-open' : 'is-closed'} ${isDiaryOpening ? 'is-opening' : ''}`}>
         {!isDiaryOpen ? (
           <article className="diary-cover shared-diary-cover">
             <div className="diary-cover-copy">
               <p className="eyebrow">KJK School Diary</p>
-              <h3>KJK Kinks AMA Stories & Secrets</h3>
-              <p>Open your keepsake journal to read chapters, stories, and snapshots from redeemed AMA moments.</p>
+              <h3>KJK Game Stories & AMA Secrets</h3>
+              <p>Open your keepsake journal to read AI-written game recaps, AMA stories, and frozen snapshots from the moments worth keeping.</p>
             </div>
             <div className="diary-cover-stats shared-diary-stats">
               <span>{chapters.length} chapters</span>
+              <span>{gameChapterCount} game nights</span>
+              <span>{amaChapterCount} AMA moments</span>
               <span>Frozen snapshots</span>
-              <span>Shared memories</span>
             </div>
             <div className="button-row">
               <Button className="primary-button compact diary-open-button" onClick={() => setIsDiaryOpen(true)}>
@@ -10245,12 +10780,14 @@ function DiaryDashboardSection({
         <section className="shared-diary-intro">
           <div className="shared-diary-intro-copy">
             <p className="eyebrow">Private Chapters</p>
-            <h3>KJK Kinks AMA Stories & Secrets</h3>
-            <p>Each redeemed AMA becomes its own chapter, with the question, answer, story, categories, and a frozen analytics snapshot saved exactly as it was at that moment.</p>
+            <h3>KJK Game Stories & AMA Secrets</h3>
+            <p>Completed games can turn into funny, affectionate diary chapters, and AMA moments still keep their question, answer, story, and frozen analytics snapshot exactly as they happened.</p>
           </div>
           <div className="diary-cover-stats shared-diary-stats">
-            <span>Shared AMA book</span>
+            <span>Shared diary book</span>
             <span>{chapters.length} chapters</span>
+            <span>{gameChapterCount} game chapters</span>
+            <span>{amaChapterCount} AMA chapters</span>
             <span>Frozen snapshots</span>
           </div>
           <div className="button-row">
@@ -10264,8 +10801,8 @@ function DiaryDashboardSection({
           <article className="diary-cover shared-diary-empty">
             <div className="diary-cover-copy">
               <p className="eyebrow">No Chapters Yet</p>
-              <h3>No AMA stories yet</h3>
-              <p>Redeemed AMA forfeits will appear here as chapters.</p>
+              <h3>No diary chapters yet</h3>
+              <p>Completed games and redeemed AMA moments will land here as shared chapters.</p>
             </div>
           </article>
         ) : (
@@ -10283,12 +10820,18 @@ function DiaryDashboardSection({
                     className={`shared-diary-chapter-card ${selectedChapter?.id === chapter.id ? 'is-active' : ''}`}
                     onClick={() => setSelectedChapterId(chapter.id)}
                   >
-                    <small>Chapter {chapter.chapterNumber}</small>
+                    <small>Chapter {chapter.bookChapterNumber} · {chapter.entryType === 'game' ? 'Game' : 'AMA'}</small>
                     <strong>{chapter.chapterTitle}</strong>
-                    <span>{chapter.question ? `${chapter.askedByLabel} asked ${chapter.answeredByLabel}` : `Waiting for ${chapter.askedByLabel} to add the question`}</span>
+                    <span>
+                      {chapter.entryType === 'game'
+                        ? (chapter.resultSummary || `${chapter.gameModeLabel} chapter`)
+                        : chapter.question
+                          ? `${chapter.askedByLabel} asked ${chapter.answeredByLabel}`
+                          : `Waiting for ${chapter.askedByLabel} to add the question`}
+                    </span>
                     <div className="shared-diary-chapter-meta">
                       <span>{chapter.statusLabel}</span>
-                      <span>{chapter.answeredAt || chapter.respondedAt ? chapter.answeredLabel : chapter.createdLabel}</span>
+                      <span>{chapter.entryType === 'game' ? chapter.answeredLabel : (chapter.answeredAt || chapter.respondedAt ? chapter.answeredLabel : chapter.createdLabel)}</span>
                     </div>
                   </button>
                 ))}
@@ -10300,19 +10843,52 @@ function DiaryDashboardSection({
                 <div className={`diary-spread shared-diary-spread ${isDiaryOpening ? 'diary-spread--next' : ''}`}>
                   <article className={`diary-page diary-page--left shared-diary-page ${isDiaryOpening ? 'diary-page--enter-next' : ''}`}>
                     <div className="shared-diary-page-header">
-                      <span className="status-pill diary-page-pill">Chapter {selectedChapter.chapterNumber}</span>
-                      <span className="status-pill diary-page-pill">{selectedChapter.statusLabel}</span>
+                      <span className="status-pill diary-page-pill">Chapter {selectedChapter.bookChapterNumber}</span>
+                      <span className="status-pill diary-page-pill">{selectedChapter.entryType === 'game' ? selectedChapter.gameModeLabel : selectedChapter.statusLabel}</span>
                     </div>
-                    <small>AMA chapter</small>
+                    <small>{selectedChapter.entryType === 'game' ? 'AI game diary' : 'AMA chapter'}</small>
                     <h3>{selectedChapter.chapterTitle}</h3>
                     <div className="shared-diary-meta-grid">
-                      <span><strong>Asked by</strong>{selectedChapter.askedByLabel}</span>
-                      <span><strong>Answered by</strong>{selectedChapter.answeredByLabel}</span>
-                      <span><strong>Created</strong>{selectedChapter.createdLabel}</span>
-                      <span><strong>Answered</strong>{selectedChapter.answeredLabel}</span>
+                      {selectedChapter.entryType === 'game' ? (
+                        <>
+                          <span><strong>Game</strong>{selectedChapter.gameModeLabel}</span>
+                          <span><strong>Winner</strong>{selectedChapter.winner === 'tie' ? 'Tie' : PLAYER_LABEL[selectedChapter.winner] || selectedChapter.winner || 'Pending'}</span>
+                          <span><strong>Score</strong>{selectedChapter.scoreDisplay || 'Score still loading'}</span>
+                          <span><strong>Written</strong>{selectedChapter.answeredLabel}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span><strong>Asked by</strong>{selectedChapter.askedByLabel}</span>
+                          <span><strong>Answered by</strong>{selectedChapter.answeredByLabel}</span>
+                          <span><strong>Created</strong>{selectedChapter.createdLabel}</span>
+                          <span><strong>Answered</strong>{selectedChapter.answeredLabel}</span>
+                        </>
+                      )}
                     </div>
 
-                    {canAskQuestion ? (
+                    {selectedChapter.entryType === 'game' ? (
+                      <>
+                        <div className="shared-diary-question-block">
+                          <strong>Result</strong>
+                          <p>{selectedChapter.resultSummary || selectedChapter.aiDiarySummary || 'KJK AI is still writing this chapter.'}</p>
+                        </div>
+                        {selectedGameQuestionHighlights.length ? (
+                          <div className="diary-appendix">
+                            <strong>Question highlights</strong>
+                            <div className="summary-list">
+                              {selectedGameQuestionHighlights.map((highlight) => (
+                                <article className="mini-list-row" key={`${selectedChapter.id}-round-${highlight.round}`}>
+                                  <strong>Round {highlight.round}: {highlight.question}</strong>
+                                  <small>{highlight.category} · {highlight.roundType}</small>
+                                  <span>Jay: {highlight.jayAnswer}</span>
+                                  <span>Kim: {highlight.kimAnswer}</span>
+                                </article>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : canAskQuestion ? (
                       <div className="shared-diary-editor">
                         <label className="field">
                           <span>AMA question</span>
@@ -10394,7 +10970,31 @@ function DiaryDashboardSection({
                           </Button>
                         </div>
                       </div>
-                    ) : selectedChapter.answer || selectedChapter.story ? (
+                    ) : selectedChapter.entryType === 'game' ? (
+                      selectedAiDiaryStatus === 'generating' ? (
+                        <p className="empty-copy">KJK AI is turning this game into a diary chapter right now.</p>
+                      ) : selectedAiDiaryStatus === 'error' ? (
+                        <div className="shared-diary-answer-block shared-diary-answer-block--error">
+                          <strong>AI write-up unavailable</strong>
+                          <p>{selectedChapter.aiDiaryError || 'This chapter could not be generated just yet. Use the backfill button to try again.'}</p>
+                        </div>
+                      ) : (
+                        <>
+                          {selectedChapter.aiDiarySummary ? (
+                            <div className="shared-diary-answer-block">
+                              <strong>Chapter summary</strong>
+                              <p>{selectedChapter.aiDiarySummary}</p>
+                            </div>
+                          ) : null}
+                          {selectedChapter.aiDiaryWriteup ? (
+                            <div className="shared-diary-answer-block">
+                              <strong>Diary write-up</strong>
+                              <p className="diary-ai-prose">{selectedChapter.aiDiaryWriteup}</p>
+                            </div>
+                          ) : null}
+                        </>
+                      )
+                    ) : selectedChapter.answer || selectedChapter.story || selectedChapter.aiDiaryWriteup ? (
                       <>
                         {selectedChapter.answer ? (
                           <div className="shared-diary-answer-block">
@@ -10406,6 +11006,27 @@ function DiaryDashboardSection({
                           <div className="shared-diary-answer-block">
                             <strong>Story</strong>
                             <p>{selectedChapter.story}</p>
+                          </div>
+                        ) : null}
+                        {selectedAiDiaryStatus === 'generating' ? (
+                          <p className="empty-copy">KJK AI is writing the diary-style AMA recap now.</p>
+                        ) : null}
+                        {selectedAiDiaryStatus === 'error' ? (
+                          <div className="shared-diary-answer-block shared-diary-answer-block--error">
+                            <strong>AI write-up unavailable</strong>
+                            <p>{selectedChapter.aiDiaryError || 'The AMA answer saved, but the AI recap still needs another try.'}</p>
+                          </div>
+                        ) : null}
+                        {selectedChapter.aiDiarySummary ? (
+                          <div className="shared-diary-answer-block">
+                            <strong>Diary summary</strong>
+                            <p>{selectedChapter.aiDiarySummary}</p>
+                          </div>
+                        ) : null}
+                        {selectedChapter.aiDiaryWriteup ? (
+                          <div className="shared-diary-answer-block">
+                            <strong>Diary write-up</strong>
+                            <p className="diary-ai-prose">{selectedChapter.aiDiaryWriteup}</p>
                           </div>
                         ) : null}
                       </>
@@ -10455,6 +11076,39 @@ function DiaryDashboardSection({
                           ))}
                         </div>
                         {analyticsSnapshot?.capturedAt ? <p className="diary-analytics-note-caption">Frozen at {formatShortDateTime(analyticsSnapshot.capturedAt)}</p> : null}
+                      </div>
+                    ) : null}
+
+                    {selectedChapter.entryType === 'game' && (
+                      (selectedGameFeedbackHighlights?.sharedLiked?.length
+                      || selectedGameFeedbackHighlights?.splitOpinions?.length
+                      || selectedGameReplayHighlights.length)
+                    ) ? (
+                      <div className="diary-appendix">
+                        <strong>Signals from the game</strong>
+                        <div className="summary-list">
+                          {selectedGameFeedbackHighlights?.sharedLiked?.slice(0, AI_DIARY_SIGNAL_LIMIT).map((entry) => (
+                            <article className="mini-list-row" key={`${selectedChapter.id}-shared-${entry.questionText}`}>
+                              <strong>Shared like</strong>
+                              <span>{entry.questionText}</span>
+                              <small>{entry.category} · {entry.roundType}</small>
+                            </article>
+                          ))}
+                          {selectedGameFeedbackHighlights?.splitOpinions?.slice(0, AI_DIARY_SIGNAL_LIMIT).map((entry) => (
+                            <article className="mini-list-row" key={`${selectedChapter.id}-split-${entry.questionText}`}>
+                              <strong>Split opinion</strong>
+                              <span>{entry.questionText}</span>
+                              <small>{entry.category} · {entry.roundType}</small>
+                            </article>
+                          ))}
+                          {selectedGameReplayHighlights.slice(0, AI_DIARY_SIGNAL_LIMIT).map((entry) => (
+                            <article className="mini-list-row" key={`${selectedChapter.id}-replay-${entry.questionText}`}>
+                              <strong>Replay request</strong>
+                              <span>{entry.questionText}</span>
+                              <small>{entry.category} · requested by {formatAiList(entry.requestedBy || []) || 'someone'}</small>
+                            </article>
+                          ))}
+                        </div>
                       </div>
                     ) : null}
 
@@ -12633,25 +13287,23 @@ function ProductionApp() {
   const shouldLoadQuestionFeedback = Boolean(
     user
     && firestore
-    && (
-      hasOpenRoomSession
-      || (deferredLobbyDataReady && (dashboardTabState === 'analytics' || dashboardTabState === 'ai'))
-    ),
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'ai' || dashboardTabState === 'diary'),
   );
   const shouldLoadQuestionReplays = Boolean(
     user
     && firestore
-    && (
-      hasOpenRoomSession
-      || (deferredLobbyDataReady && dashboardTabState === 'analytics')
-    ),
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'diary'),
   );
   const shouldLoadQuizAnswerHistory = Boolean(
     user
     && firestore
     && deferredLobbyDataReady
     && !hasOpenRoomSession
-    && (dashboardTabState === 'analytics' || dashboardTabState === 'ai'),
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'ai' || dashboardTabState === 'diary'),
   );
   const shouldLoadAiChatHistory = Boolean(
     user?.uid
@@ -13844,6 +14496,44 @@ function ProductionApp() {
       }),
     [dashboardSeat, diaryEntries, previousGames, questionFeedback, questionNotes, visibleQuizAnswers],
   );
+  const [gameDiaryBackfillState, setGameDiaryBackfillState] = useState({
+    status: 'idle',
+    processed: 0,
+    created: 0,
+    skipped: 0,
+    error: '',
+  });
+  const diaryGameEntries = useMemo(
+    () => diaryEntries.filter((entry) => isGameDiaryEntry(entry)),
+    [diaryEntries],
+  );
+  const diaryEligibleGames = useMemo(
+    () =>
+      previousGames.filter(
+        (entry) =>
+          Boolean(entry?.id)
+          && !isLocalTestGame(entry)
+          && !isHoldemGameMode(entry?.gameMode || 'standard'),
+      ),
+    [previousGames],
+  );
+  const diaryGameEntriesBySourceId = useMemo(
+    () =>
+      new Map(
+        diaryGameEntries
+          .map((entry) => [normalizeText(entry?.sourceId || entry?.gameId || ''), entry])
+          .filter(([key]) => Boolean(key)),
+      ),
+    [diaryGameEntries],
+  );
+  const missingGameDiaryCount = useMemo(
+    () =>
+      diaryEligibleGames.filter((entry) => {
+        const existing = diaryGameEntriesBySourceId.get(normalizeText(entry?.id || '')) || null;
+        return !existing || !Boolean(existing?.aiGenerated) || normalizeIdentity(existing?.aiDiaryStatus || '') === 'error';
+      }).length,
+    [diaryEligibleGames, diaryGameEntriesBySourceId],
+  );
   const selectedGameSummary = enrichedGameLibrary.find((entry) => entry.id === selectedGameId) || null;
   const selectedLocalGameSummary = enrichedLocalArchivedGames.find((entry) => entry.id === selectedGameId) || null;
   const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || enrichedLocalEndedGameSummary;
@@ -14537,6 +15227,342 @@ function ProductionApp() {
     playerAccounts,
   ]);
 
+  const loadGameDiarySignalsFromFirestore = useCallback(async (gameId = '') => {
+    if (!firestore || !gameId) {
+      return { feedbackRows: [], replayRows: [], quizRows: [] };
+    }
+    const [feedbackSnap, replaySnap, quizSnap] = await Promise.all([
+      getDocs(query(collection(firestore, 'questionFeedback'), where('gameId', '==', gameId), limit(400))),
+      getDocs(query(collection(firestore, 'questionReplays'), where('gameId', '==', gameId), limit(400))),
+      getDocs(query(collection(firestore, 'quizAnswers'), where('gameId', '==', gameId), limit(400))),
+    ]);
+    return {
+      feedbackRows: feedbackSnap.docs.map((entry) => ({ id: entry.id, ...entry.data() })),
+      replayRows: replaySnap.docs.map((entry) => ({ id: entry.id, ...entry.data() })),
+      quizRows: quizSnap.docs.map((entry) => ({ id: entry.id, ...entry.data() })),
+    };
+  }, [firestore]);
+
+  const buildAiDiaryDraft = useCallback(async ({ sourceType = 'game', facts = {} } = {}) => {
+    const fallbackDraft = sourceType === 'ama'
+      ? buildLocalAmaDiaryWriteup(facts)
+      : buildLocalGameDiaryWriteup(facts);
+
+    if (!geminiIsConfigured) return fallbackDraft;
+
+    try {
+      const geminiDraft = await generateGeminiDiaryWriteup({
+        sourceType,
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        facts,
+        systemInstruction: buildAiDiarySystemInstruction(sourceType),
+      });
+      return {
+        ...geminiDraft,
+        model: geminiDraft.model || geminiConfig.model || 'gemini',
+      };
+    } catch (error) {
+      console.warn(`Gemini ${sourceType} diary generation failed. Falling back to local diary prose.`, error);
+      return fallbackDraft;
+    }
+  }, []);
+
+  const ensureGameDiaryEntryGenerated = useCallback(async ({
+    gameSummary = null,
+    questionFeedbackOverride = null,
+    questionReplaysOverride = null,
+    quizAnswersOverride = null,
+  } = {}) => {
+    if (!firestore || !gameSummary?.id || isLocalTestGame(gameSummary) || isHoldemGameMode(gameSummary?.gameMode || 'standard')) {
+      return { status: 'skipped' };
+    }
+
+    const entryId = buildGameDiaryEntryId(gameSummary.id);
+    const entryRef = doc(firestore, 'diaryEntries', entryId);
+    const existingSnapshot = await getDoc(entryRef).catch(() => null);
+    const existingEntry = existingSnapshot?.exists?.()
+      ? { id: existingSnapshot.id, ...existingSnapshot.data() }
+      : (diaryGameEntriesBySourceId.get(normalizeText(gameSummary.id || '')) || null);
+    if (existingEntry?.aiGenerated && normalizeIdentity(existingEntry?.aiDiaryStatus || 'ready') === 'ready') {
+      return { status: 'skipped', entryId };
+    }
+    if (normalizeIdentity(existingEntry?.aiDiaryStatus || '') === 'generating') {
+      return { status: 'skipped', entryId };
+    }
+
+    const scoreContext = buildGameDiaryScoreContext(gameSummary);
+    const fetchedSignals = (
+      Array.isArray(questionFeedbackOverride)
+      && Array.isArray(questionReplaysOverride)
+      && Array.isArray(quizAnswersOverride)
+    )
+      ? null
+      : await loadGameDiarySignalsFromFirestore(gameSummary.id);
+    const facts = buildAiGameDiaryFacts({
+      gameSummary,
+      questionFeedback: Array.isArray(questionFeedbackOverride) ? questionFeedbackOverride : (fetchedSignals?.feedbackRows || []),
+      questionReplays: Array.isArray(questionReplaysOverride) ? questionReplaysOverride : (fetchedSignals?.replayRows || []),
+      quizAnswers: Array.isArray(quizAnswersOverride) ? quizAnswersOverride : (fetchedSignals?.quizRows || []),
+    });
+    const analyticsSnapshot = facts?.game?.gameMode === 'quiz'
+      ? null
+      : buildDiaryAnalyticsSnapshot(calculateAnalytics(normalizeStoredRounds(gameSummary?.rounds || [])), []);
+    const relatedCategories = (facts?.categories || []).map((entry) => entry?.label).filter(Boolean);
+    const basePayload = {
+      id: entryId,
+      ownerPlayerId: '',
+      requestedByPlayerId: '',
+      sourceType: 'game',
+      sourceId: gameSummary.id,
+      gameId: gameSummary.id,
+      gameMode: facts?.game?.gameMode || resolveGameMode(gameSummary?.gameMode || 'standard'),
+      gameModeLabel: facts?.game?.gameModeLabel || getDiaryGameModeLabel(gameSummary?.gameMode || 'standard'),
+      gameName: facts?.game?.name || normalizeText(gameSummary?.name || gameSummary?.gameName || '') || `Game ${normalizeText(gameSummary?.joinCode || gameSummary?.id || '')}`,
+      joinCode: facts?.game?.joinCode || normalizeText(gameSummary?.joinCode || ''),
+      title: facts?.game?.name || normalizeText(gameSummary?.name || gameSummary?.gameName || '') || 'Game diary',
+      chapterTitle: existingEntry?.chapterTitle || buildGameDiaryChapterTitleFallback(gameSummary, scoreContext),
+      chapterState: 'completed',
+      status: 'completed',
+      question: '',
+      answer: '',
+      story: '',
+      resultSummary: facts?.game?.scoreSummary || scoreContext?.summary || '',
+      scoreLabel: facts?.game?.scoreLabel || scoreContext?.scoreLabel || '',
+      scoreStyle: facts?.game?.scoreStyle || scoreContext?.scoreStyle || '',
+      scoreDisplay: facts?.game?.scoreDisplay || scoreContext?.scoreDisplay || '',
+      winner: scoreContext?.winnerSeat || gameSummary?.winner || 'tie',
+      roundsPlayed: Number(facts?.game?.roundsPlayed || gameSummary?.roundsPlayed || 0),
+      finalScores: facts?.game?.finalScores || scoreContext?.finalScores || null,
+      quizTotals: facts?.game?.quizTotals || scoreContext?.quizTotals || null,
+      wagerSettlement: facts?.game?.wagerSettlement || gameSummary?.wagerSettlement || null,
+      relatedCategories,
+      analyticsSnapshot,
+      questionHighlights: facts?.questionHighlights || [],
+      feedbackHighlights: {
+        sharedLiked: facts?.feedback?.sharedLiked || [],
+        bothDisliked: facts?.feedback?.bothDisliked || [],
+        splitOpinions: facts?.feedback?.splitOpinions || [],
+        bySeat: facts?.feedback?.bySeat || { jay: { liked: 0, disliked: 0 }, kim: { liked: 0, disliked: 0 } },
+      },
+      replayHighlights: facts?.replayRequests || [],
+      quizSummary: facts?.quiz || null,
+      privateNotesIncluded: false,
+      createdAt: existingEntry?.createdAt || gameSummary?.endedAt || gameSummary?.createdAt || serverTimestamp(),
+      endedAt: gameSummary?.endedAt || null,
+    };
+
+    try {
+      await setDoc(entryRef, {
+        ...basePayload,
+        aiDiaryStatus: 'generating',
+        aiDiaryError: '',
+        aiDiarySummary: existingEntry?.aiDiarySummary || '',
+        aiDiaryWriteup: existingEntry?.aiDiaryWriteup || '',
+        aiGenerated: false,
+        generatedAt: null,
+        model: '',
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      const draft = await buildAiDiaryDraft({
+        sourceType: 'game',
+        facts,
+      });
+
+      await setDoc(entryRef, {
+        ...basePayload,
+        chapterTitle: draft?.headline || basePayload.chapterTitle,
+        aiDiaryStatus: 'ready',
+        aiDiaryError: '',
+        aiDiarySummary: draft?.summary || basePayload.resultSummary,
+        aiDiaryWriteup: draft?.writeup || '',
+        aiGenerated: true,
+        generatedAt: serverTimestamp(),
+        model: draft?.model || 'local-fallback',
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      return {
+        status: existingEntry ? 'updated' : 'created',
+        entryId,
+      };
+    } catch (error) {
+      const message = String(error?.message || 'Could not generate the game diary entry.');
+      await setDoc(entryRef, {
+        ...basePayload,
+        aiDiaryStatus: 'error',
+        aiDiaryError: message,
+        aiGenerated: false,
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true }).catch(() => null);
+      return {
+        status: 'error',
+        entryId,
+        error: message,
+      };
+    }
+  }, [buildAiDiaryDraft, diaryGameEntriesBySourceId, firestore, loadGameDiarySignalsFromFirestore]);
+
+  const ensureAmaDiaryWriteup = useCallback(async ({
+    requestData = null,
+    answer = '',
+    story = '',
+    relatedCategories = [],
+    analyticsSnapshot = null,
+    attachments = [],
+  } = {}) => {
+    if (!firestore || !requestData?.id) return { status: 'skipped' };
+
+    const diaryEntryId = requestData?.diaryEntryId || requestData?.id;
+    const entryRef = doc(firestore, 'diaryEntries', diaryEntryId);
+    const entrySnapshot = await getDoc(entryRef).catch(() => null);
+    const existingEntry = entrySnapshot?.exists?.()
+      ? { id: entrySnapshot.id, ...entrySnapshot.data() }
+      : null;
+    if (existingEntry?.aiGenerated && normalizeIdentity(existingEntry?.aiDiaryStatus || 'ready') === 'ready') {
+      return { status: 'skipped', entryId: diaryEntryId };
+    }
+    if (normalizeIdentity(existingEntry?.aiDiaryStatus || '') === 'generating') {
+      return { status: 'skipped', entryId: diaryEntryId };
+    }
+
+    const facts = buildAiAmaDiaryFacts({
+      requestData,
+      answer,
+      story,
+      relatedCategories,
+      analyticsSnapshot,
+      attachments,
+    });
+
+    try {
+      await setDoc(entryRef, {
+        id: diaryEntryId,
+        sourceType: 'ama',
+        sourceId: requestData.id,
+        chapterTitle: existingEntry?.chapterTitle || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
+        aiDiaryStatus: 'generating',
+        aiDiaryError: '',
+        aiGenerated: false,
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      const draft = await buildAiDiaryDraft({
+        sourceType: 'ama',
+        facts,
+      });
+
+      await setDoc(entryRef, {
+        id: diaryEntryId,
+        sourceType: 'ama',
+        sourceId: requestData.id,
+        chapterTitle: existingEntry?.chapterTitle || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
+        aiDiaryStatus: 'ready',
+        aiDiaryError: '',
+        aiDiarySummary: draft?.summary || '',
+        aiDiaryWriteup: draft?.writeup || '',
+        aiGenerated: true,
+        generatedAt: serverTimestamp(),
+        model: draft?.model || 'local-fallback',
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        privateNotesIncluded: false,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      return {
+        status: existingEntry ? 'updated' : 'created',
+        entryId: diaryEntryId,
+      };
+    } catch (error) {
+      const message = String(error?.message || 'Could not generate the AMA diary chapter.');
+      await setDoc(entryRef, {
+        id: diaryEntryId,
+        sourceType: 'ama',
+        sourceId: requestData.id,
+        aiDiaryStatus: 'error',
+        aiDiaryError: message,
+        aiGenerated: false,
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true }).catch(() => null);
+      return {
+        status: 'error',
+        entryId: diaryEntryId,
+        error: message,
+      };
+    }
+  }, [buildAiDiaryDraft, firestore]);
+
+  const backfillMissingGameDiaryEntries = useCallback(async () => {
+    if (!diaryEligibleGames.length) {
+      setGameDiaryBackfillState({
+        status: 'done',
+        processed: 0,
+        created: 0,
+        skipped: 0,
+        error: '',
+      });
+      setNotice('No completed games are available for diary backfill.');
+      return;
+    }
+
+    setGameDiaryBackfillState({
+      status: 'running',
+      processed: 0,
+      created: 0,
+      skipped: 0,
+      error: '',
+    });
+
+    let created = 0;
+    let skipped = 0;
+    let processed = 0;
+    let firstError = '';
+
+    for (const gameSummary of diaryEligibleGames) {
+      const normalizedGameId = normalizeText(gameSummary?.id || '');
+      const localFeedback = (questionFeedback || []).filter((entry) => normalizeText(entry?.gameId || '') === normalizedGameId);
+      const localReplays = (questionReplays || []).filter((entry) => normalizeText(entry?.gameId || '') === normalizedGameId);
+      const localQuiz = (visibleQuizAnswers || []).filter(
+        (entry) => normalizeText(entry?.quizSessionId || entry?.gameId || '') === normalizedGameId,
+      );
+      const result = await ensureGameDiaryEntryGenerated({
+        gameSummary,
+        questionFeedbackOverride: localFeedback,
+        questionReplaysOverride: localReplays,
+        quizAnswersOverride: localQuiz,
+      });
+      processed += 1;
+      if (result?.status === 'created' || result?.status === 'updated') created += 1;
+      else skipped += 1;
+      if (!firstError && result?.status === 'error') firstError = result.error || 'One or more diary chapters could not be generated.';
+      setGameDiaryBackfillState({
+        status: 'running',
+        processed,
+        created,
+        skipped,
+        error: firstError,
+      });
+    }
+
+    setGameDiaryBackfillState({
+      status: firstError ? 'done-with-errors' : 'done',
+      processed,
+      created,
+      skipped,
+      error: firstError,
+    });
+    if (firstError) {
+      setNotice(`Backfill finished with a partial result: ${created} chapters created or refreshed, ${skipped} skipped.`);
+      return;
+    }
+    setNotice(`Backfill finished: ${created} game diary chapters created or refreshed, ${skipped} skipped.`);
+  }, [diaryEligibleGames, ensureGameDiaryEntryGenerated, questionFeedback, questionReplays, setNotice, visibleQuizAnswers]);
+
   const archivePairHistory = async (gameDoc, endedGameId = gameDoc?.id) => {
     if (!firestore || !gameDoc) return;
     const pairRef = doc(firestore, 'playerPairs', gameDoc.pairId || buildPairKey());
@@ -14913,6 +15939,11 @@ function ProductionApp() {
     const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc).catch(() =>
       buildGameLibraryEntry(targetGameId, finalizedGameDoc, finalizedRoundsData),
     );
+    if (gameSummary) {
+      void ensureGameDiaryEntryGenerated({ gameSummary }).catch((error) => {
+        console.warn('Background game diary generation failed after game finalization.', error);
+      });
+    }
     return { appliedLifetimePoints, finalScores: nextFinalScores, winner: nextWinner, gameSummary };
   };
 
@@ -15650,6 +16681,7 @@ function ProductionApp() {
     if (!cleanAnswer) throw new Error('Enter an answer before saving.');
     const requestRef = doc(firestore, 'amaRequests', requestId);
     const attachments = await uploadAmaMediaFiles(requestId, mediaFiles);
+    let answeredAmaContext = null;
 
     await runTransaction(firestore, async (transaction) => {
       const freshRequest = await transaction.get(requestRef);
@@ -15709,7 +16741,28 @@ function ProductionApp() {
           updatedAt: serverTimestamp(),
         });
       }
+      answeredAmaContext = {
+        requestData: {
+          id: requestId,
+          ...requestData,
+          diaryEntryId: requestData.diaryEntryId || nextDiaryRef.id,
+          question: requestData.question || '',
+        },
+        answer: cleanAnswer,
+        story: cleanStory,
+        relatedCategories: Array.isArray(relatedCategories) ? relatedCategories.filter(Boolean) : [],
+        analyticsSnapshot: analyticsSnapshot || null,
+        attachments,
+      };
     });
+
+    if (answeredAmaContext) {
+      void ensureAmaDiaryWriteup(answeredAmaContext).catch((error) => {
+        console.warn('Background AMA diary generation failed after AMA answer save.', error);
+      });
+    }
+
+    return answeredAmaContext;
   };
 
   const markAmaQuestionSeen = async (requestId) => {
@@ -20776,6 +21829,9 @@ function ProductionApp() {
         responseAlerts={pendingForfeitResponseAlerts}
         amaRequests={amaRequests}
         diaryEntries={diaryEntries}
+        onBackfillGameDiaryEntries={backfillMissingGameDiaryEntries}
+        gameDiaryBackfillState={gameDiaryBackfillState}
+        missingGameDiaryCount={missingGameDiaryCount}
         pendingAmaInbox={pendingAmaInbox}
         pendingAmaOutbox={pendingAmaOutbox}
         onMarkRedemptionSeen={markRedemptionSeenAction}
