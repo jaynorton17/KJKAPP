@@ -820,8 +820,8 @@ const sortByNewest = (a, b) =>
   getRecordTime(b?.updatedAt || b?.createdAt || b?.requestedAt || b?.redeemedAt || b?.completedAt)
   - getRecordTime(a?.updatedAt || a?.createdAt || a?.requestedAt || a?.redeemedAt || a?.completedAt);
 const sortByOldest = (a, b) =>
-  getRecordTime(a?.createdAt || a?.redeemedAt || a?.updatedAt || a?.questionAskedAt || a?.answeredAt)
-  - getRecordTime(b?.createdAt || b?.redeemedAt || b?.updatedAt || b?.questionAskedAt || b?.answeredAt);
+  getRecordTime(a?.endedAt || a?.createdAt || a?.redeemedAt || a?.updatedAt || a?.questionAskedAt || a?.answeredAt)
+  - getRecordTime(b?.endedAt || b?.createdAt || b?.redeemedAt || b?.updatedAt || b?.questionAskedAt || b?.answeredAt);
 const getInviteDisplayStatus = (invite = null, linkedGame = null) => {
   const inviteStatus = normalizeText(invite?.status || 'pending') || 'pending';
   if (inviteStatus !== 'pending') return inviteStatus;
@@ -10683,14 +10683,16 @@ function DiaryDashboardSection({
           if (isGameDiaryEntry(entry)) {
             const aiDiaryStatus = normalizeIdentity(entry.aiDiaryStatus || (entry.aiGenerated ? 'ready' : ''));
             const scoreContext = buildGameDiaryScoreContext(entry);
+            const playedLabel = formatShortDateTime(entry.endedAt || entry.createdAt || entry.updatedAt);
+            const generatedLabel = formatShortDateTime(entry.generatedAt || entry.updatedAt || entry.endedAt || entry.createdAt);
             return {
               ...entry,
               entryType: 'game',
               bookChapterNumber,
               chapterNumber: bookChapterNumber,
               chapterTitle: normalizeText(entry.chapterTitle) || buildGameDiaryChapterTitleFallback(entry, scoreContext),
-              createdLabel: formatShortDateTime(entry.endedAt || entry.createdAt || entry.updatedAt),
-              answeredLabel: formatShortDateTime(entry.generatedAt || entry.updatedAt || entry.endedAt || entry.createdAt),
+              createdLabel: playedLabel,
+              answeredLabel: generatedLabel,
               statusLabel: aiDiaryStatus === 'generating'
                 ? 'Writing'
                 : aiDiaryStatus === 'error'
@@ -10933,7 +10935,7 @@ function DiaryDashboardSection({
                     </span>
                     <div className="shared-diary-chapter-meta">
                       <span>{chapter.statusLabel}</span>
-                      <span>{chapter.entryType === 'game' ? chapter.answeredLabel : (chapter.answeredAt || chapter.respondedAt ? chapter.answeredLabel : chapter.createdLabel)}</span>
+                      <span>{chapter.entryType === 'game' ? chapter.createdLabel : (chapter.answeredAt || chapter.respondedAt ? chapter.answeredLabel : chapter.createdLabel)}</span>
                     </div>
                   </button>
                 ))}
@@ -10956,7 +10958,7 @@ function DiaryDashboardSection({
                           <span><strong>Game</strong>{selectedChapter.gameModeLabel}</span>
                           <span><strong>Winner</strong>{selectedChapter.winner === 'tie' ? 'Tie' : PLAYER_LABEL[selectedChapter.winner] || selectedChapter.winner || 'Pending'}</span>
                           <span><strong>Score</strong>{selectedChapter.scoreDisplay || 'Score still loading'}</span>
-                          <span><strong>Written</strong>{selectedChapter.answeredLabel}</span>
+                          <span><strong>Played</strong>{selectedChapter.createdLabel}</span>
                         </>
                       ) : (
                         <>
@@ -14609,6 +14611,15 @@ function ProductionApp() {
     () => diaryEntries.filter((entry) => isGameDiaryEntry(entry)),
     [diaryEntries],
   );
+  const previousGamesById = useMemo(
+    () =>
+      new Map(
+        previousGames
+          .map((entry) => [normalizeText(entry?.id || ''), entry])
+          .filter(([key]) => Boolean(key)),
+      ),
+    [previousGames],
+  );
   const diaryEligibleGames = useMemo(
     () =>
       previousGames.filter(
@@ -14618,6 +14629,14 @@ function ProductionApp() {
           && !isHoldemGameMode(entry?.gameMode || 'standard'),
       ),
     [previousGames],
+  );
+  const diaryBackfillGameIds = useMemo(
+    () =>
+      mergeUniqueIds(
+        pairHistory?.completedGameIds || [],
+        diaryEligibleGames.map((entry) => entry?.id).filter(Boolean),
+      ),
+    [diaryEligibleGames, pairHistory?.completedGameIds],
   );
   const diaryGameEntriesBySourceId = useMemo(
     () =>
@@ -14630,11 +14649,16 @@ function ProductionApp() {
   );
   const missingGameDiaryCount = useMemo(
     () =>
-      diaryEligibleGames.filter((entry) => {
-        const existing = diaryGameEntriesBySourceId.get(normalizeText(entry?.id || '')) || null;
+      diaryBackfillGameIds.filter((gameId) => {
+        const normalizedGameId = normalizeText(gameId || '');
+        const loadedGame = previousGamesById.get(normalizedGameId) || null;
+        if (loadedGame && (isLocalTestGame(loadedGame) || isHoldemGameMode(loadedGame?.gameMode || 'standard'))) {
+          return false;
+        }
+        const existing = diaryGameEntriesBySourceId.get(normalizedGameId) || null;
         return !existing || !Boolean(existing?.aiGenerated) || normalizeIdentity(existing?.aiDiaryStatus || '') === 'error';
       }).length,
-    [diaryEligibleGames, diaryGameEntriesBySourceId],
+    [diaryBackfillGameIds, diaryGameEntriesBySourceId, previousGamesById],
   );
   const selectedGameSummary = enrichedGameLibrary.find((entry) => entry.id === selectedGameId) || null;
   const selectedLocalGameSummary = enrichedLocalArchivedGames.find((entry) => entry.id === selectedGameId) || null;
@@ -15385,10 +15409,23 @@ function ProductionApp() {
     const existingEntry = existingSnapshot?.exists?.()
       ? { id: existingSnapshot.id, ...existingSnapshot.data() }
       : (diaryGameEntriesBySourceId.get(normalizeText(gameSummary.id || '')) || null);
-    if (existingEntry?.aiGenerated && normalizeIdentity(existingEntry?.aiDiaryStatus || 'ready') === 'ready') {
+    const canonicalCreatedAt = gameSummary?.endedAt || existingEntry?.endedAt || existingEntry?.createdAt || gameSummary?.createdAt || serverTimestamp();
+    const canonicalEndedAt = gameSummary?.endedAt || existingEntry?.endedAt || null;
+    const existingStatus = normalizeIdentity(existingEntry?.aiDiaryStatus || (existingEntry?.aiGenerated ? 'ready' : ''));
+    if (existingEntry?.aiGenerated && existingStatus === 'ready') {
+      const createdAtChanged = getRecordTime(existingEntry?.createdAt || 0) !== getRecordTime(canonicalCreatedAt || 0);
+      const endedAtChanged = getRecordTime(existingEntry?.endedAt || 0) !== getRecordTime(canonicalEndedAt || 0);
+      if (createdAtChanged || endedAtChanged) {
+        await setDoc(entryRef, {
+          createdAt: canonicalCreatedAt,
+          endedAt: canonicalEndedAt,
+          updatedAt: serverTimestamp(),
+        }, { merge: true }).catch(() => null);
+        return { status: 'updated', entryId };
+      }
       return { status: 'skipped', entryId };
     }
-    if (normalizeIdentity(existingEntry?.aiDiaryStatus || '') === 'generating') {
+    if (existingStatus === 'generating') {
       return { status: 'skipped', entryId };
     }
 
@@ -15449,8 +15486,8 @@ function ProductionApp() {
       replayHighlights: facts?.replayRequests || [],
       quizSummary: facts?.quiz || null,
       privateNotesIncluded: false,
-      createdAt: existingEntry?.createdAt || gameSummary?.endedAt || gameSummary?.createdAt || serverTimestamp(),
-      endedAt: gameSummary?.endedAt || null,
+      createdAt: canonicalCreatedAt,
+      endedAt: canonicalEndedAt,
     };
 
     try {
@@ -15600,7 +15637,7 @@ function ProductionApp() {
   }, [buildAiDiaryDraft, firestore]);
 
   const backfillMissingGameDiaryEntries = useCallback(async () => {
-    if (!diaryEligibleGames.length) {
+    if (!diaryBackfillGameIds.length) {
       setGameDiaryBackfillState({
         status: 'done',
         processed: 0,
@@ -15625,8 +15662,24 @@ function ProductionApp() {
     let processed = 0;
     let firstError = '';
 
-    for (const gameSummary of diaryEligibleGames) {
-      const normalizedGameId = normalizeText(gameSummary?.id || '');
+    for (const gameId of diaryBackfillGameIds) {
+      const normalizedGameId = normalizeText(gameId || '');
+      let gameSummary = previousGamesById.get(normalizedGameId) || null;
+      if (!gameSummary && normalizedGameId) {
+        gameSummary = await loadGameSummaryById(normalizedGameId).catch(() => null);
+      }
+      if (!gameSummary || isLocalTestGame(gameSummary) || isHoldemGameMode(gameSummary?.gameMode || 'standard')) {
+        processed += 1;
+        skipped += 1;
+        setGameDiaryBackfillState({
+          status: 'running',
+          processed,
+          created,
+          skipped,
+          error: firstError,
+        });
+        continue;
+      }
       const localFeedback = (questionFeedback || []).filter((entry) => normalizeText(entry?.gameId || '') === normalizedGameId);
       const localReplays = (questionReplays || []).filter((entry) => normalizeText(entry?.gameId || '') === normalizedGameId);
       const localQuiz = (visibleQuizAnswers || []).filter(
@@ -15663,7 +15716,7 @@ function ProductionApp() {
       return;
     }
     setNotice(`Backfill finished: ${created} game diary chapters created or refreshed, ${skipped} skipped.`);
-  }, [diaryEligibleGames, ensureGameDiaryEntryGenerated, questionFeedback, questionReplays, setNotice, visibleQuizAnswers]);
+  }, [diaryBackfillGameIds, ensureGameDiaryEntryGenerated, loadGameSummaryById, previousGamesById, questionFeedback, questionReplays, setNotice, visibleQuizAnswers]);
 
   const archivePairHistory = async (gameDoc, endedGameId = gameDoc?.id) => {
     if (!firestore || !gameDoc) return;
@@ -15693,7 +15746,7 @@ function ProductionApp() {
     );
   };
 
-  const loadGameSummaryById = async (targetGameId, fallbackData = null) => {
+  async function loadGameSummaryById(targetGameId, fallbackData = null) {
     if (!firestore || !targetGameId) return null;
     const gameRef = doc(firestore, 'games', targetGameId);
     const sourceData = fallbackData || (await getDoc(gameRef)).data();
@@ -15701,7 +15754,7 @@ function ProductionApp() {
     const roundsSnap = await getDocs(query(collection(gameRef, 'rounds'), orderBy('number', 'asc')));
     const roundsData = normalizeStoredRounds(roundsSnap.docs.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() })));
     return buildGameLibraryEntry(targetGameId, sourceData, roundsData);
-  };
+  }
 
   const promoteEndedGameToCompleted = (gameSummary) => {
     if (!gameSummary?.id) return;
