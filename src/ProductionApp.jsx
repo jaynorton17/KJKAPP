@@ -1201,6 +1201,18 @@ const finalizeAiSeatStats = (stats = createAiSeatStats()) => {
   };
 };
 
+const getAiRoundSeatOwnAnswer = (round = {}, seat = 'jay') => {
+  const liveAnswer = normalizeText(round?.answers?.[seat]?.ownAnswer || '');
+  if (liveAnswer) return liveAnswer;
+
+  const archivedAnswer = normalizeText(round?.actualAnswers?.[seat] || '');
+  if (archivedAnswer) return archivedAnswer;
+
+  return normalizeText(
+    formatAnswerForDisplay(getRoundAnswerType(round), round?.actualList?.[seat], { emptyFallback: '' }),
+  );
+};
+
 const buildAiEvidenceSnapshot = ({
   previousGames = [],
   questionFeedback = [],
@@ -1270,7 +1282,7 @@ const buildAiEvidenceSnapshot = ({
           ? 'True or False'
           : (game?.name || game?.joinCode || 'Game');
       seats.forEach((seat) => {
-        const ownAnswer = normalizeText(round?.answers?.[seat]?.ownAnswer || '');
+        const ownAnswer = getAiRoundSeatOwnAnswer(round, seat);
         if (!ownAnswer) return;
         statsBySeat[seat].standardAnswers += 1;
         incrementAiCategoryCount(statsBySeat[seat].answeredCategoryCounts, category);
