@@ -375,6 +375,19 @@ const AI_SEARCH_STOPWORDS = new Set([
   'you',
   'your',
 ]);
+const AI_COMPARISON_STOPWORDS = new Set([
+  'better',
+  'best',
+  'less',
+  'likely',
+  'more',
+  'most',
+  'one',
+  'person',
+  'than',
+  'two',
+  'worse',
+]);
 const AI_SEARCH_TOKEN_ALIASES = {
   sec: ['sex', 'sexual', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky', 'fantasy', 'fantasies'],
   sex: ['sexual', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky'],
@@ -388,6 +401,14 @@ const AI_SEARCH_TOKEN_ALIASES = {
   fantasies: ['fantasy', 'sexual', 'sex'],
   horny: ['sexual', 'sex'],
   masturbating: ['sexual', 'sex'],
+  lie: ['liar', 'lying', 'dishonest', 'deceptive', 'deception', 'bluff', 'bluffing'],
+  liar: ['lie', 'lying', 'dishonest', 'deceptive', 'deception', 'bluff', 'bluffing'],
+  lying: ['lie', 'liar', 'dishonest', 'deceptive', 'deception'],
+  dishonest: ['lie', 'liar', 'lying', 'deceptive', 'deception'],
+  deceptive: ['lie', 'liar', 'lying', 'dishonest', 'deception'],
+  deception: ['lie', 'liar', 'lying', 'dishonest', 'deceptive'],
+  bluff: ['bluffing', 'lie', 'liar', 'deceptive'],
+  bluffing: ['bluff', 'lie', 'liar', 'deceptive'],
   romance: ['romantic'],
   romantic: ['romance'],
 };
@@ -1436,13 +1457,18 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
   const asksForSummary = /what is|what's|tell me about|profile|summar|describe|who is/.test(normalizedPrompt);
   const asksForGiftRecommendation = /birthday|gift|present|anniversary|christmas|valentine|surprise|what should i get|what should i buy|what would be a good/.test(normalizedPrompt);
   const asksForRecommendation = asksForGiftRecommendation || /recommend|suggest|idea for|good idea|best idea|should i get|should i buy/.test(normalizedPrompt);
-  const contentTokens = promptTokens.filter((token) => token !== 'jay' && token !== 'kim');
-  const matchContentTokens = asksForRecommendation
-    ? contentTokens.filter((token) => !AI_RECOMMENDATION_STOPWORDS.has(token))
-    : contentTokens;
-  const matchPromptTokens = asksForRecommendation
-    ? promptTokens.filter((token) => token === 'jay' || token === 'kim' || !AI_RECOMMENDATION_STOPWORDS.has(token))
+  const filteredPromptTokens = asksForComparison
+    ? promptTokens.filter((token) => token === 'jay' || token === 'kim' || !AI_COMPARISON_STOPWORDS.has(token))
     : promptTokens;
+  const contentTokens = promptTokens.filter((token) => token !== 'jay' && token !== 'kim');
+  const comparisonContentTokens = contentTokens.filter((token) => !AI_COMPARISON_STOPWORDS.has(token));
+  const filteredContentTokens = asksForComparison ? comparisonContentTokens : contentTokens;
+  const matchContentTokens = asksForRecommendation
+    ? filteredContentTokens.filter((token) => !AI_RECOMMENDATION_STOPWORDS.has(token))
+    : filteredContentTokens;
+  const matchPromptTokens = asksForRecommendation
+    ? filteredPromptTokens.filter((token) => token === 'jay' || token === 'kim' || !AI_RECOMMENDATION_STOPWORDS.has(token))
+    : filteredPromptTokens;
   const focusSeats = mentionsJay && mentionsKim
     ? ['jay', 'kim']
     : mentionsJay
@@ -1470,7 +1496,7 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
     asksForGiftRecommendation,
     asksForRecommendation,
     rawContentTokens,
-    contentTokens,
+    contentTokens: filteredContentTokens,
     matchPromptTokens,
     matchContentTokens,
     matchedTopicCategories,
@@ -1566,6 +1592,9 @@ const buildAiItemDirectSentence = (item = {}, seat = 'jay') => {
 const buildAiSeatFallbackSentence = (seat = 'jay', stats = null, intent = {}) => {
   const playerLabel = PLAYER_LABEL[seat] || seat;
   if (!stats) return `${playerLabel} does not have enough saved evidence yet.`;
+  if (intent.hasSpecificTopic) {
+    return `I don't have enough saved evidence about ${intent.topicLabel || 'that topic'} for ${playerLabel} yet.`;
+  }
   if (intent.asksAboutQuiz) {
     return `${playerLabel} has ${stats.quizAccuracy}% quiz accuracy across ${stats.quizAnswers} saved quick-fire answers, with ${formatScore(stats.quizPoints)} total quiz points.`;
   }
@@ -1763,6 +1792,7 @@ const scoreAiEvidenceItem = (item = {}, intent = {}) => {
 };
 
 const pickFallbackAiEvidence = (snapshot = {}, intent = {}, viewerSeat = 'jay') => {
+  if (intent.hasSpecificTopic && !intent.asksForRecommendation) return [];
   const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
   const candidateKinds = intent.asksForRecommendation
     ? ['private-note', 'diary-entry', 'game-answer', 'question-feedback']
