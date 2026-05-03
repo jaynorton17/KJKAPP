@@ -344,6 +344,11 @@ const AI_SEARCH_STOPWORDS = new Set([
   'has',
   'have',
   'how',
+  'he',
+  'her',
+  'hers',
+  'him',
+  'his',
   'i',
   'in',
   'into',
@@ -1703,10 +1708,11 @@ const buildAiEvidenceSnapshot = ({
   const pushItem = (item) => {
     if (!item?.summary) return;
     const normalizedSeat = item.seat === 'kim' ? 'kim' : item.seat === 'jay' ? 'jay' : '';
+    const normalizedQuestion = normalizeText(item.question || '');
     const searchText = [
       item.title,
       item.summary,
-      item.question,
+      normalizedQuestion,
       item.answer,
       item.category,
       item.roundType,
@@ -1715,8 +1721,10 @@ const buildAiEvidenceSnapshot = ({
     items.push({
       ...item,
       seat: normalizedSeat,
+      question: normalizedQuestion,
       createdAtMs: Number(item.createdAtMs || 0),
       searchTokens: tokenizeAiSearchText(searchText),
+      questionTokens: tokenizeAiPromptCoreText(normalizedQuestion),
     });
     if (normalizedSeat) statsBySeat[normalizedSeat].evidenceCount += 1;
   };
@@ -1918,6 +1926,8 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
   const matchedTopicCategories = detectAiTopicCategories(prompt);
   const mentionsJay = /\bjay\b/.test(normalizedPrompt);
   const mentionsKim = /\bkim\b/.test(normalizedPrompt);
+  const mentionsMasculineSubject = /\b(he|him|his)\b/.test(normalizedPrompt);
+  const mentionsFeminineSubject = /\b(she|her|hers)\b/.test(normalizedPrompt);
   const asksAboutRelationship = /\bwe\b|\bus\b|\bour\b|both of us|the two of us|together|relationship|compatib|match/.test(normalizedPrompt);
   const asksForComparison = /who('?s| is)?\s+(more|less)|which (one|person|of us)|between jay and kim|between kim and jay|out of the two|of the two/.test(normalizedPrompt);
   const asksAboutQuiz = /quiz|quick fire|trivia|correct|wrong|accuracy|fast|timer|knowledge/.test(normalizedPrompt);
@@ -1946,6 +1956,12 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
       ? ['jay']
       : mentionsKim
         ? ['kim']
+        : mentionsMasculineSubject && mentionsFeminineSubject
+          ? ['jay', 'kim']
+          : mentionsMasculineSubject
+            ? ['jay']
+            : mentionsFeminineSubject
+              ? ['kim']
         : asksForComparison
           ? ['jay', 'kim']
         : asksAboutRelationship
@@ -1956,6 +1972,8 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
     promptTokens,
     mentionsJay,
     mentionsKim,
+    mentionsMasculineSubject,
+    mentionsFeminineSubject,
     asksAboutRelationship,
     asksForComparison,
     asksAboutQuiz,
@@ -1981,6 +1999,42 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
           : 'that topic',
     focusSeats,
   };
+};
+
+const normalizeAiQuestionMatchText = (value = '') =>
+  normalizeText(value)
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/[^a-z0-9'\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const scoreAiQuestionPromptMatch = (item = {}, intent = {}) => {
+  if (!DIRECT_AI_EVIDENCE_KINDS.has(item.kind)) return 0;
+  const questionText = normalizeAiQuestionMatchText(item.question || '');
+  if (!questionText) return 0;
+  const questionTokens = Array.isArray(item.questionTokens) && item.questionTokens.length
+    ? item.questionTokens
+    : tokenizeAiPromptCoreText(questionText);
+  const matchTokens = (intent.matchContentTokens?.length ? intent.matchContentTokens : intent.contentTokens || [])
+    .filter((token) => !['he', 'him', 'his', 'she', 'her', 'hers'].includes(token));
+  if (!matchTokens.length) return 0;
+
+  let matchedCount = 0;
+  matchTokens.forEach((token) => {
+    if (questionTokens.includes(token) || questionText.includes(token)) matchedCount += 1;
+  });
+
+  const matchRatio = matchedCount / Math.max(1, matchTokens.length);
+  const topicPhrase = normalizeAiQuestionMatchText(matchTokens.join(' '));
+  const phraseMatch = Boolean(topicPhrase) && questionText.includes(topicPhrase);
+  if (!phraseMatch && matchedCount < Math.min(2, matchTokens.length)) return 0;
+  if (!phraseMatch && matchRatio < 0.55) return 0;
+
+  let score = matchedCount * 12 + Math.round(matchRatio * 20);
+  if (phraseMatch) score += 18;
+  if (intent.focusSeats?.includes(item.seat)) score += 8;
+  return score;
 };
 
 const getAiItemKindPriority = (item = {}, intent = {}) => {
@@ -2026,6 +2080,34 @@ const pickAiSeatHighlights = (items = [], seat = 'jay', intent = {}, limit = 2, 
         normalizeText(item.question || ''),
         normalizeText(item.answer || ''),
         item.feedbackValue || '',
+      ].join('::');
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+};
+
+const pickAiSeatQuestionMatches = (items = [], seat = 'jay', intent = {}, limit = 2) => {
+  const seen = new Set();
+  return items
+    .filter((item) => item?.seat === seat && DIRECT_AI_EVIDENCE_KINDS.has(item.kind))
+    .map((item) => ({
+      ...item,
+      questionMatchScore: scoreAiQuestionPromptMatch(item, intent),
+    }))
+    .filter((item) => Number(item.questionMatchScore || 0) >= 24)
+    .sort(
+      (left, right) =>
+        Number(right.questionMatchScore || 0) - Number(left.questionMatchScore || 0)
+        || (getAiItemKindPriority(right, intent) + Number(right.score || 0)) - (getAiItemKindPriority(left, intent) + Number(left.score || 0))
+        || Number(right.createdAtMs || 0) - Number(left.createdAtMs || 0),
+    )
+    .filter((item) => {
+      const key = [
+        item.kind || '',
+        normalizeText(item.question || ''),
+        normalizeText(item.answer || ''),
       ].join('::');
       if (!key || seen.has(key)) return false;
       seen.add(key);
@@ -2099,6 +2181,12 @@ const buildAiSeatNarrative = ({
   intent = {},
   stats = null,
 } = {}) => {
+  const exactQuestionMatches = intent.hasSpecificTopic
+    ? pickAiSeatQuestionMatches(scoredEvidence, seat, intent, 2)
+    : [];
+  if (exactQuestionMatches.length) {
+    return exactQuestionMatches.map((item) => buildAiItemDirectSentence(item, seat)).join(' ');
+  }
   if (intent.asksAboutDirectAnswers) {
     const directHighlights = pickAiSeatHighlights(scoredEvidence, seat, intent, 2, DIRECT_AI_EVIDENCE_KINDS);
     if (directHighlights.length) return directHighlights.map((item) => buildAiItemDirectSentence(item, seat)).join(' ');
@@ -2189,6 +2277,10 @@ const buildAiDisplayedEvidence = ({
 } = {}) => {
   if (focusSeats.length === 2) {
     return focusSeats.flatMap((seat) => {
+      const exactQuestionMatches = intent.hasSpecificTopic
+        ? pickAiSeatQuestionMatches(scoredEvidence, seat, intent, 2)
+        : [];
+      if (exactQuestionMatches.length) return exactQuestionMatches;
       const directKinds = intent.asksAboutDirectAnswers ? DIRECT_AI_EVIDENCE_KINDS : null;
       const direct = pickAiSeatHighlights(scoredEvidence, seat, intent, 2, directKinds);
       if (direct.length) return direct;
@@ -2197,6 +2289,10 @@ const buildAiDisplayedEvidence = ({
     });
   }
   if (primarySeat) {
+    const exactQuestionMatches = intent.hasSpecificTopic
+      ? pickAiSeatQuestionMatches(scoredEvidence, primarySeat, intent, AI_EVIDENCE_PREVIEW_LIMIT)
+      : [];
+    if (exactQuestionMatches.length) return exactQuestionMatches;
     const directKinds = intent.asksAboutDirectAnswers ? DIRECT_AI_EVIDENCE_KINDS : null;
     const direct = pickAiSeatHighlights(scoredEvidence, primarySeat, intent, AI_EVIDENCE_PREVIEW_LIMIT, directKinds);
     if (direct.length) return direct;
@@ -2213,7 +2309,12 @@ const buildAiSeatComparisonSnapshot = ({
   scoredEvidence = [],
   intent = {},
 } = {}) => {
-  const directHighlights = pickAiSeatHighlights(scoredEvidence, seat, intent, 2, DIRECT_AI_EVIDENCE_KINDS);
+  const exactQuestionMatches = intent.hasSpecificTopic
+    ? pickAiSeatQuestionMatches(scoredEvidence, seat, intent, 2)
+    : [];
+  const directHighlights = exactQuestionMatches.length
+    ? exactQuestionMatches
+    : pickAiSeatHighlights(scoredEvidence, seat, intent, 2, DIRECT_AI_EVIDENCE_KINDS);
   const supportHighlights = directHighlights.length ? directHighlights : pickAiSeatHighlights(scoredEvidence, seat, intent, 2);
   return {
     seat,
@@ -2254,6 +2355,7 @@ const scoreAiEvidenceItem = (item = {}, intent = {}) => {
     if (item.kind === 'question-feedback') score -= 6;
     if (item.kind === 'quiz-answer' && !intent.asksAboutQuiz) score -= 8;
   }
+  score += scoreAiQuestionPromptMatch(item, intent);
   if (!intent.asksAboutQuiz && item.kind === 'game-answer') score += 2;
   if (intent.asksAboutRelationship && item.kind === 'question-feedback') score += 2;
   if (item.kind === 'private-note') score += 1;
