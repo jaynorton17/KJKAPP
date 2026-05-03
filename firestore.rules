@@ -12,6 +12,10 @@ service cloud.firestore {
       match /questionNotes/{noteId} {
         allow read, write: if signedIn() && request.auth.uid == userId;
       }
+
+      match /aiChatMessages/{messageId} {
+        allow read, write: if signedIn() && request.auth.uid == userId;
+      }
     }
 
     match /games/{gameId} {
@@ -62,6 +66,14 @@ service cloud.firestore {
       allow read, write: if signedIn();
     }
 
+    match /amaRequests/{requestId} {
+      allow read, write: if signedIn();
+    }
+
+    match /diaryEntries/{entryId} {
+      allow read, write: if signedIn();
+    }
+
     match /forfeitPriceRequests/{requestId} {
       allow read, write: if signedIn();
     }
@@ -79,6 +91,10 @@ service cloud.firestore {
     }
 
     match /quizAnswers/{quizAnswerId} {
+      allow read, write: if signedIn();
+    }
+
+    match /lobbyChat/{messageId} {
       allow read, write: if signedIn();
     }
   }

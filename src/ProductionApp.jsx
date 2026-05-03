@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
@@ -17,6 +18,7 @@ import {
   getDoc,
   getDocs,
   limit,
+  limitToLast,
   onSnapshot,
   orderBy,
   query,
@@ -34,6 +36,11 @@ import {
 } from 'firebase/storage';
 import AnalyticsPanel from './components/AnalyticsPanel.jsx';
 import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
+import normalGameTileImage from './assets/lobby-normal-game.webp';
+import pokerTileImage from './assets/lobby-poker.webp';
+import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
+import thisOrThatTileImage from './assets/lobby-this-or-that.webp';
+import trueOrFalseTileImage from './assets/lobby-true-or-false.webp';
 import {
   calculateAnalytics,
   CATEGORY_COLOR_MAP,
@@ -51,6 +58,7 @@ import {
   getRoundPenaltyTotals,
   makeId,
   normalizeText,
+  normalizeQuestionCategoryKey,
   PALETTES,
   PLAYER_LABEL,
   STARTER_QUESTIONS,
@@ -60,15 +68,160 @@ import {
   recalculateRounds,
   ROUND_TYPE_LABEL,
   markQuestionPlayed,
+  normalizeQuestionBankType,
   setQuestionUsed,
   toScore,
 } from './utils/game.js';
+import {
+  HOLDEM_BIG_BLIND,
+  HOLDEM_SMALL_BLIND,
+  applyHoldemAction,
+  buildNextHoldemHandState,
+  createHoldemSessionState,
+  defaultHoldemStats,
+  getHoldemActionState as getHoldemActionStateFromRules,
+  getHoldemStatDelta,
+  getHoldemVisibleCommunityCards,
+  mergeHoldemStats,
+} from './utils/holdem.js';
+import {
+  extractEitherOrOptions,
+  formatAnswerForDisplay,
+  getDefaultOptionsForQuestionType,
+  getQuestionTypeListCount,
+  getQuestionTypeListLabels,
+  normalizeQuestionType,
+  serialiseAnswerForQuestionType,
+  usesChoiceInputForQuestionType,
+  usesListInputForQuestionType,
+  usesNumberInputForQuestionType,
+  usesRatingInputForQuestionType,
+  usesTextareaInputForQuestionType,
+} from './utils/questionTypes.js';
 import { loadThemeIndex, saveThemeIndex } from './utils/storage.js';
 import { firebaseAuth, firebaseIsConfigured, firestore, storage } from './lib/firebase.js';
-import { parseGoogleSheetImport, parseGoogleSheetQuizImport, parseGoogleSheetReference } from './utils/importers.js';
+import {
+  geminiConfig,
+  geminiIsConfigured,
+  generateGeminiDiaryWriteup,
+} from './lib/gemini.js';
+import {
+  parseGoogleSheetImport,
+  parseGoogleSheetQuizImport,
+  parseGoogleSheetReference,
+  parseGoogleSheetThisOrThatImport,
+  parseGoogleSheetTrueFalseImport,
+} from './utils/importers.js';
 
 const seats = ['jay', 'kim'];
+const HOLDEM_GAME_MODE = 'holdem';
+const TRUE_FALSE_GAME_MODE = 'trueFalseGame';
+const THIS_OR_THAT_GAME_MODE = 'thisOrThatGame';
+const TRUE_FALSE_WRONG_PENALTY = 10;
+const TRUE_FALSE_UNANSWERED_PENALTY = 10;
+const TRUE_FALSE_TIMER_SECONDS = 8;
+const THIS_OR_THAT_WRONG_PENALTY = 10;
+const THIS_OR_THAT_UNANSWERED_PENALTY = 10;
+const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
+const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
 const categoryColorMap = CATEGORY_COLOR_MAP;
+const HOLDEM_READY_SESSION_STATUSES = new Set(['ready_to_deal', 'hand_complete']);
+const HOLDEM_SESSION_PROGRESS_RANK = {
+  waiting_for_players: 0,
+  bankroll_blocked: 1,
+  ready_to_deal: 2,
+  hand_live: 3,
+  hand_complete: 4,
+};
+const buildHoldemBankrollsFromAccounts = (accounts = {}) => ({
+  jay: Math.max(0, Math.floor(Number(accounts?.jay?.lifetimePenaltyPoints || 0) || 0)),
+  kim: Math.max(0, Math.floor(Number(accounts?.kim?.lifetimePenaltyPoints || 0) || 0)),
+});
+const hasHoldemBankrollSnapshot = (balances = null) =>
+  Number.isFinite(Number(balances?.jay))
+  && Number.isFinite(Number(balances?.kim));
+const normalizeHoldemReadyBySeat = (readyBySeat = {}) => ({
+  jay: Boolean(readyBySeat?.jay),
+  kim: Boolean(readyBySeat?.kim),
+});
+const countHoldemReadySeats = (readyBySeat = {}) =>
+  seats.reduce((count, seatName) => count + (readyBySeat?.[seatName] ? 1 : 0), 0);
+const buildHoldemDealReadyStatusCopy = (readyBySeat = {}, currentReadySeat = '') => {
+  const normalizedReadyBySeat = normalizeHoldemReadyBySeat(readyBySeat);
+  const readySeats = seats.filter((seatName) => normalizedReadyBySeat[seatName]);
+  if (readySeats.length >= 2) return 'Both players are ready. Dealing the next hand…';
+  if (readySeats.length === 1) {
+    const waitingSeat = seats.find((seatName) => seatName !== readySeats[0]) || currentReadySeat || '';
+    return `${PLAYER_LABEL[readySeats[0]] || readySeats[0]} is ready. Waiting for ${PLAYER_LABEL[waitingSeat] || waitingSeat || 'the other player'} to click deal.`;
+  }
+  return 'Players are seated. Both players must click deal to start the hand.';
+};
+const buildHoldemDealSeedKey = (roomId = '', state = {}, balances = {}) => [
+  'holdem',
+  String(roomId || ''),
+  `hand:${Number(state?.handNumber || 0) + 1}`,
+  `dealer:${String(state?.nextDealerSeat || 'jay')}`,
+  `jay:${Number(balances?.jay || 0)}`,
+  `kim:${Number(balances?.kim || 0)}`,
+].join('|');
+const getHoldemSessionWinner = (holdemStats = null, fallbackScores = null) => {
+  const netJay = Number(holdemStats?.netMovementJay || 0);
+  const netKim = Number(holdemStats?.netMovementKim || 0);
+  const handsPlayed = Number(holdemStats?.handsPlayed || 0);
+  if (handsPlayed > 0 || netJay !== 0 || netKim !== 0) {
+    if (netJay === netKim) return 'tie';
+    return netJay > netKim ? 'jay' : 'kim';
+  }
+  const safeFallbackScores = fallbackScores || null;
+  if (!safeFallbackScores) return 'tie';
+  if (Number(safeFallbackScores.jay || 0) === Number(safeFallbackScores.kim || 0)) return 'tie';
+  return Number(safeFallbackScores.jay || 0) > Number(safeFallbackScores.kim || 0) ? 'jay' : 'kim';
+};
+const mergeHoldemSnapshotState = (currentState = null, incomingState = null) => {
+  if (!currentState) return incomingState;
+  if (!incomingState) return currentState;
+  const currentHandNumber = Number(currentState?.handNumber || 0);
+  const incomingHandNumber = Number(incomingState?.handNumber || 0);
+  if (currentHandNumber > incomingHandNumber) return currentState;
+  if (incomingHandNumber > currentHandNumber) return incomingState;
+
+  const currentStatus = String(currentState?.sessionStatus || '');
+  const incomingStatus = String(incomingState?.sessionStatus || '');
+  const currentRank = HOLDEM_SESSION_PROGRESS_RANK[currentStatus] ?? 0;
+  const incomingRank = HOLDEM_SESSION_PROGRESS_RANK[incomingStatus] ?? 0;
+  if (currentRank > incomingRank) return currentState;
+  if (incomingRank > currentRank) return incomingState;
+
+  if (!HOLDEM_READY_SESSION_STATUSES.has(currentStatus) && !HOLDEM_READY_SESSION_STATUSES.has(incomingStatus)) {
+    return incomingState;
+  }
+
+  const currentReadyBySeat = normalizeHoldemReadyBySeat(currentState?.dealReadyBySeat || {});
+  const incomingReadyBySeat = normalizeHoldemReadyBySeat(incomingState?.dealReadyBySeat || {});
+  const mergedReadyBySeat = {
+    jay: currentReadyBySeat.jay || incomingReadyBySeat.jay,
+    kim: currentReadyBySeat.kim || incomingReadyBySeat.kim,
+  };
+  if (
+    mergedReadyBySeat.jay === incomingReadyBySeat.jay
+    && mergedReadyBySeat.kim === incomingReadyBySeat.kim
+  ) {
+    return incomingState;
+  }
+
+  const currentReadyCount = countHoldemReadySeats(currentReadyBySeat);
+  const incomingReadyCount = countHoldemReadySeats(incomingReadyBySeat);
+  return {
+    ...(currentReadyCount > incomingReadyCount ? currentState : incomingState),
+    ...incomingState,
+    sessionStatus: incomingStatus || currentStatus || 'ready_to_deal',
+    dealReadyBySeat: mergedReadyBySeat,
+    statusMessage: buildHoldemDealReadyStatusCopy(mergedReadyBySeat),
+    updatedAt: currentReadyCount >= incomingReadyCount
+      ? (currentState?.updatedAt || incomingState?.updatedAt || '')
+      : (incomingState?.updatedAt || currentState?.updatedAt || ''),
+  };
+};
 const defaultAuthForm = { displayName: '', email: '', password: '', resetEmail: '' };
 const defaultDraft = { ownAnswer: '', guessedOther: '' };
 const defaultPenaltyDraft = { jay: '0', kim: '0' };
@@ -81,6 +234,7 @@ const defaultForfeitResponseDraft = () => ({ price: '', message: '' });
 const defaultAmaQuestionDraft = () => ({ question: '', open: false });
 const defaultAmaAnswerDraft = () => ({ answer: '', story: '', media: [], relatedCategories: [], open: false, question: '', itemId: '', requestId: '' });
 const activeGameKey = 'kjk-active-game-id';
+const pendingDeletedGamesKey = 'kjk-pending-deleted-game-ids';
 const editingModeKey = 'kjk-editing-mode';
 const questionBankMetaId = 'question-bank-source';
 const EDITING_MODE_PIN = '0000';
@@ -111,15 +265,218 @@ const oppositeSeatOf = (seat = 'jay') => (seat === 'kim' ? 'jay' : 'kim');
 const preferredSeatForUser = (user, profile) => inferSeatFromUser(user, profile) || seatFromPlayerRef(user?.uid) || 'jay';
 const buildGameInviteId = (targetGameId = '', invitedForUserId = '') =>
   targetGameId && invitedForUserId ? `game-invite-${targetGameId}-${invitedForUserId}` : '';
+const buildGameRoomInviteKey = (targetGameId = '', invitedForUserId = '', invitedForSeat = '') =>
+  [targetGameId, invitedForUserId || invitedForSeat || 'pending'].filter(Boolean).join(':');
+const resolveGameMode = (value = 'standard') =>
+  value === 'quiz'
+    ? 'quiz'
+    : value === HOLDEM_GAME_MODE
+      ? HOLDEM_GAME_MODE
+      : value === TRUE_FALSE_GAME_MODE
+        ? TRUE_FALSE_GAME_MODE
+        : value === THIS_OR_THAT_GAME_MODE
+          ? THIS_OR_THAT_GAME_MODE
+        : 'standard';
+const isQuizGameMode = (value = 'standard') => resolveGameMode(value) === 'quiz';
+const isHoldemGameMode = (value = 'standard') => resolveGameMode(value) === HOLDEM_GAME_MODE;
+const isTrueFalseGameMode = (value = 'standard') => resolveGameMode(value) === TRUE_FALSE_GAME_MODE;
+const isThisOrThatGameMode = (value = 'standard') => resolveGameMode(value) === THIS_OR_THAT_GAME_MODE;
+const isAutoScoredChoiceGameMode = (value = 'standard') =>
+  isTrueFalseGameMode(value) || isThisOrThatGameMode(value);
+const getQuestionBankTypeForGameMode = (value = 'standard') => {
+  const gameMode = resolveGameMode(value);
+  if (gameMode === 'quiz') return 'quiz';
+  if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThatGame';
+  if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalseGame';
+  return 'game';
+};
+const ANALYTICS_GAME_SCORE_MODES = [
+  { id: 'standard', label: 'Game Score' },
+  { id: 'quiz', label: 'Quiz Score' },
+  { id: 'trueFalse', label: 'True or False' },
+  { id: 'thisOrThat', label: 'This or That' },
+  { id: 'holdem', label: 'Texas Hold Em' },
+];
+const getAnalyticsGameScoreModeId = (value = 'standard') => {
+  const gameMode = resolveGameMode(value);
+  if (gameMode === 'quiz') return 'quiz';
+  if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalse';
+  if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThat';
+  if (gameMode === HOLDEM_GAME_MODE) return 'holdem';
+  return 'standard';
+};
 const QUIZ_TIMER_SECONDS = 10;
 const QUIZ_WHEEL_SLOT_COUNT = 20;
-const QUIZ_WHEEL_MIN_PERCENT = 0.05;
-const QUIZ_WHEEL_PERCENT_STEP = 0.05;
-const QUIZ_WHEEL_MAX_PERCENT = 1;
-const QUIZ_WHEEL_SLOT_ORDER = [8, 17, 2, 14, 19, 5, 11, 0, 16, 7, 13, 3, 18, 9, 15, 1, 12, 6, 10, 4];
-const QUIZ_WHEEL_COUNTDOWN_MS = 3000;
+const QUIZ_WHEEL_MAX_AMOUNT = 2500;
+const QUIZ_WHEEL_COUNTDOWN_MS = 5000;
 const QUIZ_WHEEL_SPIN_MS = 5000;
+const QUIZ_WHEEL_SETTLE_MS = 1200;
+const QUIZ_SETUP_COUNTDOWN_MS = 3000;
 const QUIZ_REVEAL_FLASH_MS = 3000;
+const AI_CHAT_MESSAGE_LIMIT = 160;
+const AI_EVIDENCE_PREVIEW_LIMIT = 4;
+const AI_DIARY_PROMPT_VERSION = '2026-05-03-v1';
+const AI_DIARY_GAME_HIGHLIGHT_LIMIT = 8;
+const AI_DIARY_SIGNAL_LIMIT = 4;
+const AI_SEARCH_STOPWORDS = new Set([
+  'a',
+  'about',
+  'actually',
+  'all',
+  'am',
+  'an',
+  'and',
+  'any',
+  'are',
+  'as',
+  'at',
+  'be',
+  'been',
+  'both',
+  'by',
+  'did',
+  'do',
+  'does',
+  'for',
+  'from',
+  'get',
+  'give',
+  'has',
+  'have',
+  'how',
+  'he',
+  'her',
+  'hers',
+  'him',
+  'his',
+  'i',
+  'in',
+  'into',
+  'is',
+  'it',
+  'its',
+  'just',
+  'me',
+  'my',
+  'of',
+  'on',
+  'or',
+  'our',
+  'say',
+  'said',
+  'says',
+  'she',
+  'tell',
+  'that',
+  'the',
+  'their',
+  'them',
+  'they',
+  'to',
+  'us',
+  'was',
+  'we',
+  'were',
+  'what',
+  'when',
+  'where',
+  'which',
+  'who',
+  'why',
+  'with',
+  'would',
+  'you',
+  'your',
+]);
+const AI_COMPARISON_STOPWORDS = new Set([
+  'better',
+  'best',
+  'less',
+  'likely',
+  'more',
+  'most',
+  'one',
+  'person',
+  'than',
+  'two',
+  'worse',
+]);
+const AI_SEARCH_TOKEN_ALIASES = {
+  sec: ['sex', 'sexual', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky', 'fantasy', 'fantasies'],
+  sex: ['sexual', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky'],
+  sexual: ['sex', 'sexy', 'intimate', 'intimacy', 'kink', 'kinky'],
+  sexy: ['sex', 'sexual'],
+  intimate: ['intimacy', 'sex', 'sexual'],
+  intimacy: ['intimate', 'sex', 'sexual'],
+  kink: ['kinky', 'sexual', 'sex'],
+  kinky: ['kink', 'sexual', 'sex'],
+  fantasy: ['fantasies', 'sexual', 'sex'],
+  fantasies: ['fantasy', 'sexual', 'sex'],
+  horny: ['sexual', 'sex'],
+  masturbating: ['sexual', 'sex'],
+  lie: ['liar', 'lying', 'dishonest', 'deceptive', 'deception', 'bluff', 'bluffing'],
+  liar: ['lie', 'lying', 'dishonest', 'deceptive', 'deception', 'bluff', 'bluffing'],
+  lying: ['lie', 'liar', 'dishonest', 'deceptive', 'deception'],
+  dishonest: ['lie', 'liar', 'lying', 'deceptive', 'deception'],
+  deceptive: ['lie', 'liar', 'lying', 'dishonest', 'deception'],
+  deception: ['lie', 'liar', 'lying', 'dishonest', 'deceptive'],
+  bluff: ['bluffing', 'lie', 'liar', 'deceptive'],
+  bluffing: ['bluff', 'lie', 'liar', 'deceptive'],
+  romance: ['romantic'],
+  romantic: ['romance'],
+};
+const AI_TOPIC_CATEGORY_HINTS = {
+  sexual: [
+    'sex',
+    'sec',
+    'sexual',
+    'sexy',
+    'intimate',
+    'intimacy',
+    'kink',
+    'kinky',
+    'fantasy',
+    'fantasies',
+    'turn on',
+    'turn-on',
+    'turn ons',
+    'turn-ons',
+    'masturbat',
+    'horny',
+    'bedroom',
+    'flirty',
+  ],
+};
+const AI_RECOMMENDATION_STOPWORDS = new Set([
+  'anniversary',
+  'best',
+  'birthday',
+  'buy',
+  'christmas',
+  'gift',
+  'gifts',
+  'get',
+  'getting',
+  'good',
+  'idea',
+  'ideas',
+  'present',
+  'presents',
+  'recommend',
+  'recommendation',
+  'recommendations',
+  'should',
+  'suggest',
+  'suggestion',
+  'suggestions',
+  'surprise',
+  'valentine',
+  'valentines',
+]);
+const AI_RECOMMENDATION_QUESTION_PATTERN = /favo[u]?rite|love|enjoy|ideal|dream|wish|bucket list|relax|hobby|collect|style|wear|food|drink|music|film|movie|travel|holiday|trip|date|weekend|self care|pamper|shopping|turn on|fantasy|romantic/i;
+const AI_RECOMMENDATION_WEAK_ANSWER_PATTERN = /^(yes|no|maybe|true|false|n\/a|na|none|nothing|jay|kim|both|either|neither|idk|i do not know|i don't know|dont know)$/i;
+const DIRECT_AI_EVIDENCE_KINDS = new Set(['game-answer', 'diary-entry', 'private-note']);
+const INDIRECT_AI_EVIDENCE_KINDS = new Set(['question-feedback']);
 const normalizeQuizAnswerText = (value = '') =>
   normalizeText(value)
     .toLowerCase()
@@ -151,12 +508,83 @@ const pointsFromTimerMilliseconds = (millisecondsLeft = 0) => {
 const defaultQuizReadyState = (stage = 'opening') => ({
   stage,
   ready: { jay: false, kim: false },
+  countdownStartedAt: '',
+  countdownEndsAt: '',
 });
+const normalizeQuizReadyState = (value = null, fallbackStage = 'opening') => {
+  const source = value || {};
+  const stage = normalizeText(source.stage || fallbackStage) || fallbackStage;
+  return {
+    ...defaultQuizReadyState(stage),
+    ...source,
+    stage,
+    ready: {
+      jay: Boolean(source.ready?.jay),
+      kim: Boolean(source.ready?.kim),
+    },
+    countdownStartedAt: normalizeText(source.countdownStartedAt || ''),
+    countdownEndsAt: normalizeText(source.countdownEndsAt || ''),
+  };
+};
+const buildQuizSetupReadyStateForSeat = (sourceState = null, seat = 'jay', nowMs = Date.now()) => {
+  const current = normalizeQuizReadyState(sourceState, 'ready');
+  const cleanSeat = seat === 'kim' ? 'kim' : 'jay';
+  const ready = {
+    jay: Boolean(current.ready?.jay),
+    kim: Boolean(current.ready?.kim),
+    [cleanSeat]: true,
+  };
+  const bothReady = Boolean(ready.jay && ready.kim);
+  const currentStage = normalizeText(current.stage || 'ready') || 'ready';
+  const keepExistingCountdown = bothReady && currentStage === 'countdown' && Boolean(current.countdownEndsAt);
+  const nowIso = new Date(nowMs).toISOString();
+  return {
+    ...current,
+    stage: bothReady ? 'countdown' : 'ready',
+    ready,
+    countdownStartedAt: bothReady
+      ? (keepExistingCountdown ? (current.countdownStartedAt || nowIso) : nowIso)
+      : '',
+    countdownEndsAt: bothReady
+      ? (keepExistingCountdown ? current.countdownEndsAt : new Date(nowMs + QUIZ_SETUP_COUNTDOWN_MS).toISOString())
+      : '',
+  };
+};
+const buildQuizSetupCountdownState = (sourceState = null, readyOverride = null, nowMs = Date.now()) => {
+  const current = normalizeQuizReadyState(sourceState, 'ready');
+  const ready = {
+    jay: Boolean(readyOverride?.jay ?? current.ready?.jay),
+    kim: Boolean(readyOverride?.kim ?? current.ready?.kim),
+  };
+  if (!ready.jay || !ready.kim) {
+    return {
+      ...current,
+      stage: 'ready',
+      ready,
+      countdownStartedAt: '',
+      countdownEndsAt: '',
+    };
+  }
+  const currentStage = normalizeText(current.stage || 'ready') || 'ready';
+  const keepExistingCountdown = currentStage === 'countdown' && Boolean(current.countdownEndsAt);
+  const nowIso = new Date(nowMs).toISOString();
+  return {
+    ...current,
+    stage: 'countdown',
+    ready,
+    countdownStartedAt: keepExistingCountdown ? (current.countdownStartedAt || nowIso) : nowIso,
+    countdownEndsAt: keepExistingCountdown ? current.countdownEndsAt : new Date(nowMs + QUIZ_SETUP_COUNTDOWN_MS).toISOString(),
+  };
+};
 const defaultQuizWagerAgreement = () => ({
   status: 'negotiating',
+  requestKind: '',
   amount: null,
   proposedAmount: null,
   proposedBySeat: '',
+  wheelRequestedBySeat: '',
+  wheelRequestedByUserId: '',
+  wheelRequestedByName: '',
   proposalStatus: '',
   rejectedBySeat: '',
   acceptedBySeat: '',
@@ -164,29 +592,48 @@ const defaultQuizWagerAgreement = () => ({
   wheelBaseAmount: 0,
   wheelSlots: [],
   wheelResultIndex: null,
+  wheelResultAmount: null,
   wheelCountdownStartedAt: '',
   wheelSpinStartedAt: '',
   wheelSpinEndsAt: '',
   lockedByWheel: false,
 });
+const parseNullableNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+const parseNullableInteger = (value) => {
+  const parsed = parseNullableNumber(value);
+  return parsed === null ? null : Math.trunc(parsed);
+};
+const parseQuizWagerAmountInput = (value) => {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) return { valid: false, code: 'missing', amount: null };
+  if (!/^-?\d+$/.test(rawValue)) return { valid: false, code: 'invalid', amount: null };
+  const parsedAmount = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsedAmount)) return { valid: false, code: 'invalid', amount: null };
+  if (parsedAmount < 0) return { valid: false, code: 'negative', amount: parsedAmount };
+  return { valid: true, code: '', amount: parsedAmount };
+};
 const sanitizeQuizWagerAmount = (value) => Math.max(0, Number.parseInt(String(value ?? ''), 10) || 0);
-const capQuizWheelStake = (baseAmount = 0, stakeAmount = 0) => {
-  const safeBase = Math.max(0, Math.floor(Number(baseAmount || 0)));
+const capQuizWheelStake = (baseAmount = QUIZ_WHEEL_MAX_AMOUNT, stakeAmount = 0) => {
+  const safeBase = Math.max(1, Math.floor(Number(baseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
   const safeStake = Math.max(0, Math.floor(Number(stakeAmount || 0)));
-  return Math.min(safeStake, Math.floor(safeBase * QUIZ_WHEEL_MAX_PERCENT));
+  return Math.min(safeStake, safeBase);
 };
 const capQuizWagerAmount = (value = 0, capAmount = 0) => {
   const safeCap = Math.max(0, Math.floor(Number(capAmount || 0)));
   const safeValue = sanitizeQuizWagerAmount(value);
   return Math.min(safeValue, safeCap);
 };
-const buildQuizWheelSlots = (baseAmount = 0) => {
-  const safeBase = Math.max(0, Math.floor(Number(baseAmount || 0)));
-  const orderedSlots = Array.from({ length: QUIZ_WHEEL_SLOT_COUNT }, (_, index) => {
-    const percent = QUIZ_WHEEL_MIN_PERCENT + (index * QUIZ_WHEEL_PERCENT_STEP);
-    return capQuizWheelStake(safeBase, Math.floor(safeBase * percent));
-  });
-  return QUIZ_WHEEL_SLOT_ORDER.map((slotIndex) => orderedSlots[slotIndex] ?? 0);
+const buildQuizWheelSlots = (baseAmount = QUIZ_WHEEL_MAX_AMOUNT) => {
+  const safeBase = Math.max(QUIZ_WHEEL_SLOT_COUNT, Math.floor(Number(baseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
+  const slots = new Set();
+  while (slots.size < QUIZ_WHEEL_SLOT_COUNT) {
+    slots.add(1 + Math.floor(Math.random() * safeBase));
+  }
+  return [...slots];
 };
 const shuffleQuizWheelSlots = (slots = []) => {
   const shuffled = [...slots];
@@ -200,6 +647,20 @@ const getQuizWheelBaseAmount = (playerAccounts = {}) => {
   const jayAmount = Math.max(0, Math.floor(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0)));
   const kimAmount = Math.max(0, Math.floor(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0)));
   return Math.min(jayAmount, kimAmount);
+};
+const getQuizWagerValidationMessage = (value, capAmount = 0, { requireDifferentFrom = null } = {}) => {
+  const parsed = parseQuizWagerAmountInput(value);
+  if (!parsed.valid) {
+    if (parsed.code === 'missing') return 'Enter a wager amount.';
+    if (parsed.code === 'negative') return 'Wager must be at least 0.';
+    return 'Enter a valid whole number.';
+  }
+  const safeCapAmount = Math.max(0, Math.floor(Number(capAmount || 0)));
+  if (parsed.amount > safeCapAmount) return `Wager cannot exceed ${formatScore(safeCapAmount)}.`;
+  if (Number.isFinite(Number(requireDifferentFrom)) && parsed.amount === Math.max(0, Math.floor(Number(requireDifferentFrom)))) {
+    return 'Counter must be different from the current proposal.';
+  }
+  return '';
 };
 const normalizeQuizWagerAgreement = (game = {}) => {
   const agreement = game?.quizWagerAgreement || null;
@@ -218,16 +679,20 @@ const normalizeQuizWagerAgreement = (game = {}) => {
     };
   }
   const status = normalizeText(agreement.status || 'negotiating') || 'negotiating';
-  const amount = Number(agreement.amount);
-  const proposedAmount = Number(agreement.proposedAmount);
+  const amount = parseNullableNumber(agreement.amount);
+  const proposedAmount = parseNullableNumber(agreement.proposedAmount);
   const wheelBaseAmount = Math.max(0, Math.floor(Number(agreement.wheelBaseAmount || 0)));
   return {
     ...defaultQuizWagerAgreement(),
     ...agreement,
     status,
-    amount: Number.isFinite(amount) ? Math.max(0, amount) : null,
-    proposedAmount: Number.isFinite(proposedAmount) ? Math.max(0, proposedAmount) : null,
+    requestKind: agreement.requestKind === 'wheel' ? 'wheel' : agreement.requestKind === 'manual' ? 'manual' : '',
+    amount: amount !== null ? Math.max(0, amount) : null,
+    proposedAmount: proposedAmount !== null ? Math.max(0, proposedAmount) : null,
     proposedBySeat: agreement.proposedBySeat === 'kim' ? 'kim' : agreement.proposedBySeat === 'jay' ? 'jay' : '',
+    wheelRequestedBySeat: agreement.wheelRequestedBySeat === 'kim' ? 'kim' : agreement.wheelRequestedBySeat === 'jay' ? 'jay' : '',
+    wheelRequestedByUserId: String(agreement.wheelRequestedByUserId || '').trim(),
+    wheelRequestedByName: String(agreement.wheelRequestedByName || '').trim(),
     rejectedBySeat: agreement.rejectedBySeat === 'kim' ? 'kim' : agreement.rejectedBySeat === 'jay' ? 'jay' : '',
     acceptedBySeat: agreement.acceptedBySeat === 'kim' ? 'kim' : agreement.acceptedBySeat === 'jay' ? 'jay' : '',
     wheelOptIn: {
@@ -236,29 +701,109 @@ const normalizeQuizWagerAgreement = (game = {}) => {
     },
     wheelBaseAmount,
     wheelSlots: Array.isArray(agreement.wheelSlots)
-      ? agreement.wheelSlots.map((slot) => capQuizWheelStake(wheelBaseAmount, slot))
+      ? agreement.wheelSlots.map((slot) => capQuizWheelStake(QUIZ_WHEEL_MAX_AMOUNT, slot))
       : [],
-    wheelResultIndex: Number.isFinite(Number(agreement.wheelResultIndex)) ? Number(agreement.wheelResultIndex) : null,
+    wheelResultIndex: parseNullableInteger(agreement.wheelResultIndex),
+    wheelResultAmount: parseNullableNumber(agreement.wheelResultAmount) !== null
+      ? Math.max(0, Number(agreement.wheelResultAmount))
+      : null,
     lockedByWheel: Boolean(agreement.lockedByWheel),
   };
 };
 const getQuizSharedWagerAmount = (game = {}) => {
   const agreement = normalizeQuizWagerAgreement(game);
-  return Number.isFinite(Number(agreement.amount)) ? Math.max(0, Number(agreement.amount)) : null;
+  if (agreement.amount !== null) return Math.max(0, agreement.amount);
+  if (agreement.wheelResultAmount !== null && (agreement.lockedByWheel || agreement.status === 'wheel_countdown')) {
+    return Math.max(0, agreement.wheelResultAmount);
+  }
+  const resultIndex = agreement.wheelResultIndex;
+  if (agreement.status === 'wheel_countdown' && resultIndex !== null && Array.isArray(agreement.wheelSlots) && agreement.wheelSlots.length) {
+    return Math.max(0, Number(agreement.wheelSlots[Math.max(0, Math.min(agreement.wheelSlots.length - 1, resultIndex))] || 0));
+  }
+  if (agreement.status === 'agreed' || agreement.status === 'wheel_locked' || agreement.status === 'wheel_countdown') {
+    const jayWager = Number(game?.quizWagers?.jay);
+    const kimWager = Number(game?.quizWagers?.kim);
+    if (
+      Number.isFinite(jayWager)
+      && Number.isFinite(kimWager)
+      && jayWager === kimWager
+      && (jayWager > 0 || Boolean(game?.currentRound) || Number(game?.roundsPlayed || 0) > 0)
+    ) {
+      return Math.max(0, jayWager);
+    }
+  }
+  return null;
 };
 const isQuizWagerAgreementLocked = (game = {}) => {
   const agreement = normalizeQuizWagerAgreement(game);
-  return (agreement.status === 'agreed' || agreement.status === 'wheel_locked') && Number.isFinite(Number(agreement.amount));
+  return (agreement.status === 'agreed' || agreement.status === 'wheel_locked') && agreement.amount !== null;
 };
 const getQuizWheelPhase = (agreement = {}, nowMs = Date.now()) => {
   const normalized = normalizeQuizWagerAgreement({ quizWagerAgreement: agreement });
   if (normalized.status === 'wheel_locked') return 'locked';
+  if (normalized.status !== 'wheel_countdown') return '';
   const spinStartMs = Date.parse(normalized.wheelSpinStartedAt || '');
   const spinEndMs = Date.parse(normalized.wheelSpinEndsAt || '');
   if (!Number.isFinite(spinStartMs) || !Number.isFinite(spinEndMs)) return '';
   if (nowMs < spinStartMs) return 'countdown';
   if (nowMs < spinEndMs) return 'spinning';
-  return 'landing';
+  return nowMs < spinEndMs + QUIZ_WHEEL_SETTLE_MS ? 'landing' : 'locked';
+};
+const isQuizWagerEffectivelyLocked = (game = {}, nowMs = Date.now()) => {
+  if (isQuizWagerAgreementLocked(game)) return true;
+  const agreement = normalizeQuizWagerAgreement(game);
+  if (agreement.status !== 'wheel_countdown') return false;
+  const spinEndsAtMs = Date.parse(agreement.wheelSpinEndsAt || '');
+  if (!Number.isFinite(spinEndsAtMs) || nowMs < spinEndsAtMs) return false;
+  const sharedAmount = getQuizSharedWagerAmount(game);
+  return sharedAmount !== null && Number.isFinite(Number(sharedAmount));
+};
+const buildQuizWagerLockPatch = (gameData = {}, nowIso = new Date().toISOString()) => {
+  if (isQuizWagerAgreementLocked(gameData)) return null;
+  if (!isQuizWagerEffectivelyLocked(gameData)) return null;
+  const agreement = normalizeQuizWagerAgreement(gameData);
+  const sharedAmount = getQuizSharedWagerAmount(gameData);
+  if (sharedAmount === null || !Number.isFinite(Number(sharedAmount))) return null;
+  const amount = Math.max(0, Number(sharedAmount));
+  const wasWheelLock = agreement.status === 'wheel_countdown'
+    || agreement.requestKind === 'wheel'
+    || Boolean(agreement.lockedByWheel);
+  return {
+    quizWagers: { jay: amount, kim: amount },
+    quizWagerAgreement: {
+      ...agreement,
+      status: wasWheelLock ? 'wheel_locked' : 'agreed',
+      requestKind: wasWheelLock ? 'wheel' : (agreement.requestKind || 'manual'),
+      amount,
+      wheelResultAmount: wasWheelLock ? (agreement.wheelResultAmount ?? amount) : agreement.wheelResultAmount,
+      proposalStatus: 'accepted',
+      lockedByWheel: wasWheelLock,
+      lockedAt: agreement.lockedAt || nowIso,
+    },
+  };
+};
+const formatWheelAmount = (value = 0) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return '0';
+  return new Intl.NumberFormat('en-GB', {
+    useGrouping: false,
+    maximumFractionDigits: 0,
+  }).format(Math.max(0, Math.round(numeric)));
+};
+const getQuizWagerAgreementRank = (agreement = {}) => {
+  const normalized = normalizeQuizWagerAgreement({ quizWagerAgreement: agreement });
+  if (normalized.status === 'agreed' || normalized.status === 'wheel_locked') return 3;
+  if (normalized.status === 'wheel_countdown') return 2;
+  if (normalized.status === 'proposal_pending' || normalized.status === 'wheel_pending') return 1;
+  return 0;
+};
+const shouldPreserveCurrentQuizAgreement = (currentGame = null, incomingGame = null) => {
+  const currentAgreementRank = getQuizWagerAgreementRank(currentGame?.quizWagerAgreement || null);
+  const incomingAgreementRank = getQuizWagerAgreementRank(incomingGame?.quizWagerAgreement || null);
+  if (currentAgreementRank <= incomingAgreementRank) return false;
+  const currentUpdatedAtMs = getRecordTime(currentGame?.updatedAt || 0);
+  const incomingUpdatedAtMs = getRecordTime(incomingGame?.updatedAt || 0);
+  return incomingUpdatedAtMs > 0 && currentUpdatedAtMs > incomingUpdatedAtMs;
 };
 const hasNextReadySeat = (round = null, seat = 'jay') => Boolean(round?.nextReady?.[seat === 'kim' ? 'kim' : 'jay']);
 const hasQuizSetupReadySeat = (game = null, seat = 'jay') => Boolean(game?.quizReadyState?.ready?.[seat === 'kim' ? 'kim' : 'jay']);
@@ -275,8 +820,24 @@ const sortByNewest = (a, b) =>
   getRecordTime(b?.updatedAt || b?.createdAt || b?.requestedAt || b?.redeemedAt || b?.completedAt)
   - getRecordTime(a?.updatedAt || a?.createdAt || a?.requestedAt || a?.redeemedAt || a?.completedAt);
 const sortByOldest = (a, b) =>
-  getRecordTime(a?.createdAt || a?.redeemedAt || a?.updatedAt || a?.questionAskedAt || a?.answeredAt)
-  - getRecordTime(b?.createdAt || b?.redeemedAt || b?.updatedAt || b?.questionAskedAt || b?.answeredAt);
+  getRecordTime(a?.endedAt || a?.createdAt || a?.redeemedAt || a?.updatedAt || a?.questionAskedAt || a?.answeredAt)
+  - getRecordTime(b?.endedAt || b?.createdAt || b?.redeemedAt || b?.updatedAt || b?.questionAskedAt || b?.answeredAt);
+const getInviteDisplayStatus = (invite = null, linkedGame = null) => {
+  const inviteStatus = normalizeText(invite?.status || 'pending') || 'pending';
+  if (inviteStatus !== 'pending') return inviteStatus;
+  const linkedGameStatus = normalizeText(linkedGame?.status || '') || '';
+  const storedGameStatus = normalizeText(invite?.gameStatus || '') || '';
+  if (
+    COMPLETED_GAME_STATUSES.includes(storedGameStatus)
+    || ['missing', 'unavailable', 'expired'].includes(storedGameStatus)
+    || COMPLETED_GAME_STATUSES.includes(linkedGameStatus)
+    || ['missing', 'unavailable', 'expired'].includes(linkedGameStatus)
+  ) {
+    return 'expired';
+  }
+  if (linkedGame && !isGameSessionJoinable(linkedGame)) return 'expired';
+  return 'pending';
+};
 const collectGameQuestionIds = (games = [], { includeQueued = true } = {}) =>
   mergeUniqueIds(
     ...(games || []).map((entry) =>
@@ -375,7 +936,7 @@ const pickDiverseQuestions = (questions = [], requestedCount = 10) => {
   const safeRequestedCount = Math.max(1, Number.parseInt(requestedCount, 10) || 10);
   const grouped = new Map();
   shuffleArray(questions).forEach((question) => {
-    const roundType = String(question?.roundType || 'numeric').trim() || 'numeric';
+    const roundType = normalizeQuestionType(question?.roundType, 'text');
     if (!grouped.has(roundType)) grouped.set(roundType, []);
     grouped.get(roundType).push(question);
   });
@@ -399,6 +960,8 @@ const seatForUid = (game, uid) => {
   if (!game || !uid) return null;
   if (game.seats?.jay === uid) return 'jay';
   if (game.seats?.kim === uid) return 'kim';
+  if (game?.playerProfiles?.[uid]?.seat === 'jay') return 'jay';
+  if (game?.playerProfiles?.[uid]?.seat === 'kim') return 'kim';
   if (uid === fixedPlayerUids.jay) return 'jay';
   if (uid === fixedPlayerUids.kim) return 'kim';
   return null;
@@ -442,43 +1005,16 @@ const isStarterOnlyQuestionBank = (questions = []) =>
   Boolean(questions.length) &&
   questions.length <= STARTER_QUESTIONS.length &&
   questions.every((question) => starterQuestionIds.has(question.id) || question.source === 'starter');
-const DEFAULT_PLAYER_CHOICE_OPTIONS = ['Me', 'Them', 'Both', 'Neither'];
-
-const buildEitherOrOptions = (question = '') => {
-  const cleaned = normalizeText(question).replace(/[?!.]+$/, '');
-  const patterns = [
-    /would you rather (.+?) or (.+)$/i,
-    /do you prefer (.+?) or (.+)$/i,
-    /are you more of (.+?) or (.+)$/i,
-    /would you choose (.+?) or (.+)$/i,
-    /between (.+?) and (.+),/i,
-  ];
-  for (const pattern of patterns) {
-    const match = cleaned.match(pattern);
-    if (!match) continue;
-    const left = normalizeText(match[1]).replace(/^(to |be |have )/i, '');
-    const right = normalizeText(match[2]).replace(/^(to |be |have )/i, '');
-    if (left && right) return [left, right];
-  }
-  return [];
-};
 
 const inferChoiceOptions = (round = {}) => {
-  const roundType = round?.roundType || 'text';
-  if (roundType === 'trueFalse') return ['True', 'False'];
-  if (Array.isArray(round?.multipleChoiceOptions) && round.multipleChoiceOptions.length) {
-    return round.multipleChoiceOptions;
-  }
-  const question = normalizeText(round?.question);
-  if (/who is more likely|who is most likely/i.test(question)) {
-    return DEFAULT_PLAYER_CHOICE_OPTIONS;
-  }
-  const eitherOrOptions = buildEitherOrOptions(question);
-  if (eitherOrOptions.length) return eitherOrOptions;
-  if (roundType === 'multipleChoice') return DEFAULT_PLAYER_CHOICE_OPTIONS;
-  if (roundType === 'preference') return ['Option A', 'Option B'];
-  return [];
+  const roundType = normalizeQuestionType(round?.roundType, 'text');
+  return getDefaultOptionsForQuestionType(roundType, {
+    question: round?.question || '',
+    options: round?.multipleChoiceOptions || [],
+  });
 };
+const isThisOrThatQuestionCompatible = (question = {}) =>
+  getThisOrThatOptions(question).length >= 2;
 
 const decodeRankedAnswer = (value, count = 3) => {
   const rawValue = Array.isArray(value) ? value : String(value || '').split(/\n|,|;/);
@@ -562,6 +1098,1480 @@ const buildDiaryThemeOptions = (roundAnalytics = null) => {
   return [...new Set([...fromAnalytics, ...fromDefaults])];
 };
 
+const truncateAiText = (value = '', maxLength = 120) => {
+  const text = normalizeText(value);
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 3)).trim()}...` : text;
+};
+
+const tokenizeAiSearchText = (value = '') =>
+  [...new Set(
+    normalizeText(value)
+      .toLowerCase()
+      .replace(/[’']/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1)
+      .filter((token) => token === 'jay' || token === 'kim' || !AI_SEARCH_STOPWORDS.has(token))
+      .flatMap((token) => [token, ...(AI_SEARCH_TOKEN_ALIASES[token] || [])])
+      .filter(Boolean),
+  )];
+
+const tokenizeAiPromptCoreText = (value = '') =>
+  [...new Set(
+    normalizeText(value)
+      .toLowerCase()
+      .replace(/[’']/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1)
+      .filter((token) => token !== 'jay' && token !== 'kim' && !AI_SEARCH_STOPWORDS.has(token)),
+  )];
+
+const detectAiTopicCategories = (prompt = '') => {
+  const normalizedPrompt = normalizeText(prompt).toLowerCase();
+  return Object.entries(AI_TOPIC_CATEGORY_HINTS)
+    .filter(([, hints]) => (hints || []).some((hint) => normalizedPrompt.includes(hint)))
+    .map(([category]) => category);
+};
+
+const isAiRecommendationUsefulAnswer = (value = '') => {
+  const normalizedValue = normalizeText(value);
+  if (!normalizedValue) return false;
+  if (AI_RECOMMENDATION_WEAK_ANSWER_PATTERN.test(normalizedValue)) return false;
+  if (/^\d+$/.test(normalizedValue)) return false;
+  return normalizedValue.length >= 2;
+};
+
+const formatAiList = (items = []) => {
+  const cleaned = [...new Set((items || []).map((item) => normalizeText(item)).filter(Boolean))];
+  if (!cleaned.length) return '';
+  if (cleaned.length === 1) return cleaned[0];
+  if (cleaned.length === 2) return `${cleaned[0]} and ${cleaned[1]}`;
+  return `${cleaned.slice(0, -1).join(', ')}, and ${cleaned.at(-1)}`;
+};
+
+const incrementAiCategoryCount = (bucket, category = '') => {
+  const key = normalizeText(category) || 'Uncategorised';
+  bucket.set(key, Number(bucket.get(key) || 0) + 1);
+};
+
+const createAiSeatStats = () => ({
+  standardAnswers: 0,
+  quizAnswers: 0,
+  quizCorrect: 0,
+  quizIncorrect: 0,
+  quizPoints: 0,
+  liked: 0,
+  disliked: 0,
+  diaryEntries: 0,
+  privateNotes: 0,
+  evidenceCount: 0,
+  answeredCategoryCounts: new Map(),
+  likedCategoryCounts: new Map(),
+  dislikedCategoryCounts: new Map(),
+});
+
+const buildAiMetadataSearchText = (source = {}) =>
+  [
+    ...(Array.isArray(source?.tags) ? source.tags : []),
+    source?.tone || '',
+    source?.relationshipArea || '',
+    ...(Array.isArray(source?.avoidIf) ? source.avoidIf : []),
+    ...(Array.isArray(source?.gameSuitability) ? source.gameSuitability : []),
+    ...(Array.isArray(source?.aiUseCase) ? source.aiUseCase : []),
+    source?.repeatGroup || '',
+    Number(source?.intensity || 0) ? `intensity ${Number(source.intensity)}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+const finalizeAiCategoryCounts = (bucket = new Map()) =>
+  [...bucket.entries()]
+    .map(([label, count]) => ({ label, count: Number(count || 0) }))
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+
+const finalizeAiSeatStats = (stats = createAiSeatStats()) => {
+  const quizAnswers = Number(stats.quizAnswers || 0);
+  const quizCorrect = Number(stats.quizCorrect || 0);
+  return {
+    standardAnswers: Number(stats.standardAnswers || 0),
+    quizAnswers,
+    quizCorrect,
+    quizIncorrect: Number(stats.quizIncorrect || 0),
+    quizPoints: Number(stats.quizPoints || 0),
+    liked: Number(stats.liked || 0),
+    disliked: Number(stats.disliked || 0),
+    diaryEntries: Number(stats.diaryEntries || 0),
+    privateNotes: Number(stats.privateNotes || 0),
+    evidenceCount: Number(stats.evidenceCount || 0),
+    quizAccuracy: quizAnswers ? Math.round((quizCorrect / quizAnswers) * 100) : 0,
+    topAnsweredCategories: finalizeAiCategoryCounts(stats.answeredCategoryCounts).slice(0, 4),
+    topLikedCategories: finalizeAiCategoryCounts(stats.likedCategoryCounts).slice(0, 4),
+    topDislikedCategories: finalizeAiCategoryCounts(stats.dislikedCategoryCounts).slice(0, 4),
+  };
+};
+
+const getAiRoundSeatOwnAnswer = (round = {}, seat = 'jay') => {
+  const liveAnswer = normalizeText(round?.answers?.[seat]?.ownAnswer || '');
+  if (liveAnswer) return liveAnswer;
+
+  const archivedAnswer = normalizeText(round?.actualAnswers?.[seat] || '');
+  if (archivedAnswer) return archivedAnswer;
+
+  return normalizeText(
+    formatAnswerForDisplay(getRoundAnswerType(round), round?.actualList?.[seat], { emptyFallback: '' }),
+  );
+};
+
+const isGameDiaryEntry = (entry = {}) =>
+  normalizeIdentity(entry.sourceType || entry.entryType || entry.linkedType) === 'game';
+
+const isDiaryBookEntry = (entry = {}) => isAmaDiaryEntry(entry) || isGameDiaryEntry(entry);
+
+const buildGameDiaryEntryId = (gameId = '') => `game-diary-${normalizeText(gameId) || 'unknown'}`;
+
+const buildAiDiaryGenerationKey = (sourceType = '', sourceId = '') =>
+  `${normalizeIdentity(sourceType || 'game')}::${normalizeText(sourceId) || 'unknown'}`;
+
+const getDiaryGameModeLabel = (gameMode = 'standard') => {
+  if (resolveGameMode(gameMode) === 'quiz') return 'Quick Fire Quiz';
+  if (isThisOrThatGameMode(gameMode)) return 'This or That';
+  if (isTrueFalseGameMode(gameMode)) return 'True or False';
+  return 'Standard Game';
+};
+
+const buildGameDiaryScoreContext = (gameSummary = {}) => {
+  const gameMode = resolveGameMode(gameSummary?.gameMode || 'standard');
+  const winnerSeat = gameSummary?.winner === 'kim' ? 'kim' : gameSummary?.winner === 'jay' ? 'jay' : '';
+  const winnerLabel = winnerSeat ? PLAYER_LABEL[winnerSeat] || winnerSeat : 'No one';
+  if (gameMode === 'quiz') {
+    const quizTotals = {
+      jay: Number(gameSummary?.quizTotals?.jay || 0),
+      kim: Number(gameSummary?.quizTotals?.kim || 0),
+    };
+    const summary = winnerSeat
+      ? `${winnerLabel} won the Quick Fire Quiz ${quizTotals.jay}-${quizTotals.kim} on quiz points.`
+      : `The Quick Fire Quiz finished level at ${quizTotals.jay}-${quizTotals.kim}.`;
+    return {
+      gameMode,
+      winnerSeat,
+      winnerLabel,
+      scoreLabel: 'Quiz points',
+      scoreStyle: 'Higher quiz points wins.',
+      scoreDisplay: `Jay ${quizTotals.jay} · Kim ${quizTotals.kim}`,
+      summary,
+      finalScores: null,
+      quizTotals,
+    };
+  }
+
+  const finalScores = {
+    jay: Number(gameSummary?.finalScores?.jay ?? gameSummary?.totals?.jay ?? 0),
+    kim: Number(gameSummary?.finalScores?.kim ?? gameSummary?.totals?.kim ?? 0),
+  };
+  const summary = winnerSeat
+    ? `${winnerLabel} won on penalty points ${formatScore(finalScores.jay)} to ${formatScore(finalScores.kim)}.`
+    : `The game ended level on penalty points at ${formatScore(finalScores.jay)} each.`;
+  return {
+    gameMode,
+    winnerSeat,
+    winnerLabel,
+    scoreLabel: 'Penalty points',
+    scoreStyle: 'Lower penalty points wins.',
+    scoreDisplay: `Jay ${formatScore(finalScores.jay)} · Kim ${formatScore(finalScores.kim)}`,
+    summary,
+    finalScores,
+    quizTotals: null,
+  };
+};
+
+const collectDiaryTopCategories = (rounds = [], limit = AI_DIARY_SIGNAL_LIMIT) =>
+  [...(rounds || []).reduce((bucket, round) => {
+    const key = normalizeText(round?.category) || 'Uncategorised';
+    bucket.set(key, Number(bucket.get(key) || 0) + 1);
+    return bucket;
+  }, new Map()).entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([label, count]) => ({ label, count }));
+
+const buildDiaryFeedbackSummary = (questionFeedback = [], gameId = '') => {
+  const feedbackRows = (questionFeedback || []).filter(
+    (entry) => normalizeText(entry?.gameId || '') === normalizeText(gameId),
+  );
+  const byQuestion = new Map();
+  const bySeat = {
+    jay: { liked: 0, disliked: 0 },
+    kim: { liked: 0, disliked: 0 },
+  };
+
+  feedbackRows.forEach((entry) => {
+    const seat = seatFromPlayerRef(entry?.userSeat || entry?.userId) || '';
+    const value = entry?.feedbackValue === 'liked' ? 'liked' : entry?.feedbackValue === 'disliked' ? 'disliked' : '';
+    if (!seat || !value) return;
+    bySeat[seat][value] += 1;
+    const questionKey = normalizeText(entry?.questionId || entry?.questionText || entry?.id);
+    if (!questionKey) return;
+    const current = byQuestion.get(questionKey) || {
+      questionText: normalizeText(entry?.questionText || entry?.questionId || 'Question'),
+      category: normalizeText(entry?.category || ''),
+      roundType: normalizeText(entry?.roundType || ''),
+      feedbackBySeat: {},
+    };
+    current.feedbackBySeat[seat] = value;
+    byQuestion.set(questionKey, current);
+  });
+
+  const sharedLiked = [];
+  const splitOpinions = [];
+  const bothDisliked = [];
+
+  [...byQuestion.values()].forEach((row) => {
+    const jayFeedback = row?.feedbackBySeat?.jay || '';
+    const kimFeedback = row?.feedbackBySeat?.kim || '';
+    const summaryRow = {
+      questionText: row.questionText,
+      category: row.category || 'Uncategorised',
+      roundType: ROUND_TYPE_LABEL[row.roundType] || row.roundType || 'Question',
+    };
+    if (jayFeedback === 'liked' && kimFeedback === 'liked') sharedLiked.push(summaryRow);
+    else if (jayFeedback === 'disliked' && kimFeedback === 'disliked') bothDisliked.push(summaryRow);
+    else if ((jayFeedback && kimFeedback) && jayFeedback !== kimFeedback) splitOpinions.push(summaryRow);
+  });
+
+  return {
+    bySeat,
+    sharedLiked: sharedLiked.slice(0, AI_DIARY_SIGNAL_LIMIT),
+    bothDisliked: bothDisliked.slice(0, AI_DIARY_SIGNAL_LIMIT),
+    splitOpinions: splitOpinions.slice(0, AI_DIARY_SIGNAL_LIMIT),
+  };
+};
+
+const buildDiaryReplaySummary = (questionReplays = [], gameId = '') => {
+  const replayMap = new Map();
+  (questionReplays || [])
+    .filter((entry) => Boolean(entry?.replayRequested) && normalizeText(entry?.gameId || '') === normalizeText(gameId))
+    .forEach((entry) => {
+      const key = normalizeText(entry?.questionId || entry?.questionText || entry?.id);
+      if (!key) return;
+      const current = replayMap.get(key) || {
+        questionText: normalizeText(entry?.questionText || entry?.questionId || 'Question'),
+        category: normalizeText(entry?.category || '') || 'Uncategorised',
+        requestedBy: new Set(),
+      };
+      current.requestedBy.add(playerLabelForRef(entry?.userSeat || entry?.userId || ''));
+      replayMap.set(key, current);
+    });
+
+  return [...replayMap.values()]
+    .map((entry) => ({
+      questionText: entry.questionText,
+      category: entry.category,
+      requestedBy: [...entry.requestedBy].filter(Boolean),
+    }))
+    .slice(0, AI_DIARY_SIGNAL_LIMIT);
+};
+
+const buildDiaryQuizSummary = (quizAnswers = [], gameId = '') => {
+  const rows = (quizAnswers || []).filter(
+    (entry) => normalizeText(entry?.quizSessionId || entry?.gameId || '') === normalizeText(gameId),
+  );
+  if (!rows.length) return null;
+
+  const bySeat = {
+    jay: { answered: 0, correct: 0, incorrect: 0, points: 0, totalTimeMs: 0, fastestMs: null },
+    kim: { answered: 0, correct: 0, incorrect: 0, points: 0, totalTimeMs: 0, fastestMs: null },
+  };
+  const categoryMap = new Map();
+
+  rows.forEach((entry) => {
+    const seat = seatFromPlayerRef(entry?.playerSeat || entry?.playerId) || '';
+    if (!seat) return;
+    const wasCorrect = Boolean(entry?.finalResult === 'correct' || entry?.wasCorrect);
+    const pointsAwarded = Number(entry?.pointsAwarded || 0);
+    const answerTimeMs = Math.max(0, Number(entry?.answerTimeMs || entry?.answerTime || 0));
+    bySeat[seat].answered += 1;
+    if (wasCorrect) bySeat[seat].correct += 1;
+    else bySeat[seat].incorrect += 1;
+    bySeat[seat].points += pointsAwarded;
+    bySeat[seat].totalTimeMs += answerTimeMs;
+    if (bySeat[seat].fastestMs === null || answerTimeMs < bySeat[seat].fastestMs) {
+      bySeat[seat].fastestMs = answerTimeMs;
+    }
+
+    const categoryKey = normalizeText(entry?.category || '') || 'Uncategorised';
+    const categoryRow = categoryMap.get(categoryKey) || {
+      category: categoryKey,
+      bySeat: {
+        jay: { answered: 0, correct: 0, points: 0 },
+        kim: { answered: 0, correct: 0, points: 0 },
+      },
+    };
+    categoryRow.bySeat[seat].answered += 1;
+    if (wasCorrect) categoryRow.bySeat[seat].correct += 1;
+    categoryRow.bySeat[seat].points += pointsAwarded;
+    categoryMap.set(categoryKey, categoryRow);
+  });
+
+  const strongestCategoryForSeat = (seat = 'jay') =>
+    [...categoryMap.values()]
+      .map((row) => {
+        const answered = Number(row.bySeat?.[seat]?.answered || 0);
+        const correct = Number(row.bySeat?.[seat]?.correct || 0);
+        return {
+          category: row.category,
+          answered,
+          correct,
+          accuracy: answered ? Math.round((correct / answered) * 100) : 0,
+          points: Number(row.bySeat?.[seat]?.points || 0),
+        };
+      })
+      .filter((row) => row.answered > 0)
+      .sort((left, right) => right.accuracy - left.accuracy || right.points - left.points || right.answered - left.answered)
+      .slice(0, 2);
+
+  return {
+    totalQuestions: rows.length,
+    bySeat: {
+      jay: {
+        ...bySeat.jay,
+        accuracy: bySeat.jay.answered ? Math.round((bySeat.jay.correct / bySeat.jay.answered) * 100) : 0,
+        averageTimeMs: bySeat.jay.answered ? Math.round(bySeat.jay.totalTimeMs / bySeat.jay.answered) : 0,
+      },
+      kim: {
+        ...bySeat.kim,
+        accuracy: bySeat.kim.answered ? Math.round((bySeat.kim.correct / bySeat.kim.answered) * 100) : 0,
+        averageTimeMs: bySeat.kim.answered ? Math.round(bySeat.kim.totalTimeMs / bySeat.kim.answered) : 0,
+      },
+    },
+    strongestCategories: {
+      jay: strongestCategoryForSeat('jay'),
+      kim: strongestCategoryForSeat('kim'),
+    },
+  };
+};
+
+const buildGameDiaryRoundHighlights = (gameSummary = {}) => {
+  const gameMode = resolveGameMode(gameSummary?.gameMode || 'standard');
+  return normalizeStoredRounds(gameSummary?.rounds || [])
+    .slice(0, AI_DIARY_GAME_HIGHLIGHT_LIMIT)
+    .map((round, index) => ({
+      round: Number(round?.number || index + 1),
+      question: truncateAiText(round?.question || 'Question', 148),
+      category: normalizeText(round?.category || '') || 'Uncategorised',
+      roundType: ROUND_TYPE_LABEL[round?.roundType] || round?.roundType || 'Question',
+      jayAnswer: truncateAiText(getAiRoundSeatOwnAnswer(round, 'jay') || 'No answer recorded', 110),
+      kimAnswer: truncateAiText(getAiRoundSeatOwnAnswer(round, 'kim') || 'No answer recorded', 110),
+      jayGuess: gameMode === 'quiz' ? '' : truncateAiText(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '', 84),
+      kimGuess: gameMode === 'quiz' ? '' : truncateAiText(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '', 84),
+      winner: round?.winner ? PLAYER_LABEL[round.winner] || round.winner : 'Tie',
+      jayPenalty: Number(round?.penaltyAdded?.jay ?? round?.scores?.jay ?? 0),
+      kimPenalty: Number(round?.penaltyAdded?.kim ?? round?.scores?.kim ?? 0),
+    }));
+};
+
+const buildGameDiaryAnalyticsSummary = (analytics = null) => {
+  if (!analytics) return null;
+  return {
+    leaderboardSummary: analytics?.leaderboardSummary || '',
+    mostCommonCategory: analytics?.mostCommonCategory || '',
+    strongestCategoryJay: analytics?.bestCategory?.jay || '',
+    strongestCategoryKim: analytics?.bestCategory?.kim || '',
+    weakestCategoryJay: analytics?.worstCategory?.jay || '',
+    weakestCategoryKim: analytics?.worstCategory?.kim || '',
+    closestCategory: analytics?.closestCategory || '',
+    mostOneSidedCategory: analytics?.mostOneSidedCategory || '',
+    currentStreakLabel: analytics?.currentStreak?.count
+      ? `${PLAYER_LABEL[analytics.currentStreak.winner] || analytics.currentStreak.winner} x${analytics.currentStreak.count}`
+      : '',
+    favouriteRoundType: analytics?.favouriteRoundType || '',
+    roundWins: {
+      jay: Number(analytics?.roundWins?.jay || 0),
+      kim: Number(analytics?.roundWins?.kim || 0),
+    },
+  };
+};
+
+const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = null) => {
+  const baseLabel = getDiaryGameModeLabel(gameSummary?.gameMode || 'standard');
+  const winnerLabel = scoreContext?.winnerSeat ? PLAYER_LABEL[scoreContext.winnerSeat] || scoreContext.winnerSeat : 'Tie Game';
+  if ((scoreContext?.gameMode || resolveGameMode(gameSummary?.gameMode || 'standard')) === 'quiz') {
+    return scoreContext?.winnerSeat ? `${winnerLabel} took the ${baseLabel}` : `${baseLabel} ended all square`;
+  }
+  return scoreContext?.winnerSeat ? `${winnerLabel} edged the ${baseLabel}` : `${baseLabel} finished level`;
+};
+
+const buildAiGameDiaryFacts = ({
+  gameSummary = {},
+  questionFeedback = [],
+  questionReplays = [],
+  quizAnswers = [],
+} = {}) => {
+  const rounds = normalizeStoredRounds(gameSummary?.rounds || []);
+  const gameMode = resolveGameMode(gameSummary?.gameMode || 'standard');
+  const scoreContext = buildGameDiaryScoreContext(gameSummary);
+  const analytics = gameMode === 'quiz' ? null : calculateAnalytics(rounds);
+  const feedbackSummary = buildDiaryFeedbackSummary(questionFeedback, gameSummary?.id || '');
+  const replaySummary = buildDiaryReplaySummary(questionReplays, gameSummary?.id || '');
+  const quizSummary = gameMode === 'quiz' ? buildDiaryQuizSummary(quizAnswers, gameSummary?.id || '') : null;
+  const topCategories = collectDiaryTopCategories(rounds);
+
+  return {
+    promptVersion: AI_DIARY_PROMPT_VERSION,
+    sourceType: 'game',
+    game: {
+      id: normalizeText(gameSummary?.id || ''),
+      name: normalizeText(gameSummary?.name || gameSummary?.gameName || '') || `Game ${normalizeText(gameSummary?.joinCode || gameSummary?.id || '').trim() || 'session'}`,
+      joinCode: normalizeText(gameSummary?.joinCode || ''),
+      gameMode,
+      gameModeLabel: getDiaryGameModeLabel(gameMode),
+      roundsPlayed: Math.max(Number(gameSummary?.roundsPlayed || 0), rounds.length),
+      createdAt: gameSummary?.createdAt || null,
+      endedAt: gameSummary?.endedAt || null,
+      winnerSeat: scoreContext?.winnerSeat || '',
+      winner: scoreContext?.winnerSeat ? scoreContext.winnerLabel : 'Tie',
+      scoreLabel: scoreContext?.scoreLabel || '',
+      scoreStyle: scoreContext?.scoreStyle || '',
+      scoreDisplay: scoreContext?.scoreDisplay || '',
+      scoreSummary: scoreContext?.summary || '',
+      finalScores: scoreContext?.finalScores,
+      quizTotals: scoreContext?.quizTotals,
+      wagerSettlement: gameSummary?.wagerSettlement || null,
+    },
+    categories: topCategories,
+    analytics: buildGameDiaryAnalyticsSummary(analytics),
+    questionHighlights: buildGameDiaryRoundHighlights(gameSummary),
+    feedback: feedbackSummary,
+    replayRequests: replaySummary,
+    quiz: quizSummary,
+    privacy: {
+      privateNotesIncluded: false,
+      privateNotesReason: 'Shared diary chapters omit private question notes so nothing user-specific leaks across players.',
+    },
+  };
+};
+
+const buildAiAmaDiaryFacts = ({
+  requestData = {},
+  answer = '',
+  story = '',
+  relatedCategories = [],
+  analyticsSnapshot = null,
+  attachments = [],
+} = {}) => {
+  const categoryList = Array.isArray(relatedCategories) ? relatedCategories.filter(Boolean) : [];
+  const snapshotInsights = Array.isArray(analyticsSnapshot?.categoryInsights)
+    ? analyticsSnapshot.categoryInsights.slice(0, AI_DIARY_SIGNAL_LIMIT).map((entry) => entry?.summary || '').filter(Boolean)
+    : [];
+  return {
+    promptVersion: AI_DIARY_PROMPT_VERSION,
+    sourceType: 'ama',
+    ama: {
+      sourceId: normalizeText(requestData?.id || requestData?.requestId || ''),
+      itemTitle: normalizeText(requestData?.itemTitle || 'AMA / Ask Me Anything'),
+      askedBy: playerLabelForRef(requestData?.requestedByUserId || requestData?.requestedByPlayerId || ''),
+      answeredBy: playerLabelForRef(requestData?.storeOwnerUserId || requestData?.requestedFromUserId || requestData?.ownerPlayerId || ''),
+      question: normalizeText(requestData?.question || ''),
+      answer: normalizeText(answer || requestData?.answer || ''),
+      story: normalizeText(story || requestData?.story || ''),
+      relatedCategories: categoryList,
+      mediaCount: Array.isArray(attachments) ? attachments.length : Array.isArray(requestData?.media) ? requestData.media.length : 0,
+    },
+    snapshot: analyticsSnapshot
+      ? {
+          capturedAt: analyticsSnapshot?.capturedAt || null,
+          leaderboardSummary: analyticsSnapshot?.summary?.leaderboardSummary || '',
+          currentStreakLabel: analyticsSnapshot?.summary?.currentStreakLabel || '',
+          mostCommonCategory: analyticsSnapshot?.summary?.mostCommonCategory || '',
+          categoryInsights: snapshotInsights,
+        }
+      : null,
+    privacy: {
+      privateNotesIncluded: false,
+      privateNotesReason: 'Shared AMA diary chapters omit private question notes so nothing user-specific leaks across players.',
+    },
+  };
+};
+
+const buildAiDiarySystemInstruction = (sourceType = 'game') => [
+  'You are KJK AI, writing a private shared diary chapter for Jay and Kim inside the KJK app.',
+  sourceType === 'ama'
+    ? 'Turn the supplied AMA facts into a funny, warm, affectionate diary chapter.'
+    : 'Turn the supplied game facts into a funny, warm, affectionate diary chapter.',
+  'Use only the supplied facts. Do not invent hidden events, feelings, scores, or questions.',
+  'Mention the result and winner if the facts include one.',
+  'Explain what Jay and Kim learned about each other, what went well, and who struggled where, while staying kind and playful.',
+  'Do not sound clinical, robotic, mean, or generic.',
+  'Keep quiz scoring and penalty-point scoring separate: quiz points are higher-is-better, penalty points are lower-is-better.',
+  'Do not mention private notes, prompts, raw JSON, Firestore, databases, or internal tooling.',
+  'Return strict JSON only in the requested schema.',
+].join('\n');
+
+const buildLocalGameDiaryWriteup = (facts = {}) => {
+  const game = facts?.game || {};
+  const feedback = facts?.feedback || {};
+  const replayRequests = facts?.replayRequests || [];
+  const analytics = facts?.analytics || null;
+  const quiz = facts?.quiz || null;
+  const firstMoment = facts?.questionHighlights?.[0] || null;
+  const secondMoment = facts?.questionHighlights?.[1] || null;
+  const sharedLikedQuestion = feedback?.sharedLiked?.[0]?.questionText || '';
+  const splitQuestion = feedback?.splitOpinions?.[0]?.questionText || '';
+  const replayQuestion = replayRequests?.[0]?.questionText || '';
+  const headline = buildGameDiaryChapterTitleFallback(game, {
+    gameMode: game?.gameMode,
+    winnerSeat: game?.winnerSeat || '',
+  });
+  const summary = game?.scoreSummary || `${game?.gameModeLabel || 'Game night'} finished with plenty to talk about.`;
+
+  const opening = `${summary} ${game?.name ? `${game.name} gave them ${Math.max(1, Number(game?.roundsPlayed || 0))} rounds of evidence, banter, and at least one answer that probably deserves to be quoted again later.` : ''}`.trim();
+  const middle = analytics
+    ? `${analytics.leaderboardSummary || 'The score stayed lively.'} Jay looked strongest in ${analytics.strongestCategoryJay || 'a few familiar lanes'}, while Kim shone in ${analytics.strongestCategoryKim || 'some sharp little moments'}. ${analytics.weakestCategoryJay ? `Jay had a wobble around ${analytics.weakestCategoryJay}.` : ''} ${analytics.weakestCategoryKim ? `Kim had a wobble around ${analytics.weakestCategoryKim}.` : ''}`.trim()
+    : quiz
+      ? `Quick Fire stayed true to its name: Jay finished on ${quiz.bySeat?.jay?.points || 0} points with ${quiz.bySeat?.jay?.accuracy || 0}% accuracy, while Kim landed ${quiz.bySeat?.kim?.points || 0} points at ${quiz.bySeat?.kim?.accuracy || 0}% accuracy. ${quiz.strongestCategories?.jay?.[0]?.category ? `Jay looked especially comfortable in ${quiz.strongestCategories.jay[0].category}.` : ''} ${quiz.strongestCategories?.kim?.[0]?.category ? `Kim looked especially comfortable in ${quiz.strongestCategories.kim[0].category}.` : ''}`.trim()
+      : 'The scoreline told one story, but the answers underneath it were where the real charm lived.';
+  const learning = [
+    firstMoment ? `One memorable clue came when Jay answered "${firstMoment.jayAnswer}" and Kim answered "${firstMoment.kimAnswer}" to "${firstMoment.question}".` : '',
+    secondMoment ? `Later, "${secondMoment.question}" quietly added another layer: Jay went with "${secondMoment.jayAnswer}", while Kim went with "${secondMoment.kimAnswer}".` : '',
+    sharedLikedQuestion ? `They were nicely in sync on "${sharedLikedQuestion}", which feels like a very good sign for future plotting.` : '',
+    splitQuestion ? `They were less aligned on "${splitQuestion}", which honestly is half the fun and gives them something to tease each other about later.` : '',
+    replayQuestion ? `"${replayQuestion}" even earned a replay request, which is basically the app version of saying, "we are absolutely not done with this conversation."` : '',
+  ].filter(Boolean).join(' ');
+
+  return {
+    headline,
+    summary,
+    writeup: [opening, middle, learning || 'What came through most clearly was that the game gave both of them fresh little windows into each other, and the score was only part of the story.']
+      .filter(Boolean)
+      .join('\n\n'),
+    model: 'local-fallback',
+  };
+};
+
+const buildLocalAmaDiaryWriteup = (facts = {}) => {
+  const ama = facts?.ama || {};
+  const snapshot = facts?.snapshot || null;
+  const headline = ama?.question ? buildAmaChapterTitle(ama.question, 0) : `${ama?.askedBy || 'Someone'} asked and ${ama?.answeredBy || 'someone'} answered`;
+  const summary = `${ama?.askedBy || 'Jay or Kim'} asked "${truncateAiText(ama?.question || 'an AMA question', 90)}" and ${ama?.answeredBy || 'the other player'} answered with "${truncateAiText(ama?.answer || 'a very KJK-style answer', 90)}".`;
+  const opening = `${ama?.itemTitle || 'AMA time'} delivered exactly what it was supposed to: a direct question, a real answer, and a little more context than either of them would have gotten from a scorecard alone.`;
+  const middle = ama?.story
+    ? `${ama.answeredBy || 'The answer'} added the extra story too: "${truncateAiText(ama.story, 220)}" It gives the chapter that nice afterglow where the answer is not just true, it is properly theirs.`
+    : `${ama?.answeredBy || 'The answer'} kept it simple and direct, which still says plenty when the question itself is doing the heavy lifting.`;
+  const closing = [
+    ama?.relatedCategories?.length ? `The moment landed somewhere around ${formatAiList(ama.relatedCategories)}.` : '',
+    snapshot?.leaderboardSummary ? `At the time, the frozen snapshot read: ${snapshot.leaderboardSummary}` : '',
+    snapshot?.categoryInsights?.[0] ? snapshot.categoryInsights[0] : '',
+  ].filter(Boolean).join(' ');
+
+  return {
+    headline,
+    summary,
+    writeup: [opening, middle, closing || 'It is the kind of chapter that will almost certainly become funnier and sweeter every time they come back to reread it.']
+      .filter(Boolean)
+      .join('\n\n'),
+    model: 'local-fallback',
+  };
+};
+
+const buildAiEvidenceSnapshot = ({
+  previousGames = [],
+  questionFeedback = [],
+  quizAnswers = [],
+  diaryEntries = [],
+  questionNotes = [],
+  viewerSeat = 'jay',
+} = {}) => {
+  const statsBySeat = {
+    jay: createAiSeatStats(),
+    kim: createAiSeatStats(),
+  };
+  const pairStats = {
+    completedStandardGames: 0,
+    completedQuizGames: 0,
+    bothLiked: 0,
+    splitOpinions: 0,
+    sharedFavouriteQuestions: [],
+  };
+  const sourceCounts = {
+    gameAnswers: 0,
+    feedback: 0,
+    quizAnswers: 0,
+    diaryEntries: 0,
+    privateNotes: 0,
+  };
+  const feedbackByQuestion = new Map();
+  const items = [];
+
+  const pushItem = (item) => {
+    if (!item?.summary) return;
+    const normalizedSeat = item.seat === 'kim' ? 'kim' : item.seat === 'jay' ? 'jay' : '';
+    const normalizedQuestion = normalizeText(item.question || '');
+    const searchText = [
+      item.title,
+      item.summary,
+      normalizedQuestion,
+      item.answer,
+      item.category,
+      item.roundType,
+      item.searchText,
+    ].filter(Boolean).join(' ');
+    items.push({
+      ...item,
+      seat: normalizedSeat,
+      question: normalizedQuestion,
+      createdAtMs: Number(item.createdAtMs || 0),
+      searchTokens: tokenizeAiSearchText(searchText),
+      questionTokens: tokenizeAiPromptCoreText(normalizedQuestion),
+    });
+    if (normalizedSeat) statsBySeat[normalizedSeat].evidenceCount += 1;
+  };
+
+  (previousGames || []).forEach((game) => {
+    const gameMode = resolveGameMode(game?.gameMode || 'standard');
+    if (gameMode === HOLDEM_GAME_MODE) return;
+    if (gameMode === 'quiz') pairStats.completedQuizGames += 1;
+    else pairStats.completedStandardGames += 1;
+    if (gameMode === 'quiz') return;
+    (game?.rounds || []).forEach((round, index) => {
+      const question = normalizeText(round?.question || '');
+      const category = normalizeText(round?.category || '');
+      const roundType = normalizeText(round?.roundType || '');
+      const roundLabel = round?.number ? `Round ${round.number}` : `Round ${index + 1}`;
+      const createdAtMs = getRecordTime(round?.updatedAt || round?.submittedAt || game?.endedAt || game?.createdAt || 0);
+      const metadataSearchText = buildAiMetadataSearchText(round);
+      const gameSourceLabel = gameMode === THIS_OR_THAT_GAME_MODE
+        ? 'This or That'
+        : gameMode === TRUE_FALSE_GAME_MODE
+          ? 'True or False'
+          : (game?.name || game?.joinCode || 'Game');
+      seats.forEach((seat) => {
+        const ownAnswer = getAiRoundSeatOwnAnswer(round, seat);
+        if (!ownAnswer) return;
+        statsBySeat[seat].standardAnswers += 1;
+        incrementAiCategoryCount(statsBySeat[seat].answeredCategoryCounts, category);
+        sourceCounts.gameAnswers += 1;
+        pushItem({
+          id: `game-answer-${game?.id || 'game'}-${round?.id || round?.number || index + 1}-${seat}`,
+          kind: 'game-answer',
+          seat,
+          title: `${PLAYER_LABEL[seat]} answered a saved game question`,
+          summary: `${PLAYER_LABEL[seat]} answered "${truncateAiText(ownAnswer, 88)}" to "${truncateAiText(question || 'Saved question', 96)}".`,
+          question,
+          answer: ownAnswer,
+          category,
+          roundType,
+          sourceLabel: `${gameSourceLabel} · ${roundLabel}`,
+          createdAtMs,
+          searchText: `${PLAYER_LABEL[seat]} ${question} ${ownAnswer} ${category} ${roundType} ${metadataSearchText}`,
+        });
+      });
+    });
+  });
+
+  (questionFeedback || []).forEach((entry) => {
+    const seat = seatFromPlayerRef(entry?.userSeat || entry?.userId) || '';
+    const feedbackValue = entry?.feedbackValue === 'disliked' ? 'disliked' : entry?.feedbackValue === 'liked' ? 'liked' : '';
+    if (!seat || !feedbackValue) return;
+    const questionText = normalizeText(entry?.questionText || entry?.questionId || 'Question');
+    const questionKey = normalizeText(entry?.questionId || entry?.questionText || entry?.id);
+    const category = normalizeText(entry?.category || '');
+    const roundType = normalizeText(entry?.roundType || '');
+    const createdAtMs = getRecordTime(entry?.updatedAt || entry?.createdAt || 0);
+    statsBySeat[seat][feedbackValue] += 1;
+    incrementAiCategoryCount(
+      feedbackValue === 'liked' ? statsBySeat[seat].likedCategoryCounts : statsBySeat[seat].dislikedCategoryCounts,
+      category,
+    );
+    sourceCounts.feedback += 1;
+    if (questionKey) {
+      const current = feedbackByQuestion.get(questionKey) || {
+        questionText,
+        feedbackBySeat: {},
+      };
+      current.feedbackBySeat[seat] = feedbackValue;
+      feedbackByQuestion.set(questionKey, current);
+    }
+    pushItem({
+      id: `feedback-${entry?.id || questionKey || `${seat}-${createdAtMs}`}`,
+      kind: 'question-feedback',
+      seat,
+      feedbackValue,
+      title: `${PLAYER_LABEL[seat]} ${feedbackValue} this question`,
+      summary: `${PLAYER_LABEL[seat]} ${feedbackValue} "${truncateAiText(questionText, 118)}".`,
+      question: questionText,
+      category,
+      roundType,
+      sourceLabel: 'Question feedback',
+      createdAtMs,
+      searchText: `${PLAYER_LABEL[seat]} ${feedbackValue} ${questionText} ${category} ${roundType}`,
+    });
+  });
+
+  [...feedbackByQuestion.values()].forEach((row) => {
+    const jayFeedback = row?.feedbackBySeat?.jay || '';
+    const kimFeedback = row?.feedbackBySeat?.kim || '';
+    if (jayFeedback === 'liked' && kimFeedback === 'liked') {
+      pairStats.bothLiked += 1;
+      if (row.questionText) pairStats.sharedFavouriteQuestions.push(row.questionText);
+    } else if ((jayFeedback === 'liked' && kimFeedback === 'disliked') || (jayFeedback === 'disliked' && kimFeedback === 'liked')) {
+      pairStats.splitOpinions += 1;
+    }
+  });
+
+  (quizAnswers || []).forEach((entry) => {
+    const seat = seatFromPlayerRef(entry?.playerSeat || entry?.playerId) || '';
+    if (!seat) return;
+    const questionText = normalizeText(entry?.questionText || entry?.questionId || 'Quiz question');
+    const playerAnswer = normalizeText(entry?.playerAnswer || '');
+    const category = normalizeText(entry?.category || '');
+    const roundType = normalizeText(entry?.questionType || entry?.roundType || '');
+    const wasCorrect = Boolean(entry?.finalResult === 'correct' || entry?.wasCorrect);
+    const pointsAwarded = Math.max(0, Number(entry?.pointsAwarded || 0));
+    const createdAtMs = getRecordTime(entry?.updatedAt || entry?.createdAt || 0);
+    statsBySeat[seat].quizAnswers += 1;
+    if (wasCorrect) statsBySeat[seat].quizCorrect += 1;
+    else statsBySeat[seat].quizIncorrect += 1;
+    statsBySeat[seat].quizPoints += pointsAwarded;
+    incrementAiCategoryCount(statsBySeat[seat].answeredCategoryCounts, category);
+    sourceCounts.quizAnswers += 1;
+    pushItem({
+      id: `quiz-answer-${entry?.id || `${seat}-${createdAtMs}`}`,
+      kind: 'quiz-answer',
+      seat,
+      wasCorrect,
+      title: `${PLAYER_LABEL[seat]} ${wasCorrect ? 'got a quiz question right' : 'missed a quiz question'}`,
+      summary: `${PLAYER_LABEL[seat]} answered "${truncateAiText(playerAnswer || 'No answer', 88)}" for "${truncateAiText(questionText, 102)}" and was ${wasCorrect ? 'correct' : 'incorrect'}.`,
+      question: questionText,
+      answer: playerAnswer,
+      category,
+      roundType,
+      sourceLabel: 'Quick Fire Quiz',
+      createdAtMs,
+      searchText: `${PLAYER_LABEL[seat]} ${questionText} ${playerAnswer} ${category} ${roundType} ${wasCorrect ? 'correct' : 'incorrect'}`,
+    });
+  });
+
+  (diaryEntries || []).forEach((entry) => {
+    if (isGameDiaryEntry(entry) && entry?.aiGenerated) return;
+    const seat = seatFromPlayerRef(entry?.ownerPlayerId || entry?.receiverPlayerId || entry?.requestedByPlayerId) || '';
+    const question = normalizeText(entry?.question || entry?.chapterTitle || '');
+    const answer = normalizeText(entry?.answer || '');
+    const story = normalizeText(entry?.story || '');
+    const categoryText = Array.isArray(entry?.relatedCategories) ? entry.relatedCategories.filter(Boolean).join(' ') : '';
+    const createdAtMs = getRecordTime(entry?.updatedAt || entry?.answeredAt || entry?.createdAt || 0);
+    const primaryText = answer || story || question;
+    if (!primaryText) return;
+    if (seat) statsBySeat[seat].diaryEntries += 1;
+    sourceCounts.diaryEntries += 1;
+    pushItem({
+      id: `diary-${entry?.id || createdAtMs}`,
+      kind: 'diary-entry',
+      seat,
+      title: `${seat ? PLAYER_LABEL[seat] : 'Player'} diary / AMA entry`,
+      summary: `${seat ? PLAYER_LABEL[seat] : 'A player'} diary entry: "${truncateAiText(primaryText, 126)}".`,
+      question,
+      answer: answer || story || question,
+      category: categoryText,
+      roundType: isAmaDiaryEntry(entry) ? 'ama' : 'diary',
+      sourceLabel: isAmaDiaryEntry(entry) ? 'AMA diary' : 'Diary entry',
+      createdAtMs,
+      searchText: `${question} ${answer} ${story} ${categoryText}`,
+    });
+  });
+
+  (questionNotes || []).forEach((entry) => {
+    const noteText = normalizeText(entry?.noteText || '');
+    const questionText = normalizeText(entry?.questionText || entry?.questionId || 'Question');
+    if (!noteText) return;
+    statsBySeat[viewerSeat === 'kim' ? 'kim' : 'jay'].privateNotes += 1;
+    sourceCounts.privateNotes += 1;
+    pushItem({
+      id: `private-note-${entry?.id || questionText}`,
+      kind: 'private-note',
+      seat: viewerSeat === 'kim' ? 'kim' : 'jay',
+      title: 'Private note',
+      summary: `Private note on "${truncateAiText(questionText, 92)}": "${truncateAiText(noteText, 118)}".`,
+      question: questionText,
+      answer: noteText,
+      category: normalizeText(entry?.category || ''),
+      roundType: normalizeText(entry?.roundType || 'note'),
+      sourceLabel: 'Private flagged note',
+      createdAtMs: getRecordTime(entry?.updatedAt || entry?.createdAt || 0),
+      searchText: `${questionText} ${noteText} ${entry?.category || ''}`,
+    });
+  });
+
+  return {
+    totalEvidence: items.length,
+    sourceCounts,
+    pair: {
+      ...pairStats,
+      sharedFavouriteQuestions: pairStats.sharedFavouriteQuestions.slice(0, 6),
+    },
+    bySeat: {
+      jay: finalizeAiSeatStats(statsBySeat.jay),
+      kim: finalizeAiSeatStats(statsBySeat.kim),
+    },
+    items: [...items].sort((left, right) => right.createdAtMs - left.createdAtMs),
+  };
+};
+
+const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
+  const normalizedPrompt = normalizeText(prompt).toLowerCase();
+  const rawContentTokens = tokenizeAiPromptCoreText(prompt);
+  const promptTokens = [...new Set(tokenizeAiSearchText(prompt))];
+  const matchedTopicCategories = detectAiTopicCategories(prompt);
+  const mentionsJay = /\bjay\b/.test(normalizedPrompt);
+  const mentionsKim = /\bkim\b/.test(normalizedPrompt);
+  const mentionsMasculineSubject = /\b(he|him|his)\b/.test(normalizedPrompt);
+  const mentionsFeminineSubject = /\b(she|her|hers)\b/.test(normalizedPrompt);
+  const asksAboutRelationship = /\bwe\b|\bus\b|\bour\b|both of us|the two of us|together|relationship|compatib|match/.test(normalizedPrompt);
+  const asksForComparison = /who('?s| is)?\s+(more|less)|which (one|person|of us)|between jay and kim|between kim and jay|out of the two|of the two/.test(normalizedPrompt);
+  const asksAboutQuiz = /quiz|quick fire|trivia|correct|wrong|accuracy|fast|timer|knowledge/.test(normalizedPrompt);
+  const asksAboutPreference = /like|likes|liked|love|prefer|favo[u]?rite|into|enjoy|dislike|hate|turn on|turn-off|turn off/.test(normalizedPrompt);
+  const asksAboutDiary = /diary|ama|story|context|remember|why|because|chapter/.test(normalizedPrompt);
+  const asksAboutNotes = /note|flagged|private note/.test(normalizedPrompt);
+  const asksAboutDirectAnswers = /what has|what did|said about|say about|answered|answer about|what does|what do/.test(normalizedPrompt);
+  const asksForSummary = /what is|what's|tell me about|profile|summar|describe|who is/.test(normalizedPrompt);
+  const asksForGiftRecommendation = /birthday|gift|present|anniversary|christmas|valentine|surprise|what should i get|what should i buy|what would be a good/.test(normalizedPrompt);
+  const asksForRecommendation = asksForGiftRecommendation || /recommend|suggest|idea for|good idea|best idea|should i get|should i buy/.test(normalizedPrompt);
+  const filteredPromptTokens = asksForComparison
+    ? promptTokens.filter((token) => token === 'jay' || token === 'kim' || !AI_COMPARISON_STOPWORDS.has(token))
+    : promptTokens;
+  const contentTokens = promptTokens.filter((token) => token !== 'jay' && token !== 'kim');
+  const comparisonContentTokens = contentTokens.filter((token) => !AI_COMPARISON_STOPWORDS.has(token));
+  const filteredContentTokens = asksForComparison ? comparisonContentTokens : contentTokens;
+  const matchContentTokens = asksForRecommendation
+    ? filteredContentTokens.filter((token) => !AI_RECOMMENDATION_STOPWORDS.has(token))
+    : filteredContentTokens;
+  const matchPromptTokens = asksForRecommendation
+    ? filteredPromptTokens.filter((token) => token === 'jay' || token === 'kim' || !AI_RECOMMENDATION_STOPWORDS.has(token))
+    : filteredPromptTokens;
+  const focusSeats = mentionsJay && mentionsKim
+    ? ['jay', 'kim']
+    : mentionsJay
+      ? ['jay']
+      : mentionsKim
+        ? ['kim']
+        : mentionsMasculineSubject && mentionsFeminineSubject
+          ? ['jay', 'kim']
+          : mentionsMasculineSubject
+            ? ['jay']
+            : mentionsFeminineSubject
+              ? ['kim']
+        : asksForComparison
+          ? ['jay', 'kim']
+        : asksAboutRelationship
+          ? ['jay', 'kim']
+          : [viewerSeat === 'kim' ? 'kim' : 'jay'];
+  return {
+    normalizedPrompt,
+    promptTokens,
+    mentionsJay,
+    mentionsKim,
+    mentionsMasculineSubject,
+    mentionsFeminineSubject,
+    asksAboutRelationship,
+    asksForComparison,
+    asksAboutQuiz,
+    asksAboutPreference,
+    asksAboutDiary,
+    asksAboutNotes,
+    asksAboutDirectAnswers,
+    asksForSummary,
+    asksForGiftRecommendation,
+    asksForRecommendation,
+    rawContentTokens,
+    contentTokens: filteredContentTokens,
+    matchPromptTokens,
+    matchContentTokens,
+    matchedTopicCategories,
+    hasSpecificTopic: matchContentTokens.length > 0 || matchedTopicCategories.length > 0,
+    topicLabel: matchContentTokens.length
+      ? matchContentTokens.join(' ')
+      : matchedTopicCategories.length
+        ? matchedTopicCategories.join(' ')
+        : rawContentTokens.length
+          ? rawContentTokens.join(' ')
+          : 'that topic',
+    focusSeats,
+  };
+};
+
+const normalizeAiQuestionMatchText = (value = '') =>
+  normalizeText(value)
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/[^a-z0-9'\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const scoreAiQuestionPromptMatch = (item = {}, intent = {}) => {
+  if (!DIRECT_AI_EVIDENCE_KINDS.has(item.kind)) return 0;
+  const questionText = normalizeAiQuestionMatchText(item.question || '');
+  if (!questionText) return 0;
+  const questionTokens = Array.isArray(item.questionTokens) && item.questionTokens.length
+    ? item.questionTokens
+    : tokenizeAiPromptCoreText(questionText);
+  const matchTokens = (intent.matchContentTokens?.length ? intent.matchContentTokens : intent.contentTokens || [])
+    .filter((token) => !['he', 'him', 'his', 'she', 'her', 'hers'].includes(token));
+  if (!matchTokens.length) return 0;
+
+  let matchedCount = 0;
+  matchTokens.forEach((token) => {
+    if (questionTokens.includes(token) || questionText.includes(token)) matchedCount += 1;
+  });
+
+  const matchRatio = matchedCount / Math.max(1, matchTokens.length);
+  const topicPhrase = normalizeAiQuestionMatchText(matchTokens.join(' '));
+  const phraseMatch = Boolean(topicPhrase) && questionText.includes(topicPhrase);
+  if (!phraseMatch && matchedCount < Math.min(2, matchTokens.length)) return 0;
+  if (!phraseMatch && matchRatio < 0.55) return 0;
+
+  let score = matchedCount * 12 + Math.round(matchRatio * 20);
+  if (phraseMatch) score += 18;
+  if (intent.focusSeats?.includes(item.seat)) score += 8;
+  return score;
+};
+
+const getAiItemKindPriority = (item = {}, intent = {}) => {
+  if (intent.asksAboutNotes) {
+    if (item.kind === 'private-note') return 16;
+    if (item.kind === 'diary-entry') return 10;
+  }
+  if (intent.asksAboutDiary) {
+    if (item.kind === 'diary-entry') return 15;
+    if (item.kind === 'private-note') return 11;
+    if (item.kind === 'game-answer') return 9;
+  }
+  if (intent.asksAboutQuiz) {
+    if (item.kind === 'quiz-answer') return 15;
+    if (item.kind === 'game-answer') return 7;
+  }
+  if (intent.asksAboutPreference) {
+    if (item.kind === 'private-note') return 14;
+    if (item.kind === 'diary-entry') return 12;
+    if (item.kind === 'game-answer') return 11;
+    if (item.kind === 'question-feedback') return 10;
+  }
+  if (item.kind === 'private-note') return 13;
+  if (item.kind === 'diary-entry') return 12;
+  if (item.kind === 'game-answer') return 11;
+  if (item.kind === 'question-feedback') return 7;
+  if (item.kind === 'quiz-answer') return 6;
+  return 0;
+};
+
+const pickAiSeatHighlights = (items = [], seat = 'jay', intent = {}, limit = 2, allowedKinds = null) => {
+  const seen = new Set();
+  return items
+    .filter((item) => item?.seat === seat && (!allowedKinds || allowedKinds.has(item.kind)))
+    .sort(
+      (left, right) =>
+        (getAiItemKindPriority(right, intent) + Number(right.score || 0)) - (getAiItemKindPriority(left, intent) + Number(left.score || 0))
+        || Number(right.createdAtMs || 0) - Number(left.createdAtMs || 0),
+    )
+    .filter((item) => {
+      const key = [
+        item.kind || '',
+        normalizeText(item.question || ''),
+        normalizeText(item.answer || ''),
+        item.feedbackValue || '',
+      ].join('::');
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+};
+
+const pickAiSeatQuestionMatches = (items = [], seat = 'jay', intent = {}, limit = 2) => {
+  const seen = new Set();
+  return items
+    .filter((item) => item?.seat === seat && DIRECT_AI_EVIDENCE_KINDS.has(item.kind))
+    .map((item) => ({
+      ...item,
+      questionMatchScore: scoreAiQuestionPromptMatch(item, intent),
+    }))
+    .filter((item) => Number(item.questionMatchScore || 0) >= 24)
+    .sort(
+      (left, right) =>
+        Number(right.questionMatchScore || 0) - Number(left.questionMatchScore || 0)
+        || (getAiItemKindPriority(right, intent) + Number(right.score || 0)) - (getAiItemKindPriority(left, intent) + Number(left.score || 0))
+        || Number(right.createdAtMs || 0) - Number(left.createdAtMs || 0),
+    )
+    .filter((item) => {
+      const key = [
+        item.kind || '',
+        normalizeText(item.question || ''),
+        normalizeText(item.answer || ''),
+      ].join('::');
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+};
+
+const buildAiItemDirectSentence = (item = {}, seat = 'jay') => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  switch (item.kind) {
+    case 'game-answer':
+      return item.answer
+        ? `${playerLabel} answered "${truncateAiText(item.answer, 118)}"${item.question ? ` when asked "${truncateAiText(item.question, 94)}"` : ''}.`
+        : `${playerLabel} has a saved answer tied to "${truncateAiText(item.question || 'that question', 94)}".`;
+    case 'diary-entry':
+      return item.answer
+        ? `${playerLabel} wrote "${truncateAiText(item.answer, 118)}"${item.question ? ` in "${truncateAiText(item.question, 94)}"` : ''}.`
+        : `${playerLabel} has a diary entry related to "${truncateAiText(item.question || 'that topic', 94)}".`;
+    case 'private-note':
+      return item.answer
+        ? `A private note for ${playerLabel} says "${truncateAiText(item.answer, 118)}"${item.question ? ` about "${truncateAiText(item.question, 94)}"` : ''}.`
+        : `There is a private note for ${playerLabel} tied to "${truncateAiText(item.question || 'that topic', 94)}".`;
+    case 'question-feedback':
+      return `${playerLabel} reacted ${item.feedbackValue === 'disliked' ? 'negatively' : 'positively'} to the prompt "${truncateAiText(item.question || 'that question', 108)}".`;
+    case 'quiz-answer':
+      return item.answer
+        ? `${playerLabel} answered "${truncateAiText(item.answer, 96)}" for "${truncateAiText(item.question || 'that quiz question', 92)}" and was ${item.wasCorrect ? 'correct' : 'incorrect'}.`
+        : `${playerLabel} has a saved quiz result for "${truncateAiText(item.question || 'that quiz question', 92)}".`;
+    default:
+      return `${playerLabel} has saved evidence related to "${truncateAiText(item.question || item.summary || 'that topic', 108)}".`;
+  }
+};
+
+const buildAiSeatFallbackSentence = (seat = 'jay', stats = null, intent = {}) => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  if (!stats) return `${playerLabel} does not have enough saved evidence yet.`;
+  if (intent.hasSpecificTopic) {
+    return `I don't have enough saved evidence about ${intent.topicLabel || 'that topic'} for ${playerLabel} yet.`;
+  }
+  if (intent.asksAboutQuiz) {
+    return `${playerLabel} has ${stats.quizAccuracy}% quiz accuracy across ${stats.quizAnswers} saved quick-fire answers, with ${formatScore(stats.quizPoints)} total quiz points.`;
+  }
+  if (intent.asksAboutPreference) {
+    const likedThemes = formatAiList(stats.topLikedCategories.map((row) => row.label).slice(0, 3));
+    const answeredThemes = formatAiList(stats.topAnsweredCategories.map((row) => row.label).slice(0, 3));
+    if (likedThemes) return `${playerLabel} seems most positive around ${likedThemes}.`;
+    if (answeredThemes) return `${playerLabel}'s strongest saved themes are ${answeredThemes}.`;
+  }
+  const answeredThemes = formatAiList(stats.topAnsweredCategories.map((row) => row.label).slice(0, 3));
+  if (answeredThemes) return `${playerLabel}'s strongest saved themes are ${answeredThemes}.`;
+  return `${playerLabel} has some saved evidence, but not enough directly relevant detail for a stronger answer.`;
+};
+
+const buildAiSeatNoDirectEvidenceSentence = ({
+  seat = 'jay',
+  scoredEvidence = [],
+  intent = {},
+} = {}) => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  const support = pickAiSeatHighlights(scoredEvidence, seat, intent, 1, INDIRECT_AI_EVIDENCE_KINDS);
+  if (support.length) {
+    return `I don't have a saved direct answer from ${playerLabel} about ${intent.topicLabel || 'that topic'} yet. Closest saved signal: ${buildAiItemDirectSentence(support[0], seat)}`;
+  }
+  return `I don't have a saved direct answer from ${playerLabel} about ${intent.topicLabel || 'that topic'} yet.`;
+};
+
+const buildAiSeatNarrative = ({
+  seat = 'jay',
+  scoredEvidence = [],
+  intent = {},
+  stats = null,
+} = {}) => {
+  const exactQuestionMatches = intent.hasSpecificTopic
+    ? pickAiSeatQuestionMatches(scoredEvidence, seat, intent, 2)
+    : [];
+  if (exactQuestionMatches.length) {
+    return exactQuestionMatches.map((item) => buildAiItemDirectSentence(item, seat)).join(' ');
+  }
+  if (intent.asksAboutDirectAnswers) {
+    const directHighlights = pickAiSeatHighlights(scoredEvidence, seat, intent, 2, DIRECT_AI_EVIDENCE_KINDS);
+    if (directHighlights.length) return directHighlights.map((item) => buildAiItemDirectSentence(item, seat)).join(' ');
+    return buildAiSeatNoDirectEvidenceSentence({ seat, scoredEvidence, intent });
+  }
+  const highlights = pickAiSeatHighlights(scoredEvidence, seat, intent, 2);
+  if (!highlights.length) return buildAiSeatFallbackSentence(seat, stats, intent);
+  return highlights.map((item) => buildAiItemDirectSentence(item, seat)).join(' ');
+};
+
+const pickAiSeatRecommendationEvidence = (items = [], seat = 'jay', intent = {}, limit = 3) => {
+  const seen = new Set();
+  return items
+    .filter((item) => item?.seat === seat && item.kind !== 'quiz-answer')
+    .map((item) => {
+      let recommendationScore = Number(item.score || 0);
+      const questionText = normalizeText(item.question || '');
+      const answerText = normalizeText(item.answer || '');
+      if (item.kind === 'private-note') recommendationScore += 18;
+      else if (item.kind === 'diary-entry') recommendationScore += 16;
+      else if (item.kind === 'game-answer') recommendationScore += 15;
+      else if (item.kind === 'question-feedback') recommendationScore += item.feedbackValue === 'liked' ? 9 : 2;
+      if (AI_RECOMMENDATION_QUESTION_PATTERN.test(questionText)) recommendationScore += 12;
+      if (isAiRecommendationUsefulAnswer(answerText)) recommendationScore += 10;
+      else if (item.kind !== 'question-feedback') recommendationScore -= 8;
+      if (item.category) recommendationScore += 4;
+      return { ...item, recommendationScore };
+    })
+    .sort(
+      (left, right) =>
+        Number(right.recommendationScore || 0) - Number(left.recommendationScore || 0)
+        || Number(right.createdAtMs || 0) - Number(left.createdAtMs || 0),
+    )
+    .filter((item) => {
+      const key = [item.kind || '', normalizeText(item.question || ''), normalizeText(item.answer || ''), normalizeText(item.category || '')].join('::');
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+};
+
+const buildAiSeatRecommendationFallbackSentence = (seat = 'jay', stats = null) => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  const topLikedThemes = formatAiList((stats?.topLikedCategories || []).map((row) => row.label).slice(0, 2));
+  const topAnsweredThemes = formatAiList((stats?.topAnsweredCategories || []).map((row) => row.label).slice(0, 2));
+  if (topLikedThemes) {
+    return `A safe present direction for ${playerLabel} would be something tied to ${topLikedThemes}. That is where the strongest positive signals show up in the saved answers.`;
+  }
+  if (topAnsweredThemes) {
+    return `A sensible present direction for ${playerLabel} would be something linked to ${topAnsweredThemes}, because those are the themes that come up most in the saved answers.`;
+  }
+  return `I do not have enough saved preference detail yet to suggest a confident present for ${playerLabel}.`;
+};
+
+const buildAiSeatRecommendationNarrative = ({
+  seat = 'jay',
+  scoredEvidence = [],
+  intent = {},
+  stats = null,
+} = {}) => {
+  const playerLabel = PLAYER_LABEL[seat] || seat;
+  const recommendationItems = pickAiSeatRecommendationEvidence(scoredEvidence, seat, intent, 3);
+  if (!recommendationItems.length) return buildAiSeatRecommendationFallbackSentence(seat, stats);
+  const [primaryItem, ...supportItems] = recommendationItems;
+  const primaryAnswer = normalizeText(primaryItem.answer || '');
+  const primaryCategory = normalizeText(primaryItem.category || '');
+  let opening = '';
+  if (isAiRecommendationUsefulAnswer(primaryAnswer)) {
+    opening = `Based on ${playerLabel}'s saved answers, a good ${intent.asksForGiftRecommendation ? 'gift' : 'idea'} would be something built around "${truncateAiText(primaryAnswer, 56)}"${primaryCategory ? ` in the ${primaryCategory} lane` : ''}.`;
+  } else if (primaryCategory) {
+    opening = `Based on ${playerLabel}'s saved history, a good ${intent.asksForGiftRecommendation ? 'gift' : 'idea'} would be something in the ${primaryCategory} lane.`;
+  } else {
+    opening = `Based on ${playerLabel}'s saved answers, I would lean toward something personal and clearly tied to the themes they keep coming back to.`;
+  }
+  const supportLead = primaryItem.kind === 'question-feedback'
+    ? `${playerLabel} reacted ${primaryItem.feedbackValue === 'disliked' ? 'negatively' : 'positively'} to the prompt "${truncateAiText(primaryItem.question || 'that question', 100)}".`
+    : buildAiItemDirectSentence(primaryItem, seat);
+  const supportLines = [supportLead, ...supportItems.map((item) => buildAiItemDirectSentence(item, seat))];
+  return `${opening} ${supportLines.map((line, index) => (index === 0 ? `Most relevant clue: ${line}` : `Also relevant: ${line}`)).join(' ')}`;
+};
+
+const buildAiDisplayedEvidence = ({
+  scoredEvidence = [],
+  focusSeats = [],
+  primarySeat = '',
+  intent = {},
+} = {}) => {
+  if (focusSeats.length === 2) {
+    return focusSeats.flatMap((seat) => {
+      const exactQuestionMatches = intent.hasSpecificTopic
+        ? pickAiSeatQuestionMatches(scoredEvidence, seat, intent, 2)
+        : [];
+      if (exactQuestionMatches.length) return exactQuestionMatches;
+      const directKinds = intent.asksAboutDirectAnswers ? DIRECT_AI_EVIDENCE_KINDS : null;
+      const direct = pickAiSeatHighlights(scoredEvidence, seat, intent, 2, directKinds);
+      if (direct.length) return direct;
+      const fallbackKinds = intent.asksAboutDirectAnswers ? INDIRECT_AI_EVIDENCE_KINDS : null;
+      return pickAiSeatHighlights(scoredEvidence, seat, intent, 1, fallbackKinds);
+    });
+  }
+  if (primarySeat) {
+    const exactQuestionMatches = intent.hasSpecificTopic
+      ? pickAiSeatQuestionMatches(scoredEvidence, primarySeat, intent, AI_EVIDENCE_PREVIEW_LIMIT)
+      : [];
+    if (exactQuestionMatches.length) return exactQuestionMatches;
+    const directKinds = intent.asksAboutDirectAnswers ? DIRECT_AI_EVIDENCE_KINDS : null;
+    const direct = pickAiSeatHighlights(scoredEvidence, primarySeat, intent, AI_EVIDENCE_PREVIEW_LIMIT, directKinds);
+    if (direct.length) return direct;
+    const fallbackKinds = intent.asksAboutDirectAnswers ? INDIRECT_AI_EVIDENCE_KINDS : null;
+    const fallback = pickAiSeatHighlights(scoredEvidence, primarySeat, intent, AI_EVIDENCE_PREVIEW_LIMIT, fallbackKinds);
+    if (fallback.length) return fallback;
+    return scoredEvidence.filter((item) => item?.seat === primarySeat).slice(0, AI_EVIDENCE_PREVIEW_LIMIT);
+  }
+  return scoredEvidence.slice(0, AI_EVIDENCE_PREVIEW_LIMIT);
+};
+
+const buildAiSeatComparisonSnapshot = ({
+  seat = 'jay',
+  scoredEvidence = [],
+  intent = {},
+} = {}) => {
+  const exactQuestionMatches = intent.hasSpecificTopic
+    ? pickAiSeatQuestionMatches(scoredEvidence, seat, intent, 2)
+    : [];
+  const directHighlights = exactQuestionMatches.length
+    ? exactQuestionMatches
+    : pickAiSeatHighlights(scoredEvidence, seat, intent, 2, DIRECT_AI_EVIDENCE_KINDS);
+  const supportHighlights = directHighlights.length ? directHighlights : pickAiSeatHighlights(scoredEvidence, seat, intent, 2);
+  return {
+    seat,
+    directHighlights,
+    supportHighlights,
+    weightedScore: supportHighlights.reduce(
+      (sum, item) => sum + Number(item.score || 0) + getAiItemKindPriority(item, intent),
+      0,
+    ),
+    hasDirectEvidence: directHighlights.length > 0,
+  };
+};
+
+const scoreAiEvidenceItem = (item = {}, intent = {}) => {
+  let score = 0;
+  const itemTokenSet = new Set(item.searchTokens || []);
+  const contentTokens = intent.matchContentTokens || intent.contentTokens || [];
+  const promptTokens = intent.matchPromptTokens || intent.promptTokens || [];
+  const matchedTopicCategories = intent.matchedTopicCategories || [];
+  const normalizedItemCategory = normalizeText(item.category || '').toLowerCase();
+  const categoryTopicMatch = Boolean(normalizedItemCategory && matchedTopicCategories.includes(normalizedItemCategory));
+  let contentMatches = 0;
+  promptTokens.forEach((token) => {
+    if (!itemTokenSet.has(token)) return;
+    score += token.length >= 5 ? 4 : 2;
+    if (contentTokens.includes(token)) contentMatches += 1;
+  });
+  if (intent.hasSpecificTopic && !contentMatches && !categoryTopicMatch) return 0;
+  if (intent.focusSeats?.includes(item.seat)) score += 4;
+  if (contentMatches) score += contentMatches * 6;
+  if (categoryTopicMatch) score += 18;
+  if (intent.asksAboutPreference && item.kind === 'question-feedback') score += 8;
+  if (intent.asksAboutQuiz && item.kind === 'quiz-answer') score += 8;
+  if (intent.asksAboutDiary && item.kind === 'diary-entry') score += 8;
+  if (intent.asksAboutNotes && item.kind === 'private-note') score += 9;
+  if (intent.asksAboutDirectAnswers) {
+    if (item.kind === 'game-answer' || item.kind === 'diary-entry' || item.kind === 'private-note') score += 10;
+    if (item.kind === 'question-feedback') score -= 6;
+    if (item.kind === 'quiz-answer' && !intent.asksAboutQuiz) score -= 8;
+  }
+  score += scoreAiQuestionPromptMatch(item, intent);
+  if (!intent.asksAboutQuiz && item.kind === 'game-answer') score += 2;
+  if (intent.asksAboutRelationship && item.kind === 'question-feedback') score += 2;
+  if (item.kind === 'private-note') score += 1;
+  const ageMs = Math.max(0, Date.now() - Number(item.createdAtMs || 0));
+  if (ageMs < 1000 * 60 * 60 * 24 * 30) score += 1;
+  return score;
+};
+
+const pickFallbackAiEvidence = (snapshot = {}, intent = {}, viewerSeat = 'jay') => {
+  if (intent.hasSpecificTopic && !intent.asksForRecommendation) return [];
+  const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
+  const candidateKinds = intent.asksForRecommendation
+    ? ['private-note', 'diary-entry', 'game-answer', 'question-feedback']
+    : intent.asksAboutNotes
+    ? ['private-note']
+    : intent.asksAboutDiary
+      ? ['diary-entry', 'game-answer']
+      : intent.asksAboutQuiz
+        ? ['quiz-answer', 'game-answer']
+        : intent.asksAboutPreference
+          ? ['question-feedback', 'game-answer', 'diary-entry']
+          : ['game-answer', 'question-feedback', 'diary-entry', 'quiz-answer'];
+  const candidates = (snapshot.items || []).filter(
+    (item) =>
+      candidateKinds.includes(item.kind)
+      && (focusSeats.includes(item.seat) || (!item.seat && intent.asksAboutRelationship)),
+  );
+  return candidates.slice(0, AI_EVIDENCE_PREVIEW_LIMIT);
+};
+
+const formatAiEvidenceBullet = (item = {}) => {
+  const sourceLabel = item.sourceLabel ? ` (${item.sourceLabel})` : '';
+  const summaryLine = buildAiItemDirectSentence(item, item.seat || 'jay').replace(/\.$/, '');
+  return `${truncateAiText(summaryLine || item.summary || item.title || 'Saved evidence', 170)}${sourceLabel}`;
+};
+
+const buildAiConfidenceNarrative = ({
+  confidence = 'Low',
+  selectedEvidence = [],
+  hasDirectAnswerEvidence = false,
+  intent = {},
+} = {}) => {
+  if (!selectedEvidence.length) return 'I do not have much saved material to work from yet.';
+  if (confidence === 'High') {
+    return hasDirectAnswerEvidence
+      ? 'I feel pretty confident about that because multiple saved clues point the same way.'
+      : 'I feel fairly confident, but it is still an indirect read from nearby saved clues rather than a direct answer.';
+  }
+  if (confidence === 'Medium') {
+    if (intent.asksForComparison) {
+      return hasDirectAnswerEvidence
+        ? 'I have a reasonable case for that, but it is not completely one-sided.'
+        : 'That is a lean, not a lock. I am reading between nearby saved clues rather than a direct answer.';
+    }
+    return hasDirectAnswerEvidence
+      ? 'I have enough saved evidence to lean that way, but not enough to call it airtight.'
+      : 'This is a softer read based on nearby saved clues, not a direct answer.';
+  }
+  return hasDirectAnswerEvidence
+    ? 'I only have a thin amount of saved evidence for that, so treat it as tentative.'
+    : 'This is only a light read from a small amount of saved evidence.';
+};
+
+const buildAiComparisonNarrative = ({
+  focusSeats = ['jay', 'kim'],
+  scoredEvidence = [],
+  intent = {},
+} = {}) => {
+  const snapshots = focusSeats
+    .map((seat) => buildAiSeatComparisonSnapshot({ seat, scoredEvidence, intent }))
+    .sort((left, right) => right.weightedScore - left.weightedScore);
+  const [leader, runnerUp] = snapshots;
+  const leaderLabel = PLAYER_LABEL[leader?.seat] || leader?.seat || 'that side';
+  const runnerLabel = PLAYER_LABEL[runnerUp?.seat] || runnerUp?.seat || 'the other side';
+  const leadItem = leader?.supportHighlights?.[0] || null;
+  const leadGap = Math.abs(Number(leader?.weightedScore || 0) - Number(runnerUp?.weightedScore || 0));
+
+  if (!Number(leader?.weightedScore || 0) && !Number(runnerUp?.weightedScore || 0)) {
+    return "I can't make a real call on that yet because I do not have enough saved evidence pointing either way.";
+  }
+
+  if (leadGap <= 4) {
+    return leadItem
+      ? `The saved evidence is pretty mixed, so I would call this close rather than pick a clear winner. The nearest clue I have is ${buildAiItemDirectSentence(leadItem, leadItem.seat || leader?.seat || 'jay')}`
+      : 'The saved evidence is pretty mixed, so I would call this close rather than pick a clear winner.';
+  }
+
+  const opener = leadGap >= 12
+    ? `If I go strictly by the saved evidence, ${leaderLabel} comes across as the stronger answer here.`
+    : `If I go strictly by the saved evidence, I lean ${leaderLabel} here.`;
+  const leadReason = leadItem
+    ? `The clearest clue is ${buildAiItemDirectSentence(leadItem, leadItem.seat || leader?.seat || 'jay')}`
+    : '';
+  const contrast = Number(runnerUp?.weightedScore || 0) > 0
+    ? `${runnerLabel} has some relevant evidence too, just not as much that matches this question.`
+    : `I do not see an equally strong saved clue on ${runnerLabel}'s side for this one.`;
+  const directness = leader?.hasDirectEvidence || runnerUp?.hasDirectEvidence
+    ? ''
+    : ` I do not have a direct saved answer about ${intent.topicLabel || 'that topic'}, so this is an indirect read from nearby clues.`;
+
+  return `${opener} ${leadReason} ${contrast}${directness}`.trim();
+};
+
+const buildEvidenceBasedAiReply = ({
+  prompt = '',
+  viewerSeat = 'jay',
+  evidenceSnapshot = {},
+} = {}) => {
+  const cleanPrompt = normalizeText(prompt);
+  const intent = buildAiIntentProfile(cleanPrompt, viewerSeat);
+  const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
+  const scoredEvidence = (evidenceSnapshot.items || [])
+    .map((item) => ({ ...item, score: scoreAiEvidenceItem(item, intent) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || right.createdAtMs - left.createdAtMs);
+  const primarySeat = focusSeats.length === 1 ? focusSeats[0] : '';
+  const primaryStats = primarySeat ? evidenceSnapshot.bySeat?.[primarySeat] : null;
+  const pairStats = evidenceSnapshot.pair || {};
+  const fallbackEvidence = pickFallbackAiEvidence(evidenceSnapshot, intent, viewerSeat);
+  const selectedEvidence = intent.asksForRecommendation && primarySeat
+    ? pickAiSeatRecommendationEvidence(scoredEvidence.length ? scoredEvidence : fallbackEvidence, primarySeat, intent, AI_EVIDENCE_PREVIEW_LIMIT)
+    : scoredEvidence.length
+    ? buildAiDisplayedEvidence({
+        scoredEvidence,
+        focusSeats,
+        primarySeat,
+        intent,
+      })
+    : fallbackEvidence;
+
+  let answer = '';
+  if (!selectedEvidence.length && !evidenceSnapshot.totalEvidence) {
+    answer = "I don't have enough saved evidence yet. Play more rounds, use likes/dislikes, or add diary entries first.";
+  } else if (primarySeat && intent.asksForRecommendation) {
+    answer = buildAiSeatRecommendationNarrative({
+      seat: primarySeat,
+      scoredEvidence: scoredEvidence.length ? scoredEvidence : fallbackEvidence,
+      intent,
+      stats: primaryStats,
+    });
+  } else if (intent.asksForComparison && focusSeats.length === 2) {
+    answer = buildAiComparisonNarrative({
+      focusSeats,
+      scoredEvidence: scoredEvidence.length ? scoredEvidence : fallbackEvidence,
+      intent,
+    });
+  } else if (focusSeats.length === 2) {
+    const seatBlocks = focusSeats.map((seat) => {
+      const seatStats = evidenceSnapshot.bySeat?.[seat] || null;
+      const seatNarrative = buildAiSeatNarrative({
+        seat,
+        scoredEvidence,
+        intent,
+        stats: seatStats,
+      });
+      return `${PLAYER_LABEL[seat]}: ${seatNarrative}`;
+    });
+    const sharedLikes = Number(pairStats.bothLiked || 0);
+    const splitOpinions = Number(pairStats.splitOpinions || 0);
+    const sharedQuestions = formatAiList((pairStats.sharedFavouriteQuestions || []).slice(0, 3));
+    const relationshipLine = sharedLikes || splitOpinions || sharedQuestions
+      ? `Together: ${sharedLikes} shared liked questions and ${splitOpinions} split-opinion questions are on record.${sharedQuestions ? ` Shared favourites include ${sharedQuestions}.` : ''}`
+      : '';
+    answer = [...seatBlocks, relationshipLine].filter(Boolean).join('\n');
+  } else if (primarySeat) {
+    answer = buildAiSeatNarrative({
+      seat: primarySeat,
+      scoredEvidence,
+      intent,
+      stats: primaryStats,
+    });
+  } else if (intent.asksAboutRelationship) {
+    const sharedLikes = Number(pairStats.bothLiked || 0);
+    const splitOpinions = Number(pairStats.splitOpinions || 0);
+    const sharedQuestions = formatAiList((pairStats.sharedFavouriteQuestions || []).slice(0, 3));
+    answer = `Across your saved history, there are ${sharedLikes} shared liked questions and ${splitOpinions} split-opinion questions.${sharedQuestions ? ` Shared favourites include ${sharedQuestions}.` : ''}`;
+  } else if (selectedEvidence.length) {
+    answer = selectedEvidence.map((item) => buildAiItemDirectSentence(item, item.seat || viewerSeat)).join(' ');
+  } else {
+    answer = "I can answer from saved evidence only, and I don't have a strong enough match for that question yet.";
+  }
+
+  const hasDirectAnswerEvidence = selectedEvidence.some((item) => DIRECT_AI_EVIDENCE_KINDS.has(item.kind));
+  const confidence = intent.asksForRecommendation
+    ? selectedEvidence.some((item) => DIRECT_AI_EVIDENCE_KINDS.has(item.kind))
+      ? (selectedEvidence.length >= 2 ? 'High' : 'Medium')
+      : selectedEvidence.length
+        ? 'Medium'
+        : 'Low'
+    : intent.asksAboutDirectAnswers
+    ? hasDirectAnswerEvidence
+      ? (selectedEvidence.length >= 2 ? 'High' : 'Medium')
+      : 'Low'
+    : selectedEvidence.length >= 3
+      ? 'High'
+      : selectedEvidence.length === 2
+        ? 'Medium'
+        : 'Low';
+  const evidenceLines = selectedEvidence.map((item) => `• ${formatAiEvidenceBullet(item)}`);
+  const confidenceNarrative = buildAiConfidenceNarrative({
+    confidence,
+    selectedEvidence,
+    hasDirectAnswerEvidence,
+    intent,
+  });
+  return {
+    confidence,
+    selectedEvidence,
+    text: [
+      answer,
+      confidenceNarrative,
+      selectedEvidence.length ? ["What I'm basing that on:", ...evidenceLines].join('\n') : '',
+    ].filter(Boolean).join('\n\n'),
+  };
+};
+
 const formatDate = (value) => {
   if (!value) return '-';
   const date = value?.toDate ? value.toDate() : new Date(value);
@@ -612,17 +2622,12 @@ const normalizeRevealAnswer = (value) =>
     .trim();
 
 const formatRoundAnswerValue = (value, roundType = 'numeric') => {
-  const normalizedType = String(roundType || 'numeric');
-  if (normalizedType === 'ranked' || normalizedType === 'sortIntoOrder') {
-    const list = parseAnswerList(value);
-    return list.length ? list.join(' • ') : '-';
-  }
-  return normalizeText(value) || '-';
+  return formatAnswerForDisplay(roundType, value, { emptyFallback: '-' });
 };
 
 const getRevealComparison = ({ roundType = 'numeric', actualAnswer = '', guessedAnswer = '' }) => {
-  const normalizedType = String(roundType || 'numeric');
-  if (normalizedType === 'numeric') {
+  const normalizedType = normalizeQuestionType(roundType, 'text');
+  if (usesNumberInputForQuestionType(normalizedType)) {
     const actual = parseNumber(actualAnswer, Number.NaN);
     const guessed = parseNumber(guessedAnswer, Number.NaN);
     if (Number.isFinite(actual) && Number.isFinite(guessed) && actual === guessed) {
@@ -631,7 +2636,7 @@ const getRevealComparison = ({ roundType = 'numeric', actualAnswer = '', guessed
     return { label: 'Compared via penalty entry', tone: 'neutral' };
   }
 
-  if (normalizedType === 'ranked' || normalizedType === 'sortIntoOrder') {
+  if (usesListInputForQuestionType(normalizedType)) {
     const actualList = parseAnswerList(actualAnswer).map(normalizeRevealAnswer).filter(Boolean);
     const guessedList = parseAnswerList(guessedAnswer).map(normalizeRevealAnswer).filter(Boolean);
     const exactOrderMatch =
@@ -655,10 +2660,20 @@ const buildGameQuestion = (question) => ({
   id: question.id,
   question: question.question,
   category: question.category,
-  roundType: question.roundType || 'numeric',
+  roundType: normalizeQuestionType(question.roundType, 'text'),
   defaultAnswerType: question.defaultAnswerType || getDefaultAnswerType(question.roundType),
   multipleChoiceOptions: question.multipleChoiceOptions || [],
+  correctAnswer: question.correctAnswer || '',
+  normalizedCorrectAnswer: question.normalizedCorrectAnswer || '',
+  bankType: normalizeQuestionBankType(question.bankType),
   tags: question.tags || [],
+  intensity: Number(question.intensity || 0),
+  tone: question.tone || '',
+  relationshipArea: question.relationshipArea || '',
+  avoidIf: question.avoidIf || [],
+  gameSuitability: question.gameSuitability || [],
+  aiUseCase: question.aiUseCase || [],
+  repeatGroup: question.repeatGroup || '',
   notes: question.notes || '',
   unitLabel: question.unitLabel || '',
   source: question.source || 'starter',
@@ -667,6 +2682,126 @@ const buildGameQuestion = (question) => ({
 const emptyRoundDraft = () => ({ question: '', category: '', roundType: 'numeric', penalties: defaultPenaltyDraft });
 
 const isValidDateString = (value) => typeof value === 'string' && !Number.isNaN(Date.parse(value));
+
+const QUESTION_METADATA_ARRAY_FIELDS = ['tags', 'avoidIf', 'gameSuitability', 'aiUseCase'];
+
+const hasQuestionMetadataItems = (value) => Array.isArray(value) && value.some((item) => normalizeText(item));
+
+const buildQuestionMetadataLookup = (questions = []) => {
+  const byId = new Map();
+  const byBankAndCategoryKey = new Map();
+  const byCategoryKey = new Map();
+
+  (questions || []).forEach((rawQuestion) => {
+    const question = createQuestionTemplate(rawQuestion || {});
+    const bankType = normalizeQuestionBankType(question?.bankType);
+    const categoryKey = normalizeQuestionCategoryKey(question?.question, question?.category);
+    if (question?.id && !byId.has(question.id)) byId.set(question.id, question);
+    if (!categoryKey) return;
+    const scopedKey = `${bankType}::${categoryKey}`;
+    if (!byBankAndCategoryKey.has(scopedKey)) byBankAndCategoryKey.set(scopedKey, question);
+    if (!byCategoryKey.has(categoryKey)) byCategoryKey.set(categoryKey, question);
+  });
+
+  return {
+    byId,
+    byBankAndCategoryKey,
+    byCategoryKey,
+  };
+};
+
+const lookupQuestionMetadataForRound = (round = {}, questionLookup = null, fallbackBankType = 'game') => {
+  if (!questionLookup) return null;
+  const roundQuestionId = normalizeText(round?.questionId || '');
+  if (roundQuestionId && questionLookup.byId.has(roundQuestionId)) {
+    return questionLookup.byId.get(roundQuestionId) || null;
+  }
+  const categoryKey = normalizeQuestionCategoryKey(round?.question, round?.category);
+  if (!categoryKey) return null;
+  const bankType = normalizeQuestionBankType(round?.bankType || fallbackBankType);
+  return (
+    questionLookup.byBankAndCategoryKey.get(`${bankType}::${categoryKey}`)
+    || questionLookup.byCategoryKey.get(categoryKey)
+    || null
+  );
+};
+
+const enrichRoundQuestionMetadata = (round = {}, questionLookup = null, fallbackBankType = 'game') => {
+  if (!round) return round;
+  const sourceQuestion = lookupQuestionMetadataForRound(round, questionLookup, fallbackBankType);
+  if (!sourceQuestion) return round;
+
+  const nextRound = {
+    ...round,
+    questionId: round.questionId || sourceQuestion.id || '',
+    category: round.category || sourceQuestion.category || '',
+    roundType: normalizeQuestionType(round.roundType || sourceQuestion.roundType, 'text'),
+    bankType: normalizeQuestionBankType(round.bankType || sourceQuestion.bankType || fallbackBankType),
+    defaultAnswerType: round.defaultAnswerType || sourceQuestion.defaultAnswerType || getDefaultAnswerType(round.roundType || sourceQuestion.roundType),
+    multipleChoiceOptions:
+      Array.isArray(round.multipleChoiceOptions) && round.multipleChoiceOptions.length
+        ? round.multipleChoiceOptions
+        : (sourceQuestion.multipleChoiceOptions || []),
+    correctAnswer: round.correctAnswer || sourceQuestion.correctAnswer || '',
+    normalizedCorrectAnswer: round.normalizedCorrectAnswer || sourceQuestion.normalizedCorrectAnswer || '',
+    notes: round.notes || sourceQuestion.notes || '',
+    unitLabel: round.unitLabel || sourceQuestion.unitLabel || '',
+    intensity: Number(round.intensity || 0) || Number(sourceQuestion.intensity || 0),
+    tone: round.tone || sourceQuestion.tone || '',
+    relationshipArea: round.relationshipArea || sourceQuestion.relationshipArea || '',
+    repeatGroup: round.repeatGroup || sourceQuestion.repeatGroup || '',
+  };
+
+  QUESTION_METADATA_ARRAY_FIELDS.forEach((field) => {
+    nextRound[field] = hasQuestionMetadataItems(round[field]) ? round[field] : (sourceQuestion[field] || []);
+  });
+
+  return nextRound;
+};
+
+const enrichGameQuestionMetadata = (gameSummary = null, questionLookup = null) => {
+  if (!gameSummary) return gameSummary;
+  const fallbackBankType = normalizeQuestionBankType(
+    gameSummary?.questionBankType || getQuestionBankTypeForGameMode(gameSummary?.gameMode || 'standard'),
+  );
+  const nextRounds = Array.isArray(gameSummary?.rounds)
+    ? gameSummary.rounds.map((round) => enrichRoundQuestionMetadata(round, questionLookup, fallbackBankType))
+    : [];
+  const nextCurrentRound = gameSummary?.currentRound
+    ? enrichRoundQuestionMetadata(gameSummary.currentRound, questionLookup, fallbackBankType)
+    : gameSummary?.currentRound || null;
+
+  return {
+    ...gameSummary,
+    rounds: nextRounds,
+    currentRound: nextCurrentRound,
+  };
+};
+
+const buildRoundMetadataEntries = (round = {}) => {
+  const entries = [];
+  const tags = Array.isArray(round?.tags) ? round.tags.map(normalizeText).filter(Boolean) : [];
+  const avoidIf = Array.isArray(round?.avoidIf) ? round.avoidIf.map(normalizeText).filter(Boolean) : [];
+  const gameSuitability = Array.isArray(round?.gameSuitability) ? round.gameSuitability.map(normalizeText).filter(Boolean) : [];
+  const aiUseCase = Array.isArray(round?.aiUseCase) ? round.aiUseCase.map(normalizeText).filter(Boolean) : [];
+  const tone = normalizeText(round?.tone);
+  const relationshipArea = normalizeText(round?.relationshipArea);
+  const repeatGroup = normalizeText(round?.repeatGroup);
+  const notes = normalizeText(round?.notes);
+  const intensity = Math.max(0, Number(round?.intensity || 0));
+
+  if (tags.length) entries.push({ label: 'Tags', items: tags });
+  if (Number.isFinite(intensity) && intensity > 0) entries.push({ label: 'Intensity', value: String(intensity) });
+  if (tone) entries.push({ label: 'Tone', value: tone });
+  if (relationshipArea) entries.push({ label: 'Relationship Area', value: relationshipArea });
+  if (avoidIf.length) entries.push({ label: 'Avoid If', items: avoidIf });
+  if (gameSuitability.length) entries.push({ label: 'Game Suitability', items: gameSuitability });
+  if (aiUseCase.length) entries.push({ label: 'AI Use Case', items: aiUseCase });
+  if (repeatGroup) entries.push({ label: 'Repeat Group', value: repeatGroup });
+  if (notes) entries.push({ label: 'Notes', value: notes });
+
+  return entries;
+};
 
 const normalizeStoredQuestion = (raw = {}, fallbackId = '') => {
   const hydrated = createQuestionTemplate({
@@ -717,7 +2852,161 @@ const isGameSessionJoinable = (entry = {}) =>
   ACTIVE_GAME_STATUSES.includes(entry?.status || 'active')
   && !COMPLETED_GAME_STATUSES.includes(entry?.status || '')
   && !entry?.endedAt;
+const normalizeTrueFalseChoice = (value = '') => {
+  const normalized = normalizeText(value).toLowerCase();
+  if (normalized === 'true') return 'True';
+  if (normalized === 'false') return 'False';
+  return '';
+};
+const getThisOrThatOptions = (round = {}) => {
+  const providedOptions = extractEitherOrOptions(
+    round?.question || '',
+    round?.multipleChoiceOptions || round?.options || [],
+  );
+  return providedOptions.length >= 2 ? providedOptions.slice(0, 2) : [];
+};
+const normalizeThisOrThatChoice = (value = '', round = {}) => {
+  const normalized = normalizeText(serialiseAnswerForQuestionType('preference', value)).toLowerCase();
+  if (!normalized) return '';
+  const options = getThisOrThatOptions(round);
+  const matched = options.find((option) => normalizeText(option).toLowerCase() === normalized);
+  return matched || '';
+};
 const hasSubmittedRoundAnswer = (round = {}, seat = '') => Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''));
+const hasCompletedTrueFalseRoundAnswer = (round = {}, seat = '') =>
+  Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.ownAnswer || ''))
+  && Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.guessedOther || ''));
+const hasCompletedThisOrThatRoundAnswer = (round = {}, seat = '') =>
+  Boolean(normalizeThisOrThatChoice(round?.answers?.[seat]?.ownAnswer || '', round))
+  && Boolean(normalizeThisOrThatChoice(round?.answers?.[seat]?.guessedOther || '', round));
+const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat = '') =>
+  isTrueFalseGameMode(gameMode)
+    ? hasCompletedTrueFalseRoundAnswer(round, seat)
+    : isThisOrThatGameMode(gameMode)
+      ? hasCompletedThisOrThatRoundAnswer(round, seat)
+      : hasSubmittedRoundAnswer(round, seat);
+const buildTrueFalseRoundOutcome = (round = {}) => {
+  const jayGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '');
+  const kimGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '');
+  const jayActual = normalizeTrueFalseChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
+  const kimActual = normalizeTrueFalseChoice(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '');
+  const jayGuessScorable = Boolean(jayGuess) && Boolean(kimActual);
+  const kimGuessScorable = Boolean(kimGuess) && Boolean(jayActual);
+  const jayCorrect = jayGuessScorable && jayGuess === kimActual;
+  const kimCorrect = kimGuessScorable && kimGuess === jayActual;
+  const jayMissingGuess = !Boolean(jayGuess);
+  const kimMissingGuess = !Boolean(kimGuess);
+  const jayMissingOwnAnswer = !Boolean(jayActual);
+  const kimMissingOwnAnswer = !Boolean(kimActual);
+  const jayMissingResponse = jayMissingGuess || jayMissingOwnAnswer;
+  const kimMissingResponse = kimMissingGuess || kimMissingOwnAnswer;
+  const jayDefaultPenalty = (jayGuessScorable && !jayCorrect ? TRUE_FALSE_WRONG_PENALTY : 0)
+    + (jayMissingResponse ? TRUE_FALSE_UNANSWERED_PENALTY : 0);
+  const kimDefaultPenalty = (kimGuessScorable && !kimCorrect ? TRUE_FALSE_WRONG_PENALTY : 0)
+    + (kimMissingResponse ? TRUE_FALSE_UNANSWERED_PENALTY : 0);
+  const jayPenalty = Number.isFinite(Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay))
+    ? Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay)
+    : jayDefaultPenalty;
+  const kimPenalty = Number.isFinite(Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim))
+    ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
+    : kimDefaultPenalty;
+  return {
+    jayGuess,
+    kimGuess,
+    jayActual,
+    kimActual,
+    jayGuessScorable,
+    kimGuessScorable,
+    jayCorrect,
+    kimCorrect,
+    jayMissingGuess,
+    kimMissingGuess,
+    jayMissingOwnAnswer,
+    kimMissingOwnAnswer,
+    jayMissingResponse,
+    kimMissingResponse,
+    jayPenalty,
+    kimPenalty,
+  };
+};
+const buildThisOrThatRoundOutcome = (round = {}) => {
+  const options = getThisOrThatOptions(round);
+  const jayGuess = normalizeThisOrThatChoice(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '', round);
+  const kimGuess = normalizeThisOrThatChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '', round);
+  const jayActual = normalizeThisOrThatChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '', round);
+  const kimActual = normalizeThisOrThatChoice(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '', round);
+  const jayGuessScorable = Boolean(jayGuess) && Boolean(kimActual);
+  const kimGuessScorable = Boolean(kimGuess) && Boolean(jayActual);
+  const jayCorrect = jayGuessScorable && jayGuess === kimActual;
+  const kimCorrect = kimGuessScorable && kimGuess === jayActual;
+  const jayMissingGuess = !Boolean(jayGuess);
+  const kimMissingGuess = !Boolean(kimGuess);
+  const jayMissingOwnAnswer = !Boolean(jayActual);
+  const kimMissingOwnAnswer = !Boolean(kimActual);
+  const jayMissingResponse = jayMissingGuess || jayMissingOwnAnswer;
+  const kimMissingResponse = kimMissingGuess || kimMissingOwnAnswer;
+  const jayDefaultPenalty = (jayGuessScorable && !jayCorrect ? THIS_OR_THAT_WRONG_PENALTY : 0)
+    + (jayMissingResponse ? THIS_OR_THAT_UNANSWERED_PENALTY : 0);
+  const kimDefaultPenalty = (kimGuessScorable && !kimCorrect ? THIS_OR_THAT_WRONG_PENALTY : 0)
+    + (kimMissingResponse ? THIS_OR_THAT_UNANSWERED_PENALTY : 0);
+  const jayPenalty = Number.isFinite(Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay))
+    ? Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay)
+    : jayDefaultPenalty;
+  const kimPenalty = Number.isFinite(Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim))
+    ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
+    : kimDefaultPenalty;
+  return {
+    options,
+    jayGuess,
+    kimGuess,
+    jayActual,
+    kimActual,
+    jayGuessScorable,
+    kimGuessScorable,
+    jayCorrect,
+    kimCorrect,
+    jayMissingGuess,
+    kimMissingGuess,
+    jayMissingOwnAnswer,
+    kimMissingOwnAnswer,
+    jayMissingResponse,
+    kimMissingResponse,
+    jayPenalty,
+    kimPenalty,
+  };
+};
+const getTrueFalseRetiredQuestionIdsForGame = (game = {}) => {
+  const playedQuestionIds = getPlayedQuestionIdsForGame(game);
+  const bankType = normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard'));
+  if (bankType !== 'trueFalseGame') return playedQuestionIds;
+  return mergeUniqueIds(
+    playedQuestionIds,
+    game?.currentRound?.questionId ? [game.currentRound.questionId] : [],
+    game?.questionQueueIds || [],
+  );
+};
+const getLifetimeRollbackForGame = (game = {}) => {
+  const gameMode = game?.gameMode || 'standard';
+  if (isHoldemGameMode(gameMode)) {
+    return {
+      jay: -Number(game?.holdemStats?.netMovementJay || 0),
+      kim: -Number(game?.holdemStats?.netMovementKim || 0),
+    };
+  }
+  if (!game?.lifetimePointsApplied) {
+    return { jay: 0, kim: 0 };
+  }
+  if (gameMode === 'quiz') {
+    return {
+      jay: -Number(game?.wagerSettlement?.jayShift || 0),
+      kim: -Number(game?.wagerSettlement?.kimShift || 0),
+    };
+  }
+  return {
+    jay: -Number(game?.finalScores?.jay ?? game?.totals?.jay ?? 0),
+    kim: -Number(game?.finalScores?.kim ?? game?.totals?.kim ?? 0),
+  };
+};
 const hasReadySeat = (round = {}, seat = '') => Boolean(round?.ready?.[seat]);
 const answerDraftStorageKey = (gameId = '', roundId = '', seat = '') =>
   gameId && roundId && seat ? `kjk-answer-draft:${gameId}:${roundId}:${seat}` : '';
@@ -736,6 +3025,30 @@ const safeLocalStorageSet = (key = '', value = '') => {
   try {
     window.localStorage.setItem(key, value);
     return true;
+  } catch {
+    return false;
+  }
+};
+const readPendingDeletedGameIds = () => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(pendingDeletedGamesKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((value) => String(value || '')).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+};
+const writePendingDeletedGameIds = (ids = []) => {
+  if (typeof window === 'undefined') return false;
+  try {
+    const normalizedIds = [...new Set((ids || []).map((value) => String(value || '')).filter(Boolean))];
+    if (!normalizedIds.length) {
+      window.localStorage.removeItem(pendingDeletedGamesKey);
+      return true;
+    }
+    return safeLocalStorageSet(pendingDeletedGamesKey, JSON.stringify(normalizedIds));
   } catch {
     return false;
   }
@@ -802,6 +3115,8 @@ const stableRoomSnapshotValue = (game = {}) => {
     quizWagers: game.quizWagers || {},
     quizWagerAgreement: game.quizWagerAgreement || null,
     quizReadyState: game.quizReadyState || null,
+    holdemState: game.holdemState || null,
+    holdemStats: game.holdemStats || null,
     roundsPlayed: Number(game.roundsPlayed || 0),
     requestedQuestionCount: Number(game.requestedQuestionCount || 0),
     actualQuestionCount: Number(game.actualQuestionCount || 0),
@@ -848,15 +3163,38 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     }
   }
   if (!currentGame?.currentRound || !incomingGame?.currentRound) {
-    return currentGame?.id === incomingGame?.id && areStableRoomSnapshotsEqual(currentGame, incomingGame)
-      ? currentGame
-      : incomingGame;
+    if (currentGame?.id === incomingGame?.id) {
+      const preserveCurrentAgreement = shouldPreserveCurrentQuizAgreement(currentGame, incomingGame);
+      const isHoldemRoom = isHoldemGameMode(incomingGame?.gameMode || currentGame?.gameMode || 'standard');
+      const mergedGame = {
+        ...incomingGame,
+        ...(isHoldemRoom
+          ? {
+              holdemState: mergeHoldemSnapshotState(currentGame?.holdemState || null, incomingGame?.holdemState || null),
+            }
+          : {}),
+        quizWagerAgreement: preserveCurrentAgreement
+          ? (currentGame?.quizWagerAgreement || incomingGame?.quizWagerAgreement || null)
+          : (incomingGame?.quizWagerAgreement || currentGame?.quizWagerAgreement || null),
+        quizWagers: preserveCurrentAgreement
+          ? (currentGame?.quizWagers || incomingGame?.quizWagers || {})
+          : (incomingGame?.quizWagers || currentGame?.quizWagers || {}),
+        // Setup readiness is fully snapshot-driven; don't preserve optimistic
+        // local flags over the room document.
+        quizReadyState: incomingGame?.quizReadyState || null,
+      };
+      return areStableRoomSnapshotsEqual(currentGame, mergedGame)
+        ? currentGame
+        : mergedGame;
+    }
+    return incomingGame;
   }
   if (currentGame.id !== incomingGame.id) return incomingGame;
   const currentRound = currentGame.currentRound || {};
   const incomingRound = incomingGame.currentRound || {};
   const currentIdentity = stableRoundIdentityKey(currentRound);
   const incomingIdentity = stableRoundIdentityKey(incomingRound);
+  const isQuizLiveRound = (incomingGame?.gameMode || currentGame?.gameMode || 'standard') === 'quiz';
   if (!incomingIdentity) {
     return {
       ...incomingGame,
@@ -864,7 +3202,8 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     };
   }
   const sameByIdentity = Boolean(currentIdentity && incomingIdentity && currentIdentity === incomingIdentity);
-  const sameByNumber = Boolean(currentRound.number && incomingRound.number && Number(currentRound.number) === Number(incomingRound.number));
+  const sameByNumber = !isQuizLiveRound
+    && Boolean(currentRound.number && incomingRound.number && Number(currentRound.number) === Number(incomingRound.number));
   const sameByPrompt =
     normalizeText(currentRound.question || '')
     && normalizeText(currentRound.question || '') === normalizeText(incomingRound.question || '')
@@ -873,10 +3212,16 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
   if (!isSameLiveRound) return incomingGame;
   const currentAnswers = currentGame.currentRound.answers || {};
   const incomingAnswers = incomingGame.currentRound.answers || {};
-  const nextAnswers = {
-    jay: hasSubmittedRoundAnswer(incomingGame.currentRound, 'jay') ? incomingAnswers.jay : currentAnswers.jay,
-    kim: hasSubmittedRoundAnswer(incomingGame.currentRound, 'kim') ? incomingAnswers.kim : currentAnswers.kim,
-  };
+  const preserveOptimisticAnswers = incomingRound.status === 'open' && currentRound.status === 'open';
+  const nextAnswers = preserveOptimisticAnswers
+    ? {
+        jay: hasSubmittedRoundAnswer(incomingGame.currentRound, 'jay') ? incomingAnswers.jay : currentAnswers.jay,
+        kim: hasSubmittedRoundAnswer(incomingGame.currentRound, 'kim') ? incomingAnswers.kim : currentAnswers.kim,
+      }
+    : {
+        ...(hasSubmittedRoundAnswer(incomingGame.currentRound, 'jay') ? { jay: incomingAnswers.jay } : {}),
+        ...(hasSubmittedRoundAnswer(incomingGame.currentRound, 'kim') ? { kim: incomingAnswers.kim } : {}),
+      };
   const stableRoundFields =
     currentGame.currentRound.status === incomingGame.currentRound.status
     && currentGame.currentRound.questionId === incomingGame.currentRound.questionId
@@ -942,12 +3287,40 @@ const getPlayedQuestionIdsForGame = (game = {}) => {
 };
 
 const getCompletedGameDisplayCount = (game = {}) => {
+  if (isHoldemGameMode(game?.gameMode || 'standard')) {
+    return Math.max(0, Number(game?.holdemStats?.handsPlayed || 0), Number(game?.roundsPlayed || 0));
+  }
   const answeredRoundsLength = Array.isArray(game?.rounds) ? game.rounds.length : 0;
   const roundsPlayed = Math.max(0, Number(game?.roundsPlayed || 0));
   const playedQuestionIdsLength = getPlayedQuestionIdsForGame(game).length;
   if (answeredRoundsLength) return answeredRoundsLength;
   if (roundsPlayed) return Math.min(Math.max(playedQuestionIdsLength, roundsPlayed), roundsPlayed);
   return playedQuestionIdsLength;
+};
+
+const isFirestoreRateLimitedError = (error = null) => {
+  const normalizedMessage = normalizeText(error?.message || error || '').toLowerCase();
+  const normalizedCode = normalizeText(error?.code || error?.name || '').toLowerCase();
+  return (
+    normalizedMessage.includes('resource exhausted')
+    || normalizedMessage.includes('resource-exhausted')
+    || normalizedMessage.includes('quota exceeded')
+    || normalizedMessage.includes('quotaexceeded')
+    || normalizedMessage.includes('too many requests')
+    || normalizedCode.includes('resource-exhausted')
+    || normalizedCode.includes('quota-exceeded')
+  );
+};
+
+const isLocalStorageQuotaError = (error = null) => {
+  const normalizedMessage = normalizeText(error?.message || error || '').toLowerCase();
+  const normalizedCode = normalizeText(error?.code || error?.name || '').toLowerCase();
+  if (isFirestoreRateLimitedError(error)) return false;
+  return (
+    normalizedCode.includes('quotaexceedederror')
+    || normalizedMessage.includes('storage quota')
+    || (normalizedMessage.includes('storage') && normalizedMessage.includes('quota'))
+  );
 };
 
 const getGameQuestionGoal = (game, rounds = []) => {
@@ -963,26 +3336,36 @@ const getGameQuestionGoal = (game, rounds = []) => {
 
 const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
   const status = data.status || 'active';
+  const gameMode = resolveGameMode(data.gameMode || 'standard');
+  const isHoldemGame = isHoldemGameMode(gameMode);
+  const holdemStats = data.holdemStats || defaultHoldemStats();
+  const holdemState = data.holdemState || null;
   const selectedQuestionsLength = Array.isArray(data.questionQueueIds) ? data.questionQueueIds.filter(Boolean).length : 0;
   const usedQuestionIds = Array.isArray(data.usedQuestionIds) ? data.usedQuestionIds.filter(Boolean) : [];
-  const answeredRoundsLength = roundsData.length;
-  const displayedQuestionCount = COMPLETED_GAME_STATUSES.includes(status)
-    ? getCompletedGameDisplayCount({
-        rounds: roundsData,
-        roundsPlayed: data.roundsPlayed || roundsData.length,
-        usedQuestionIds,
-      })
-    : Math.max(
-        Number(data.actualQuestionCount || 0),
-        Number(data.requestedQuestionCount || 0),
-        answeredRoundsLength + selectedQuestionsLength + (data.currentRound ? 1 : 0),
-        0,
-      );
-  const finalScores = data.finalScores || data.totals || (roundsData.length ? roundsData.at(-1)?.totalsAfterRound || { jay: 0, kim: 0 } : { jay: 0, kim: 0 });
+  const answeredRoundsLength = isHoldemGame ? 0 : roundsData.length;
+  const displayedQuestionCount = isHoldemGame
+    ? Math.max(0, Number(holdemStats?.handsPlayed || 0), Number(data.roundsPlayed || 0))
+    : COMPLETED_GAME_STATUSES.includes(status)
+      ? getCompletedGameDisplayCount({
+          rounds: roundsData,
+          roundsPlayed: data.roundsPlayed || roundsData.length,
+          usedQuestionIds,
+        })
+      : Math.max(
+          Number(data.actualQuestionCount || 0),
+          Number(data.requestedQuestionCount || 0),
+          answeredRoundsLength + selectedQuestionsLength + (data.currentRound ? 1 : 0),
+          0,
+        );
+  const defaultHoldemFinals = holdemState?.lastSettledBalances || { jay: 0, kim: 0 };
+  const finalScores = isHoldemGame
+    ? (data.finalScores || data.totals || defaultHoldemFinals)
+    : (data.finalScores || data.totals || (roundsData.length ? roundsData.at(-1)?.totalsAfterRound || { jay: 0, kim: 0 } : { jay: 0, kim: 0 }));
   const currentPlayerList = [
     data.playerProfiles?.[data.seats?.jay]?.displayName || 'Jay',
     data.playerProfiles?.[data.seats?.kim]?.displayName || 'Kim',
   ].filter(Boolean);
+  const holdemWinner = getHoldemSessionWinner(holdemStats, finalScores);
 
   return {
     id,
@@ -995,22 +3378,24 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     currentRoundQuestion: data.currentRound?.question || '',
     currentRoundCategory: data.currentRound?.category || '',
     currentRoundType: data.currentRound?.roundType || '',
-    currentRoundAnswerSeats: Object.keys(data.currentRound?.answers || {}),
+    currentRoundAnswerSeats: seats.filter((seat) => hasRoundAnswerSubmittedForMode(gameMode, data.currentRound || {}, seat)),
     createdAt: data.createdAt || null,
     endedAt: data.endedAt || null,
     endedBy: data.endedBy || '',
     finalScores,
-    winner: data.winner || (finalScores ? (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim') : 'tie'),
+    winner: isHoldemGame
+      ? holdemWinner
+      : (data.winner || (finalScores ? (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim') : 'tie')),
     quizTotals: data.quizTotals || { jay: 0, kim: 0 },
     quizWinner: data.quizWinner || '',
     wagerSettlement: data.wagerSettlement || null,
-    roundsPlayed: data.roundsPlayed || roundsData.length,
+    roundsPlayed: isHoldemGame ? Number(holdemStats?.handsPlayed || data.roundsPlayed || 0) : (data.roundsPlayed || roundsData.length),
     rounds: roundsData,
     questionQueueIds: data.questionQueueIds || [],
     usedQuestionIds,
     seats: data.seats || {},
     playerProfiles: data.playerProfiles || {},
-    gameMode: data.gameMode || 'standard',
+    gameMode,
     questionBankType: data.questionBankType || 'game',
     requestedQuestionCount: Number(data.requestedQuestionCount || 0),
     actualQuestionCount: displayedQuestionCount,
@@ -1020,6 +3405,9 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     roundHistoryLength: roundsData.length,
     currentQuestionIndex: data.currentRound?.number || null,
     lifetimePointsApplied: Boolean(data.lifetimePointsApplied),
+    holdemState,
+    holdemStats,
+    holdemHandsPlayed: Number(holdemStats?.handsPlayed || 0),
   };
 };
 
@@ -1084,6 +3472,200 @@ function useMediaQuery(query) {
   }, [query]);
 
   return matches;
+}
+
+function useChatUnreadCount(messages, isOpen, currentUserId = '', resetKey = '') {
+  const [unreadCount, setUnreadCount] = useState(0);
+  const lastObservedMessageIdRef = useRef('');
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    lastObservedMessageIdRef.current = '';
+    initializedRef.current = false;
+    setUnreadCount(0);
+  }, [resetKey]);
+
+  useEffect(() => {
+    const lastMessageId = messages.at(-1)?.id || '';
+
+    if (isOpen) {
+      lastObservedMessageIdRef.current = lastMessageId;
+      initializedRef.current = true;
+      setUnreadCount(0);
+      return;
+    }
+
+    if (!initializedRef.current) {
+      lastObservedMessageIdRef.current = lastMessageId;
+      initializedRef.current = true;
+      return;
+    }
+
+    if (!lastMessageId || lastMessageId === lastObservedMessageIdRef.current) return;
+
+    const previousMessageId = lastObservedMessageIdRef.current;
+    const previousMessageIndex = previousMessageId
+      ? messages.findIndex((message) => message.id === previousMessageId)
+      : -1;
+    const newMessages = previousMessageIndex >= 0 ? messages.slice(previousMessageIndex + 1) : messages;
+    const incomingCount = newMessages.filter((message) => String(message?.uid || '') !== String(currentUserId || '')).length;
+
+    if (incomingCount > 0) {
+      setUnreadCount((current) => current + incomingCount);
+    }
+
+    lastObservedMessageIdRef.current = lastMessageId;
+  }, [currentUserId, isOpen, messages]);
+
+  return unreadCount;
+}
+
+function MobileChatLauncher({
+  title = 'Chat',
+  isOpen,
+  onOpen,
+  onClose,
+  unreadCount = 0,
+  messages,
+  draft,
+  onDraftChange,
+  onSend,
+  isBusy,
+  seat,
+  displayName,
+}) {
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose?.();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    document.body.classList.toggle('mobile-chat-sheet-open', Boolean(isOpen));
+    return () => {
+      document.body.classList.remove('mobile-chat-sheet-open');
+    };
+  }, [isOpen]);
+
+  const unreadLabel = unreadCount > 9 ? '9+' : String(unreadCount);
+
+  const launcherNode = (
+    <>
+      <button
+        type="button"
+        className={`mobile-chat-fab ${isOpen ? 'is-open' : ''} ${unreadCount > 0 ? 'has-unread' : ''}`}
+        onClick={isOpen ? onClose : onOpen}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        aria-label={unreadCount > 0 ? `${title}. ${unreadCount} unread messages.` : title}
+      >
+        <span className="mobile-chat-fab__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+            <path
+              d="M5 6.5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H11l-4.8 3.4c-.5.3-1.2 0-1.2-.6V17.5H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinejoin="round"
+            />
+          </svg>
+          {unreadCount > 0 ? <span className="mobile-chat-fab__dot" /> : null}
+        </span>
+        <span className="mobile-chat-fab__label">Chat</span>
+        {unreadCount > 0 ? <span className="mobile-chat-fab__badge">{unreadLabel}</span> : null}
+      </button>
+
+      {isOpen ? (
+        <div className="mobile-chat-sheet-backdrop" role="presentation" onClick={onClose}>
+          <section
+            className="panel mobile-chat-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mobile-chat-sheet__head">
+              <div>
+                <p className="eyebrow">Mobile Chat</p>
+                <h2>{title}</h2>
+              </div>
+              <Button className="ghost-button compact" onClick={onClose}>
+                Close
+              </Button>
+            </div>
+            <ChatPanel
+              compact
+              messages={messages}
+              draft={draft}
+              onDraftChange={onDraftChange}
+              onSend={onSend}
+              isBusy={isBusy}
+              seat={seat}
+              displayName={displayName}
+            />
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
+
+  if (typeof document === 'undefined') return launcherNode;
+  return createPortal(launcherNode, document.body);
+}
+
+function MobileHostDrawer({ isOpen, onOpen, onClose, children }) {
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose?.();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`mobile-host-tab ${isOpen ? 'is-open' : ''}`}
+        onClick={isOpen ? onClose : onOpen}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        aria-label="Host controls"
+      >
+        <span className="mobile-host-tab__label">Host</span>
+      </button>
+
+      {isOpen ? (
+        <div className="mobile-host-drawer-backdrop" role="presentation" onClick={onClose}>
+          <aside
+            className="panel mobile-host-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Host controls"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mobile-host-drawer__head">
+              <div>
+                <p className="eyebrow">Host Panel</p>
+                <h2>Run The Game</h2>
+              </div>
+              <Button className="ghost-button compact" onClick={onClose}>
+                Close
+              </Button>
+            </div>
+            <div className="mobile-host-drawer__body">
+              {children}
+            </div>
+          </aside>
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 function AuthScreen({
@@ -1231,6 +3813,47 @@ function AuthScreen({
   );
 }
 
+function AiAssistantPanel({
+  user,
+  profile,
+  currentPlayerSeat,
+  aiChatMessages,
+  aiChatDraft,
+  setAiChatDraft,
+  sendAiChat,
+  isAiChatSending,
+}) {
+  const viewerSeat = currentPlayerSeat || inferSeatFromUser(user, profile) || 'jay';
+  const viewerLabel = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[viewerSeat] || 'Player';
+
+  return (
+    <section className="ai-page-shell">
+      <section className="panel lobby-panel lobby-panel--ai ai-chat-card chat-column chat-column--locked">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">AI</p>
+            <h2>Ask The AI</h2>
+          </div>
+          <span className="status-pill">Private to {viewerLabel}</span>
+        </div>
+        <ChatPanel
+          compact
+          messages={aiChatMessages}
+          draft={aiChatDraft}
+          onDraftChange={setAiChatDraft}
+          onSend={sendAiChat}
+          isBusy={isAiChatSending}
+          seat={viewerSeat}
+          displayName={viewerLabel}
+          emptyCopy="No private AI chat yet. Ask about Jay, Kim, or something you have both answered before."
+          placeholderText="Ask about Jay, Kim, or your saved relationship history"
+          sendLabel="Ask AI"
+        />
+      </section>
+    </section>
+  );
+}
+
 function LobbyScreen({
   user,
   profile,
@@ -1241,12 +3864,19 @@ function LobbyScreen({
   onSaveDisplayName,
   onUpdateQuestionNote,
   onDeleteQuestionNote,
+  aiEvidenceSnapshot,
+  aiChatMessages,
+  aiChatDraft,
+  isAiChatSending,
+  setAiChatDraft,
+  sendAiChat,
   playerAccounts,
   editingModeEnabled,
   onToggleEditingMode,
   currentPlayerSeat,
   currentPlayerLifetimeLabel,
   pendingActivityCount,
+  bankQuestions,
   questionCategories,
   createCode,
   joinCode,
@@ -1262,10 +3892,21 @@ function LobbyScreen({
   onDismissGameInvite,
   onSyncQuestionBank,
   onSyncQuizBank,
+  onSyncThisOrThatBank,
+  onSyncTrueFalseBank,
   onImportQuestions,
   onImportQuizQuestions,
+  onImportThisOrThatQuestions,
+  onImportTrueFalseQuestions,
   onResumeGame,
   onViewSummary,
+  // Lobby chat props (injected from ProductionApp)
+  lobbyChatMessages,
+  lobbyChatDraft,
+  isLobbyChatSending,
+  setLobbyChatDraft,
+  sendLobbyChat,
+
   onEndGame,
   onDeleteGame,
   onResetBalances,
@@ -1275,6 +3916,7 @@ function LobbyScreen({
   previousGames,
   lobbyAnalytics,
   lobbyRoundAnalytics,
+  holdemAnalytics,
   categoryColorMap,
   bankCount,
   questionCount,
@@ -1283,6 +3925,12 @@ function LobbyScreen({
   quizQuestionCount,
   usedQuizQuestionCount,
   remainingQuizQuestionCount,
+  thisOrThatQuestionCount,
+  usedThisOrThatQuestionCount,
+  remainingThisOrThatQuestionCount,
+  trueFalseQuestionCount,
+  usedTrueFalseQuestionCount,
+  remainingTrueFalseQuestionCount,
   unusedQuestionCount,
   syncNotice,
   gameInvites,
@@ -1295,6 +3943,9 @@ function LobbyScreen({
   redemptionHistory,
   amaRequests,
   diaryEntries,
+  onBackfillGameDiaryEntries,
+  gameDiaryBackfillState,
+  missingGameDiaryCount,
   pendingAmaInbox,
   pendingAmaOutbox,
   forfeitPriceRequests,
@@ -1319,11 +3970,28 @@ function LobbyScreen({
   onConfirmAction,
   onCancelAction,
   onResetQuestionBank,
+  onActiveTabChange,
 }) {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('kjk-dashboard-tab') || 'gameLobby');
   const [activityTab, setActivityTab] = useState(() => localStorage.getItem('kjk-activity-tab') || 'activeGames');
   const [createMode, setCreateMode] = useState('random');
+  const [quizCreateCodeDraft, setQuizCreateCodeDraft] = useState('');
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
+  const [trueFalseCreateCodeDraft, setTrueFalseCreateCodeDraft] = useState('');
+  const [trueFalseQuestionCountDraft, setTrueFalseQuestionCountDraft] = useState('10');
+  const [thisOrThatCreateCodeDraft, setThisOrThatCreateCodeDraft] = useState('');
+  const [thisOrThatQuestionCountDraft, setThisOrThatQuestionCountDraft] = useState('10');
+  const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
+  const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
+  const [flippedLobbyTiles, setFlippedLobbyTiles] = useState(() => ({
+    standard: false,
+    quiz: false,
+    trueFalse: false,
+    thisOrThat: false,
+    holdem: false,
+  }));
+  const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
+  const [lobbyTileImagesEnabled, setLobbyTileImagesEnabled] = useState(false);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
@@ -1335,7 +4003,10 @@ function LobbyScreen({
   const [profileNameDraft, setProfileNameDraft] = useState(() => normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   const [editingNoteId, setEditingNoteId] = useState('');
   const [editingNoteDraft, setEditingNoteDraft] = useState('');
+  const [mobileLobbyChatOpen, setMobileLobbyChatOpen] = useState(false);
   const dashboardMenuRef = useRef(null);
+  const lobbyCarouselTouchStartXRef = useRef(null);
+  const lobbyCarouselTouchInteractiveRef = useRef(false);
   const isMobileDashboardNav = useMediaQuery('(max-width: 900px)');
   const pendingInviteCount = useMemo(() => {
     if (!Array.isArray(gameInvites)) return 0;
@@ -1344,6 +4015,7 @@ function LobbyScreen({
   const dashboardPills = [
     { id: 'gameLobby', label: 'Game Lobby', tone: 'lobby', icon: 'home' },
     { id: 'activity', label: 'Activity', tone: 'activity', icon: 'activity' },
+    { id: 'ai', label: 'AI', tone: 'ai', icon: 'spark' },
     { id: 'analytics', label: 'Analytics', tone: 'analytics', icon: 'graph' },
     { id: 'diary', label: 'Diary', tone: 'diary', icon: 'book' },
     { id: 'forfeitStore', label: 'Forfeit Store', tone: 'store', icon: 'gift' },
@@ -1354,6 +4026,14 @@ function LobbyScreen({
     jay: String(Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0)),
     kim: String(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0)),
   }), [playerAccounts?.jay?.lifetimePenaltyPoints, playerAccounts?.kim?.lifetimePenaltyPoints]);
+  const thisOrThatReadyCount = Number(thisOrThatQuestionCount || 0);
+  const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
+  const lobbyChatUnreadCount = useChatUnreadCount(
+    lobbyChatMessages,
+    mobileLobbyChatOpen,
+    user?.uid || '',
+    `${activeTab}:${user?.uid || ''}`,
+  );
 
   const toggleFilterValue = (value, values, setter) => {
     setter(values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value]);
@@ -1375,6 +4055,67 @@ function LobbyScreen({
       categories: createMode === 'custom' ? selectedCategories : [],
       sendInvite: true,
     });
+
+  const handleCreateQuizGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: quizCreateCodeDraft,
+      mode: 'random',
+      gameMode: 'quiz',
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: quizQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateTrueFalseGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: trueFalseCreateCodeDraft,
+      gameName: 'True or False',
+      mode: 'random',
+      gameMode: TRUE_FALSE_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: trueFalseQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateThisOrThatGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: thisOrThatCreateCodeDraft,
+      gameName: 'This or That',
+      mode: 'random',
+      gameMode: THIS_OR_THAT_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: thisOrThatQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateHoldemGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: holdemCreateCodeDraft,
+      gameName: "Texas Hold'em",
+      mode: 'random',
+      gameMode: HOLDEM_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const setLobbyTileFlipped = (cardId, nextValue) => {
+    if (typeof document !== 'undefined') {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLElement) activeElement.blur();
+    }
+    setFlippedLobbyTiles((current) => {
+      if (current?.[cardId] === nextValue) return current;
+      return {
+        ...current,
+        [cardId]: nextValue,
+      };
+    });
+    if (nextValue) setOpenLobbyTileInfoId('');
+  };
 
   const closeDashboardMenu = () => {
     dashboardMenuRef.current?.removeAttribute('open');
@@ -1519,6 +4260,13 @@ function LobbyScreen({
             <path d="M7 8h7M7 11h6M7 14h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
           </svg>
         );
+      case 'spark':
+        return (
+          <svg {...sharedProps}>
+            <path d="m12 4 1.7 4.3L18 10l-4.3 1.7L12 16l-1.7-4.3L6 10l4.3-1.7L12 4Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+            <path d="m18.5 4 .7 1.8L21 6.5l-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8ZM6 16.5l.9 2.2L9 19.5l-2.1.8L6 22.5l-.9-2.2L3 19.5l2.1-.8.9-2.2Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+          </svg>
+        );
       default:
         return null;
     }
@@ -1531,6 +4279,10 @@ function LobbyScreen({
       // Ignore storage failures.
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    onActiveTabChange?.(activeTab);
+  }, [activeTab, onActiveTabChange]);
 
   useEffect(() => {
     try {
@@ -1547,7 +4299,7 @@ function LobbyScreen({
     const typeStats = new Map();
 
     (questionFeedback || []).forEach((entry) => {
-      const seat = seatFromPlayerRef(entry.userId || entry.userSeat) || '';
+      const seat = seatFromPlayerRef(entry.userSeat || entry.userId) || '';
       const value = entry.feedbackValue === 'liked' ? 'liked' : entry.feedbackValue === 'disliked' ? 'disliked' : '';
       if (!seat || !value) return;
       byUser[seat][value] += 1;
@@ -1738,7 +4490,18 @@ function LobbyScreen({
     const sessions = (previousGames || []).filter((entry) => (entry?.gameMode || 'standard') === 'quiz');
     const completedSessions = sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || ''));
     const wins = { jay: 0, kim: 0, tie: 0 };
-    const wagers = { games: 0, jayNetShift: 0, kimNetShift: 0, movedTotal: 0, jayWon: 0, kimWon: 0, tie: 0 };
+    const wagers = {
+      games: 0,
+      jayNetShift: 0,
+      kimNetShift: 0,
+      movedTotal: 0,
+      totalPlayedFor: 0,
+      biggestSharedWager: 0,
+      averageSharedWager: 0,
+      jayWon: 0,
+      kimWon: 0,
+      tie: 0,
+    };
     completedSessions.forEach((entry) => {
       const winner = entry?.quizWinner || entry?.winner || 'tie';
       if (winner === 'jay') wins.jay += 1;
@@ -1749,14 +4512,23 @@ function LobbyScreen({
         wagers.games += 1;
         const jayShift = Number(settlement.jayShift || 0);
         const kimShift = Number(settlement.kimShift || 0);
+        const sharedWager = Math.max(
+          0,
+          Number(settlement.sharedWager || 0),
+          Number(settlement.jayWager || 0),
+          Number(settlement.kimWager || 0),
+        );
         wagers.jayNetShift += jayShift;
         wagers.kimNetShift += kimShift;
         wagers.movedTotal += Math.abs(jayShift) + Math.abs(kimShift);
+        wagers.totalPlayedFor += sharedWager;
+        wagers.biggestSharedWager = Math.max(wagers.biggestSharedWager, sharedWager);
         if (winner === 'jay') wagers.jayWon += 1;
         if (winner === 'kim') wagers.kimWon += 1;
         if (winner !== 'jay' && winner !== 'kim') wagers.tie += 1;
       }
     });
+    wagers.averageSharedWager = wagers.games ? Math.round(wagers.totalPlayedFor / wagers.games) : 0;
     return {
       totalQuizSessions: sessions.length,
       completedQuizSessions: completedSessions.length,
@@ -1765,12 +4537,283 @@ function LobbyScreen({
     };
   }, [previousGames]);
 
+  const trueFalseAnalytics = useMemo(() => {
+    const mergedById = new Map();
+    [...(activeGames || []), ...(previousGames || [])].forEach((entry) => {
+      if (!entry?.id || !isTrueFalseGameMode(entry?.gameMode || 'standard')) return;
+      if (!mergedById.has(entry.id)) mergedById.set(entry.id, entry);
+    });
+    const sessions = [...mergedById.values()];
+    const completedSessions = sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || ''));
+    const activeSessions = sessions.filter((entry) => ACTIVE_GAME_STATUSES.includes(entry?.status || ''));
+    const roundsData = sessions.flatMap((entry) =>
+      normalizeStoredRounds(entry?.rounds || []).map((round) => ({
+        ...round,
+        gameId: entry.id,
+        gameName: entry.name || entry.gameName || entry.joinCode || 'True or False',
+      })),
+    );
+    const categoryStats = new Map();
+    const totals = {
+      sessionsTracked: sessions.length,
+      totalGamesPlayed: completedSessions.length,
+      activeGames: activeSessions.length,
+      totalQuestionsAnswered: roundsData.length,
+      jayCorrectGuesses: 0,
+      kimCorrectGuesses: 0,
+      jayWrongGuesses: 0,
+      kimWrongGuesses: 0,
+      jayPenaltyPoints: 0,
+      kimPenaltyPoints: 0,
+    };
+
+    roundsData.forEach((round) => {
+      const outcome = buildTrueFalseRoundOutcome(round);
+      const categoryKey = normalizeText(round?.category) || 'uncategorised';
+      const categoryEntry = categoryStats.get(categoryKey) || {
+        category: round?.category || 'Uncategorised',
+        rounds: 0,
+        jayCorrect: 0,
+        kimCorrect: 0,
+        jayWrong: 0,
+        kimWrong: 0,
+        jayPenalty: 0,
+        kimPenalty: 0,
+      };
+      categoryEntry.rounds += 1;
+
+      if (outcome.jayCorrect) {
+        totals.jayCorrectGuesses += 1;
+        categoryEntry.jayCorrect += 1;
+      } else {
+        totals.jayWrongGuesses += 1;
+        categoryEntry.jayWrong += 1;
+      }
+
+      if (outcome.kimCorrect) {
+        totals.kimCorrectGuesses += 1;
+        categoryEntry.kimCorrect += 1;
+      } else {
+        totals.kimWrongGuesses += 1;
+        categoryEntry.kimWrong += 1;
+      }
+
+      totals.jayPenaltyPoints += Number(outcome.jayPenalty || 0);
+      totals.kimPenaltyPoints += Number(outcome.kimPenalty || 0);
+      categoryEntry.jayPenalty += Number(outcome.jayPenalty || 0);
+      categoryEntry.kimPenalty += Number(outcome.kimPenalty || 0);
+      categoryStats.set(categoryKey, categoryEntry);
+    });
+
+    const jayAttempts = totals.jayCorrectGuesses + totals.jayWrongGuesses;
+    const kimAttempts = totals.kimCorrectGuesses + totals.kimWrongGuesses;
+
+    return {
+      ...totals,
+      jayAccuracy: jayAttempts ? Math.round((totals.jayCorrectGuesses / jayAttempts) * 100) : 0,
+      kimAccuracy: kimAttempts ? Math.round((totals.kimCorrectGuesses / kimAttempts) * 100) : 0,
+      categoryRows: [...categoryStats.values()].sort(
+        (left, right) =>
+          right.rounds - left.rounds
+          || (right.jayCorrect + right.kimCorrect) - (left.jayCorrect + left.kimCorrect),
+      ),
+    };
+  }, [activeGames, previousGames]);
+
+  const questionBankLoadedCount = questionBankSegment === 'quiz'
+    ? quizQuestionCount
+    : questionBankSegment === 'thisOrThat'
+      ? thisOrThatQuestionCount
+    : questionBankSegment === 'trueFalse'
+      ? trueFalseQuestionCount
+      : questionCount;
+  const questionBankUsedTotal = questionBankSegment === 'quiz'
+    ? usedQuizQuestionCount
+    : questionBankSegment === 'thisOrThat'
+      ? usedThisOrThatQuestionCount
+    : questionBankSegment === 'trueFalse'
+      ? usedTrueFalseQuestionCount
+      : usedQuestionCount;
+  const questionBankRemainingTotal = questionBankSegment === 'quiz'
+    ? remainingQuizQuestionCount
+    : questionBankSegment === 'thisOrThat'
+      ? remainingThisOrThatQuestionCount
+    : questionBankSegment === 'trueFalse'
+      ? remainingTrueFalseQuestionCount
+      : remainingQuestionCount;
+  const questionBankSyncAction = questionBankSegment === 'quiz'
+    ? onSyncQuizBank
+    : questionBankSegment === 'thisOrThat'
+      ? onSyncThisOrThatBank
+    : questionBankSegment === 'trueFalse'
+      ? onSyncTrueFalseBank
+      : onSyncQuestionBank;
+  const questionBankImportAction = questionBankSegment === 'quiz'
+    ? onImportQuizQuestions
+    : questionBankSegment === 'thisOrThat'
+      ? onImportThisOrThatQuestions
+    : questionBankSegment === 'trueFalse'
+      ? onImportTrueFalseQuestions
+      : onImportQuestions;
+  const questionBankActionLabel = questionBankSegment === 'quiz'
+    ? 'Quiz Question Bank'
+    : questionBankSegment === 'thisOrThat'
+      ? 'This or That Bank'
+    : questionBankSegment === 'trueFalse'
+      ? 'True or False Bank'
+      : 'Question Bank';
+
   useEffect(() => {
     setProfileNameDraft(normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   }, [profile?.displayName, user?.displayName, user?.email]);
 
+  useEffect(() => {
+    if (isMobileDashboardNav && activeTab === 'gameLobby') return;
+    setMobileLobbyChatOpen(false);
+  }, [activeTab, isMobileDashboardNav]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let frameId = 0;
+    let timeoutId = 0;
+    let idleId = null;
+    const enableLobbyTileImages = () => {
+      if (!cancelled) setLobbyTileImagesEnabled(true);
+    };
+    // Defer decorative tile art until after first paint so the lobby becomes interactive sooner.
+    frameId = window.requestAnimationFrame(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(enableLobbyTileImages, { timeout: 250 });
+        return;
+      }
+      timeoutId = window.setTimeout(enableLobbyTileImages, 120);
+    });
+    return () => {
+      cancelled = true;
+      if (frameId) window.cancelAnimationFrame(frameId);
+      if (idleId !== null && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleId);
+      }
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
+  }, []);
+
+  const lobbyCarouselCards = [
+    { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
+    { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
+    { id: 'trueFalse', label: 'True or False', image: trueOrFalseTileImage },
+    { id: 'thisOrThat', label: 'This or That', image: thisOrThatTileImage },
+    { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
+  ];
+
+  const lobbyCarouselCount = lobbyCarouselCards.length;
+  const moveLobbyCarousel = (direction) => {
+    setOpenLobbyTileInfoId('');
+    setLobbyCarouselIndex((current) => (current + direction + lobbyCarouselCount) % lobbyCarouselCount);
+  };
+
+  const getLobbyCarouselPosition = (index) => {
+    const offset = (index - lobbyCarouselIndex + lobbyCarouselCount) % lobbyCarouselCount;
+    if (offset === 0) return 'center';
+    if (offset === 1) return 'right';
+    if (offset === lobbyCarouselCount - 1) return 'left';
+    return 'hidden';
+  };
+
+  const handleLobbyCarouselTouchStart = (event) => {
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    const target = event.target instanceof Element ? event.target : null;
+    lobbyCarouselTouchInteractiveRef.current = Boolean(
+      target?.closest('input, textarea, select, button, label, .field, .filter-chip, a'),
+    );
+    if (lobbyCarouselTouchInteractiveRef.current) {
+      lobbyCarouselTouchStartXRef.current = null;
+      return;
+    }
+    lobbyCarouselTouchStartXRef.current = touch.clientX;
+  };
+
+  const handleLobbyCarouselTouchEnd = (event) => {
+    if (lobbyCarouselTouchInteractiveRef.current) {
+      lobbyCarouselTouchInteractiveRef.current = false;
+      lobbyCarouselTouchStartXRef.current = null;
+      return;
+    }
+    const touch = event.changedTouches?.[0];
+    const startX = lobbyCarouselTouchStartXRef.current;
+    lobbyCarouselTouchStartXRef.current = null;
+    if (!touch || typeof startX !== 'number') return;
+    const deltaX = touch.clientX - startX;
+    if (Math.abs(deltaX) < 44) return;
+    moveLobbyCarousel(deltaX < 0 ? 1 : -1);
+  };
+
+  const isStandardTileFlipped = Boolean(flippedLobbyTiles.standard);
+  const isQuizTileFlipped = Boolean(flippedLobbyTiles.quiz);
+  const isTrueFalseTileFlipped = Boolean(flippedLobbyTiles.trueFalse);
+  const isThisOrThatTileFlipped = Boolean(flippedLobbyTiles.thisOrThat);
+  const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
+  const getLobbyTileImageStyle = (imageUrl) => ({
+    '--lobby-tile-image': lobbyTileImagesEnabled && imageUrl ? `url("${imageUrl}")` : 'none',
+  });
+
+  const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, description, footerMeta, onCreateAndInvite }) => {
+    const isFlipped = Boolean(flippedLobbyTiles?.[cardId]);
+    const isInfoOpen = openLobbyTileInfoId === cardId;
+    return (
+      <div className="lobby-image-tile-face lobby-image-tile-face--front" inert={isFlipped} aria-hidden={isFlipped}>
+        <div className="lobby-image-tile-front-copy">
+          <div className="panel-heading lobby-image-tile-front-heading">
+            <div>
+              <p className="eyebrow">{eyebrow}</p>
+              <h2>{title}</h2>
+            </div>
+            <div className="lobby-image-tile-front-heading-side">
+              <Button
+                type="button"
+                className={`ghost-button compact lobby-image-tile-info-button ${isInfoOpen ? 'is-active' : ''}`}
+                onClick={() => setOpenLobbyTileInfoId((current) => (current === cardId ? '' : cardId))}
+                aria-label={`Show more info about ${title}`}
+                aria-expanded={isInfoOpen}
+              >
+                i
+              </Button>
+              {statusText ? <span className="status-pill">{statusText}</span> : null}
+            </div>
+          </div>
+          {isInfoOpen ? <p className="panel-copy lobby-image-tile-info-copy">{description}</p> : null}
+        </div>
+        <div className="lobby-image-tile-front-spacer" aria-hidden="true" />
+        <div className="lobby-image-tile-front-footer">
+          <div className="lobby-image-tile-front-meta" aria-live="polite">
+            {footerMeta}
+          </div>
+          <div className="button-row lobby-image-tile-front-actions">
+            <Button
+              type="button"
+              className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
+              onClick={() => setLobbyTileFlipped(cardId, true)}
+              disabled={isBusy}
+            >
+              Create New Game
+            </Button>
+            <Button
+              type="button"
+              className="primary-button compact lobby-primary-button lobby-image-tile-action"
+              onClick={onCreateAndInvite}
+              disabled={isBusy}
+            >
+              Create + Invite
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
 	  return (
-	    <main className="app production-app">
+	    <main className={`app production-app ${isMobileDashboardNav ? 'mobile-app' : ''}`}>
 	      <header className="top-bar top-bar--shell">
         {!isMobileDashboardNav ? (
           <div className="top-bar-left">
@@ -1892,186 +4935,578 @@ function LobbyScreen({
               </section>
             ) : null}
             <div className="game-lobby-grid">
-              <section className="panel lobby-panel lobby-panel--lobby create-game-card">
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">Game Lobby</p>
-                    <h2>Create New Game</h2>
-                  </div>
-                  <span className="status-pill">{questionCount} ready</span>
-                </div>
-
-                <div className="create-mode-row">
-                  <Button className={`ghost-button compact ${createMode === 'random' ? 'is-on' : ''}`} onClick={() => setCreateMode('random')}>
-                    Pick X Random Questions
+              <section className="lobby-carousel-shell" aria-label="Game mode carousel">
+                <div
+                  className="lobby-carousel-stage"
+                  aria-live="polite"
+                  onTouchStart={handleLobbyCarouselTouchStart}
+                  onTouchEnd={handleLobbyCarouselTouchEnd}
+                >
+                  <Button
+                    type="button"
+                    className="ghost-button compact lobby-carousel-stage-arrow lobby-carousel-stage-arrow--left"
+                    onClick={() => moveLobbyCarousel(-1)}
+                    aria-label="Show previous game mode"
+                  >
+                    <span aria-hidden="true">‹</span>
+                    <small>Prev</small>
                   </Button>
-                  <Button className={`ghost-button compact ${createMode === 'custom' ? 'is-on' : ''}`} onClick={() => setCreateMode('custom')}>
-                    Select My Own
+                  <Button
+                    type="button"
+                    className="ghost-button compact lobby-carousel-stage-arrow lobby-carousel-stage-arrow--right"
+                    onClick={() => moveLobbyCarousel(1)}
+                    aria-label="Show next game mode"
+                  >
+                    <small>Next</small>
+                    <span aria-hidden="true">›</span>
                   </Button>
-                </div>
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(0)}`}
+                    inert={getLobbyCarouselPosition(0) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(0) !== 'center'}
+                  >
+                    <section
+                      className="panel lobby-panel lobby-panel--lobby create-game-card lobby-image-tile lobby-image-tile--normal"
+                      style={getLobbyTileImageStyle(normalGameTileImage)}
+                    >
+                      <div className={`lobby-image-tile-flip ${isStandardTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'standard',
+                          eyebrow: 'Game Lobby',
+                          title: 'Normal Game',
+                          statusText: `${questionCount} ready`,
+                          description: 'Penalty-point rounds, question reveals, and all the usual Jay vs Kim game flow.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={gameQuestionCount}
+                                onChange={(event) => onGameQuestionCountChange(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
+                          onCreateAndInvite: handleCreateAndInviteGame,
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isStandardTileFlipped} aria-hidden={!isStandardTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('standard', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Game Lobby</p>
+                              <h2>Create New Game</h2>
+                            </div>
+                            <span className="status-pill">{questionCount} ready</span>
+                          </div>
 
-                <div className="lobby-actions lobby-actions--stack">
-                  <label className="field">
-                    <span>Game Name</span>
-                    <input value={gameName} onChange={(event) => onGameNameChange(event.target.value)} placeholder="Jay vs Kim showdown" />
-                  </label>
-                  <label className="field">
-                    <span>Number of Questions</span>
-                    <input type="number" inputMode="numeric" min="1" value={gameQuestionCount} onChange={(event) => onGameQuestionCountChange(event.target.value)} placeholder="10" />
-                  </label>
-                  <label className="field">
-                    <span>Host Code Seed</span>
-                    <input value={createCode} onChange={(event) => onCreateCodeChange(normalizeJoinCode(event.target.value))} placeholder="Optional" />
-                  </label>
-                </div>
+                          <div className="create-mode-row">
+                            <Button className={`ghost-button compact ${createMode === 'random' ? 'is-on' : ''}`} onClick={() => setCreateMode('random')}>
+                              Pick X Random Questions
+                            </Button>
+                            <Button className={`ghost-button compact ${createMode === 'custom' ? 'is-on' : ''}`} onClick={() => setCreateMode('custom')}>
+                              Select My Own
+                            </Button>
+                          </div>
 
-                {createMode === 'custom' ? (
-                  <div className="create-filters-grid">
-                    <section className="filter-card">
-                      <div className="mini-heading">
-                        <div>
-                          <span>Question Types</span>
-                          <h3>Choose formats</h3>
+                          <div className="lobby-actions lobby-actions--stack">
+                            <label className="field">
+                              <span>Game Name</span>
+                              <input value={gameName} onChange={(event) => onGameNameChange(event.target.value)} placeholder="Jay vs Kim showdown" />
+                            </label>
+                            <label className="field">
+                              <span>Number of Questions</span>
+                              <input type="number" inputMode="numeric" min="1" value={gameQuestionCount} onChange={(event) => onGameQuestionCountChange(event.target.value)} placeholder="10" />
+                            </label>
+                            <label className="field">
+                              <span>Host Code Seed</span>
+                              <input value={createCode} onChange={(event) => onCreateCodeChange(normalizeJoinCode(event.target.value))} placeholder="Optional" />
+                            </label>
+                          </div>
+
+                          {createMode === 'custom' ? (
+                            <div className="create-filters-grid">
+                              <section className="filter-card">
+                                <div className="mini-heading">
+                                  <div>
+                                    <span>Question Types</span>
+                                    <h3>Choose formats</h3>
+                                  </div>
+                                </div>
+                                <div className="filter-chip-grid">
+                                  {typeOptions.map((option) => (
+                                    <button
+                                      key={option.value}
+                                      type="button"
+                                      className={`filter-chip ${selectedRoundTypes.includes(option.value) ? 'is-on' : ''}`}
+                                      onClick={() => toggleFilterValue(option.value, selectedRoundTypes, setSelectedRoundTypes)}
+                                    >
+                                      {option.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </section>
+
+                              <section className="filter-card">
+                                <div className="mini-heading">
+                                  <div>
+                                    <span>Categories</span>
+                                    <h3>Choose themes</h3>
+                                  </div>
+                                </div>
+                                <div className="filter-chip-grid filter-chip-grid--categories">
+                                  {categoryOptions.map((category) => (
+                                    <button
+                                      key={category}
+                                      type="button"
+                                      className={`filter-chip ${selectedCategories.includes(category) ? 'is-on' : ''}`}
+                                      onClick={() => toggleFilterValue(category, selectedCategories, setSelectedCategories)}
+                                    >
+                                      {category}
+                                    </button>
+                                  ))}
+                                </div>
+                              </section>
+                            </div>
+                          ) : (
+                            <p className="panel-copy">Create instantly with a random pack of unused questions for Jay vs Kim.</p>
+                          )}
+
+                          <div className="button-row lobby-create-actions">
+                            <Button type="button" className="primary-button lobby-primary-button" onClick={handleCreateGame} disabled={isBusy}>
+                              Create New Game
+                            </Button>
+                            <Button type="button" className="ghost-button lobby-secondary-button" onClick={handleCreateAndInviteGame} disabled={isBusy}>
+                              Create + Invite
+                            </Button>
+                          </div>
+
+                          <div className="lobby-join-inline">
+                            <p className="eyebrow">OR Join a game with code</p>
+                            <div className="lobby-actions lobby-actions--stack">
+                              <label className="field">
+                                <span>Join Code</span>
+                                <input value={joinCode} onChange={(event) => onJoinCodeChange(normalizeJoinCode(event.target.value))} placeholder="ABCD12" />
+                              </label>
+                              <Button className="ghost-button lobby-secondary-button" onClick={onJoinGame} disabled={isBusy || !joinCode.length}>
+                                Join Game
+                              </Button>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                      <div className="filter-chip-grid">
-                        {typeOptions.map((option) => (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={`filter-chip ${selectedRoundTypes.includes(option.value) ? 'is-on' : ''}`}
-                            onClick={() => toggleFilterValue(option.value, selectedRoundTypes, setSelectedRoundTypes)}
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
                     </section>
+                  </div>
 
-                    <section className="filter-card">
-                      <div className="mini-heading">
-                        <div>
-                          <span>Categories</span>
-                          <h3>Choose themes</h3>
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(1)}`}
+                    inert={getLobbyCarouselPosition(1) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(1) !== 'center'}
+                  >
+	                <section
+                    className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--quiz"
+                    style={getLobbyTileImageStyle(quickFireQuizTileImage)}
+                  >
+                      <div className={`lobby-image-tile-flip ${isQuizTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'quiz',
+                          eyebrow: 'Quick Fire',
+                          title: 'Quick Fire Quiz',
+                          statusText: `${quizQuestionCount} ready`,
+                          description: 'Fast-answer quiz mode with its own scoring, timer pressure, and separate quiz points.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={quizQuestionCountDraft}
+                                onChange={(event) => setQuizQuestionCountDraft(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
+                          onCreateAndInvite: () => handleCreateQuizGame(true),
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isQuizTileFlipped} aria-hidden={!isQuizTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('quiz', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+	                        <div className="panel-heading">
+	                          <div>
+	                            <p className="eyebrow">Quick Fire</p>
+	                            <h2>Quiz Mode</h2>
+	                          </div>
+	                        </div>
+	                        <p className="panel-copy">Start a speed quiz game from the Quiz sheet question set.</p>
+                          <div className="quiz-card-hero" aria-hidden="true">
+                            <div className="quiz-card-hero-main">
+                              <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
+                                <defs>
+                                  <linearGradient id="quiz-card-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stopColor="#7ad8ff" />
+                                    <stop offset="100%" stopColor="#4f7bff" />
+                                  </linearGradient>
+                                </defs>
+                                <circle cx="60" cy="60" r="52" fill="rgba(6,16,34,0.72)" stroke="url(#quiz-card-gradient)" strokeWidth="4" />
+                                <path d="M34 56h52M34 70h36" stroke="#bfe1ff" strokeWidth="4" strokeLinecap="round" />
+                                <circle cx="86" cy="70" r="7" fill="#9be5a6" />
+                                <path d="M83.5 70.2 85.5 72.4 89 67.8" stroke="#0f3117" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            </div>
+                            <div className="quiz-card-hero-meta">
+                              <strong>10s Timer</strong>
+                              <small>Fast answers score higher</small>
+                            </div>
+                            <div className="quiz-card-hero-meta">
+                              <strong>Live Quiz</strong>
+                              <small>Separate from normal game points</small>
+	                          </div>
+	                        </div>
+	                        <label className="field">
+	                          <span>Quiz Code</span>
+	                          <input
+	                            value={quizCreateCodeDraft}
+	                            onChange={(event) => setQuizCreateCodeDraft(normalizeJoinCode(event.target.value))}
+	                            placeholder="Optional"
+	                          />
+	                        </label>
+	                        <label className="field">
+	                          <span>Number of Quiz Questions</span>
+	                          <input
+	                            type="number"
+	                            inputMode="numeric"
+	                            min="1"
+	                            value={quizQuestionCountDraft}
+	                            onChange={(event) => setQuizQuestionCountDraft(event.target.value)}
+	                            placeholder="10"
+	                          />
+	                        </label>
+	                        <div className="button-row">
+	                          <Button
+	                            className="primary-button compact"
+	                            onClick={() => handleCreateQuizGame(false)}
+	                            disabled={isBusy}
+	                          >
+	                            Create Quiz Game
+	                          </Button>
+	                          <Button
+	                            className="ghost-button compact"
+	                            onClick={() => handleCreateQuizGame(true)}
+	                            disabled={isBusy}
+	                          >
+	                            Create + Invite
+	                          </Button>
+	                        </div>
                         </div>
                       </div>
-                      <div className="filter-chip-grid filter-chip-grid--categories">
-                        {categoryOptions.map((category) => (
-                          <button
-                            key={category}
-                            type="button"
-                            className={`filter-chip ${selectedCategories.includes(category) ? 'is-on' : ''}`}
-                            onClick={() => toggleFilterValue(category, selectedCategories, setSelectedCategories)}
-                          >
-                            {category}
-                          </button>
-                        ))}
+	                </section>
+                  </div>
+
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(2)}`}
+                    inert={getLobbyCarouselPosition(2) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(2) !== 'center'}
+                  >
+                    <section
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--true-false"
+                      style={getLobbyTileImageStyle(trueOrFalseTileImage)}
+                    >
+                      <div className={`lobby-image-tile-flip ${isTrueFalseTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'trueFalse',
+                          eyebrow: 'Mirror Match',
+                          title: 'True or False',
+                          statusText: `${trueFalseQuestionCount} ready`,
+                          description: 'Eight-second True or False rounds. Pick what you think the other person will answer, then lock your own answer too. Your first choice for each side is final.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={trueFalseQuestionCountDraft}
+                                onChange={(event) => setTrueFalseQuestionCountDraft(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
+                          onCreateAndInvite: () => handleCreateTrueFalseGame(true),
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isTrueFalseTileFlipped} aria-hidden={!isTrueFalseTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('trueFalse', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Mirror Match</p>
+                              <h2>True or False</h2>
+                            </div>
+                            <span className="status-pill">{trueFalseQuestionCount} ready</span>
+                          </div>
+                          <p className="panel-copy">Every round gives both players 8 seconds. Pick what you think the other person will answer, then lock your own answer. The first tap for each answer sticks.</p>
+                          <label className="field">
+                            <span>True or False Code</span>
+                            <input
+                              value={trueFalseCreateCodeDraft}
+                              onChange={(event) => setTrueFalseCreateCodeDraft(normalizeJoinCode(event.target.value))}
+                              placeholder="Optional"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Number of Questions</span>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min="1"
+                              value={trueFalseQuestionCountDraft}
+                              onChange={(event) => setTrueFalseQuestionCountDraft(event.target.value)}
+                              placeholder="10"
+                            />
+                          </label>
+                          <p className="field-note">Wrong guess = +10 penalty points. There is no submit button, and each first True/False tap locks immediately.</p>
+                          <div className="button-row">
+                            <Button
+                              className="primary-button compact"
+                              onClick={() => handleCreateTrueFalseGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create True or False
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateTrueFalseGame(true)}
+                              disabled={isBusy}
+                            >
+                              Create + Invite
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     </section>
                   </div>
-                ) : (
-                  <p className="panel-copy">Create instantly with a random pack of unused questions for Jay vs Kim.</p>
-                )}
 
-                <div className="button-row lobby-create-actions">
-                  <Button className="primary-button lobby-primary-button" onClick={handleCreateGame} disabled={isBusy}>
-                    Create New Game
-                  </Button>
-                  <Button className="ghost-button lobby-secondary-button" onClick={handleCreateAndInviteGame} disabled={isBusy}>
-                    Create + Send Game Request
-                  </Button>
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(3)}`}
+                    inert={getLobbyCarouselPosition(3) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(3) !== 'center'}
+                  >
+                    <section
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--this-or-that"
+                      style={getLobbyTileImageStyle(thisOrThatTileImage)}
+                    >
+                      <div className={`lobby-image-tile-flip ${isThisOrThatTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'thisOrThat',
+                          eyebrow: 'Prediction Match',
+                          title: 'This or That',
+                          statusText: `${thisOrThatReadyCount} ready`,
+                          description: 'A prediction-first mode where both players choose between two options, lock what they would pick, and also guess which option the other person will choose.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={thisOrThatQuestionCountDraft}
+                                onChange={(event) => setThisOrThatQuestionCountDraft(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
+                          onCreateAndInvite: () => handleCreateThisOrThatGame(true),
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isThisOrThatTileFlipped} aria-hidden={!isThisOrThatTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('thisOrThat', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Prediction Match</p>
+                              <h2>This or That</h2>
+                            </div>
+                            <span className="status-pill">{thisOrThatReadyCount} ready</span>
+                          </div>
+                          <p className="panel-copy">Each player locks what they think the other person will pick and what they would really choose. Wrong guesses add +10 penalty automatically.</p>
+                          <label className="field">
+                            <span>This or That Code</span>
+                            <input
+                              value={thisOrThatCreateCodeDraft}
+                              onChange={(event) => setThisOrThatCreateCodeDraft(normalizeJoinCode(event.target.value))}
+                              placeholder="Optional"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Number of Questions</span>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min="1"
+                              value={thisOrThatQuestionCountDraft}
+                              onChange={(event) => setThisOrThatQuestionCountDraft(event.target.value)}
+                              placeholder="10"
+                            />
+                          </label>
+                          <p className="field-note">The first pick for each answer locks immediately. Missing a guess or your own pick adds +10, and correct guesses stay at 0.</p>
+                          <div className="button-row">
+                            <Button
+                              className="primary-button compact"
+                              onClick={() => handleCreateThisOrThatGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create This or That
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateThisOrThatGame(true)}
+                              disabled={isBusy}
+                            >
+                              Create + Invite
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(4)}`}
+                    inert={getLobbyCarouselPosition(4) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(4) !== 'center'}
+                  >
+                    <section
+                      className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
+                      style={getLobbyTileImageStyle(pokerTileImage)}
+                    >
+                      <div className={`lobby-image-tile-flip ${isHoldemTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'holdem',
+                          eyebrow: 'Cards',
+                          title: "Texas Hold'em",
+                          statusText: `${formatScore(HOLDEM_SMALL_BLIND)} / ${formatScore(HOLDEM_BIG_BLIND)}`,
+                          description: 'Heads-up poker using Jay and Kim’s live penalty-point totals as the bankroll for each hand.',
+                          footerMeta: '2 Players',
+                          onCreateAndInvite: () => handleCreateHoldemGame(true),
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isHoldemTileFlipped} aria-hidden={!isHoldemTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('holdem', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Cards</p>
+                              <h2>Texas Hold'em</h2>
+                            </div>
+                            <span className="status-pill">{formatScore(HOLDEM_SMALL_BLIND)} / {formatScore(HOLDEM_BIG_BLIND)}</span>
+                          </div>
+                          <p className="panel-copy">Open a heads-up Texas Hold'em table where Jay and Kim use their live penalty-point totals as the poker bankroll.</p>
+                          <div className="hold-em-card-hero" aria-hidden="true">
+                            <span className="hold-em-card-chip">A♠</span>
+                            <span className="hold-em-card-chip">K♥</span>
+                            <span className="hold-em-card-chip">Q♣</span>
+                            <span className="hold-em-card-chip">J♦</span>
+                          </div>
+                          <label className="field">
+                            <span>Texas Hold'em Code</span>
+                            <input
+                              value={holdemCreateCodeDraft}
+                              onChange={(event) => setHoldemCreateCodeDraft(normalizeJoinCode(event.target.value))}
+                              placeholder="Optional"
+                            />
+                          </label>
+                          <p className="field-note">Small blind {formatScore(HOLDEM_SMALL_BLIND)}. Big blind {formatScore(HOLDEM_BIG_BLIND)}. Bets settle back into penalty points when the hand ends.</p>
+                          <div className="button-row">
+                            <Button
+                              className="primary-button compact"
+                              onClick={() => handleCreateHoldemGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create Texas Hold'em
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateHoldemGame(true)}
+                              disabled={isBusy}
+                            >
+                              Create + Invite
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                                  </section>
+                  </div>
                 </div>
 
-                <div className="lobby-join-inline">
-                  <p className="eyebrow">OR Join a game with code</p>
-                  <div className="lobby-actions lobby-actions--stack">
-                    <label className="field">
-                      <span>Join Code</span>
-                      <input value={joinCode} onChange={(event) => onJoinCodeChange(normalizeJoinCode(event.target.value))} placeholder="ABCD12" />
-                    </label>
-                    <Button className="ghost-button lobby-secondary-button" onClick={onJoinGame} disabled={isBusy || !joinCode.length}>
-                      Join Game
-                    </Button>
-                  </div>
+                <div className="lobby-carousel-dots" role="tablist" aria-label="Game modes">
+                  {lobbyCarouselCards.map((card, index) => (
+                    <button
+                      key={card.id}
+                      type="button"
+                      className={`lobby-carousel-dot ${index === lobbyCarouselIndex ? 'is-active' : ''}`}
+                      onClick={() => setLobbyCarouselIndex(index)}
+                      aria-label={`Show ${card.label}`}
+                      aria-selected={index === lobbyCarouselIndex}
+                    />
+                  ))}
                 </div>
               </section>
 
-	              <section className="panel lobby-panel lobby-panel--lobby join-game-card">
-	                <div className="panel-heading">
-	                  <div>
-	                    <p className="eyebrow">Quick Fire</p>
-	                    <h2>Quiz Mode</h2>
-	                  </div>
-	                </div>
-	                <p className="panel-copy">Start a speed quiz game from the Quiz sheet question set.</p>
-                <div className="quiz-card-hero" aria-hidden="true">
-                  <div className="quiz-card-hero-main">
-                    <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
-                      <defs>
-                        <linearGradient id="quiz-card-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                          <stop offset="0%" stopColor="#7ad8ff" />
-                          <stop offset="100%" stopColor="#4f7bff" />
-                        </linearGradient>
-                      </defs>
-                      <circle cx="60" cy="60" r="52" fill="rgba(6,16,34,0.72)" stroke="url(#quiz-card-gradient)" strokeWidth="4" />
-                      <path d="M34 56h52M34 70h36" stroke="#bfe1ff" strokeWidth="4" strokeLinecap="round" />
-                      <circle cx="86" cy="70" r="7" fill="#9be5a6" />
-                      <path d="M83.5 70.2 85.5 72.4 89 67.8" stroke="#0f3117" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </div>
-                  <div className="quiz-card-hero-meta">
-                    <strong>10s Timer</strong>
-                    <small>Fast answers score higher</small>
-                  </div>
-                  <div className="quiz-card-hero-meta">
-                    <strong>Live Quiz</strong>
-                    <small>Separate from normal game points</small>
-	                  </div>
-	                </div>
-	                <label className="field">
-	                  <span>Number of Quiz Questions</span>
-	                  <input
-	                    type="number"
-	                    inputMode="numeric"
-	                    min="1"
-	                    value={quizQuestionCountDraft}
-	                    onChange={(event) => setQuizQuestionCountDraft(event.target.value)}
-	                    placeholder="10"
-	                  />
-	                </label>
-	                <div className="button-row">
-	                  <Button
-	                    className="primary-button compact"
-	                    onClick={() =>
-	                      onCreateGame({
-	                        mode: 'random',
-	                        gameMode: 'quiz',
-	                        roundTypes: [],
-	                        categories: [],
-	                        requestedQuestionCount: quizQuestionCountDraft,
-	                      })}
-	                    disabled={isBusy}
-	                  >
-	                    Create Quiz Game
-	                  </Button>
-	                  <Button
-	                    className="ghost-button compact"
-	                    onClick={() =>
-	                      onCreateGame({
-	                        mode: 'random',
-	                        gameMode: 'quiz',
-	                        roundTypes: [],
-	                        categories: [],
-	                        sendInvite: true,
-	                        requestedQuestionCount: quizQuestionCountDraft,
-	                      })}
-	                    disabled={isBusy}
-	                  >
-	                    Create + Invite
-	                  </Button>
-	                </div>
-	              </section>
-            </div>
+
+                {!isMobileDashboardNav ? (
+                  <section className="panel lobby-panel lobby-panel--lobby lobby-chat-card">
+                    <ChatPanel
+                      compact
+                      messages={lobbyChatMessages}
+                      draft={lobbyChatDraft}
+                      onDraftChange={setLobbyChatDraft}
+                      onSend={sendLobbyChat}
+                      isBusy={isLobbyChatSending}
+                      displayName={lobbyChatDisplayName}
+                    />
+                  </section>
+                ) : null}
+</div>
 
           </section>
         ) : null}
@@ -2084,7 +5519,7 @@ function LobbyScreen({
                   <p className="eyebrow">Question Bank</p>
                   <h2>Manage Questions</h2>
                 </div>
-                <span className="status-pill">{questionBankSegment === 'quiz' ? quizQuestionCount : questionCount} loaded</span>
+                <span className="status-pill">{questionBankLoadedCount} loaded</span>
               </div>
               <div className="dashboard-subnav" role="tablist" aria-label="Question bank tabs">
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'game' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('game')}>
@@ -2093,22 +5528,28 @@ function LobbyScreen({
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('quiz')}>
                   Quiz Questions
                 </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'thisOrThat' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('thisOrThat')}>
+                  This or That
+                </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('trueFalse')}>
+                  True or False
+                </button>
               </div>
 
               <div className="question-bank-status-grid">
                 <article className="stat-tile">
                   <small>Total Loaded</small>
-                  <strong>{questionBankSegment === 'quiz' ? quizQuestionCount : questionCount}</strong>
+                  <strong>{questionBankLoadedCount}</strong>
                   <span>questions currently available</span>
                 </article>
                 <article className="stat-tile">
                   <small>Tracked Used</small>
-                  <strong>{questionBankSegment === 'quiz' ? usedQuizQuestionCount : usedQuestionCount}</strong>
+                  <strong>{questionBankUsedTotal}</strong>
                   <span>already used in games</span>
                 </article>
                 <article className="stat-tile">
                   <small>Remaining</small>
-                  <strong>{questionBankSegment === 'quiz' ? remainingQuizQuestionCount : remainingQuestionCount}</strong>
+                  <strong>{questionBankRemainingTotal}</strong>
                   <span>unused questions left</span>
                 </article>
                 <article className="stat-tile">
@@ -2119,11 +5560,17 @@ function LobbyScreen({
               </div>
 
               <div className="button-row question-bank-actions">
-                <Button className="ghost-button compact" onClick={questionBankSegment === 'quiz' ? onSyncQuizBank : onSyncQuestionBank} disabled={isBusy}>
-                  Sync Question Bank
+                <Button className="ghost-button compact" onClick={questionBankSyncAction} disabled={isBusy}>
+                  {`Sync ${questionBankActionLabel}`}
                 </Button>
-                <Button className="primary-button compact" onClick={questionBankSegment === 'quiz' ? onImportQuizQuestions : onImportQuestions} disabled={isBusy}>
-                  Import New Questions
+                <Button className="primary-button compact" onClick={questionBankImportAction} disabled={isBusy}>
+                  {`Import ${
+                    questionBankSegment === 'trueFalse'
+                      ? 'True or False Questions'
+                      : questionBankSegment === 'thisOrThat'
+                        ? 'This or That Questions'
+                        : 'New Questions'
+                  }`}
                 </Button>
                 <Button className="ghost-button compact" onClick={onResetQuestionBank} disabled={isBusy}>
                   Re-enter All Questions
@@ -2160,47 +5607,66 @@ function LobbyScreen({
                 <div className="activity-content activity-content--active">
                   <div className="active-games-list">
                     {activeGames.length ? (
-                      activeGames.map((game) => (
-                        <article className="game-record-row" key={game.id}>
-                          <div className="game-record-badge" aria-hidden="true">
-                            {String((game.gameName || game.joinCode || 'G').slice(0, 2)).toUpperCase()}
-                          </div>
-                          <div className="game-record-main">
-                            <strong>{game.gameName || game.name || game.joinCode}</strong>
-                            <span>{game.joinCode}</span>
-                            <small>
-                              {game.players?.join(' + ') || 'Waiting'} · {game.status || 'active'} · Round {game.currentRound || '—'} · Questions {game.actualQuestionCount || game.questionQueueIds?.length || 0}/{game.requestedQuestionCount || game.actualQuestionCount || game.questionQueueIds?.length || 0} · Created {formatDate(game.createdAt)}
-                            </small>
-                            <div className="game-progress">
-                              <span className="game-progress-label">
-                                Progress
-                                <strong>
-                                  {Math.min(100, Math.round(((game.currentRound || 0) / Math.max(1, game.actualQuestionCount || game.questionQueueIds?.length || 1)) * 100))}%
-                                </strong>
-                              </span>
-                              <div className="game-progress-track">
-                                <div
-                                  className="game-progress-fill"
-                                  style={{
-                                    width: `${Math.min(100, Math.round(((game.currentRound || 0) / Math.max(1, game.actualQuestionCount || game.questionQueueIds?.length || 1)) * 100))}%`,
-                                  }}
-                                />
+                      activeGames.map((game) => {
+                        const isHoldemGame = isHoldemGameMode(game?.gameMode || 'standard');
+                        const holdemState = game?.holdemState || null;
+                        const holdemHandsPlayed = Number(game?.holdemStats?.handsPlayed || 0);
+                        const holdemProgress = holdemState?.sessionStatus === 'hand_complete'
+                          ? 100
+                          : holdemState?.phase === 'river'
+                            ? 85
+                            : holdemState?.phase === 'turn'
+                              ? 70
+                              : holdemState?.phase === 'flop'
+                                ? 50
+                                : holdemState?.phase === 'preflop'
+                                  ? 25
+                                  : 0;
+                        const standardProgress = Math.min(
+                          100,
+                          Math.round(((game.currentRound || 0) / Math.max(1, game.actualQuestionCount || game.questionQueueIds?.length || 1)) * 100),
+                        );
+                        const progressValue = isHoldemGame ? holdemProgress : standardProgress;
+                        return (
+                          <article className="game-record-row" key={game.id}>
+                            <div className="game-record-badge" aria-hidden="true">
+                              {String((game.gameName || game.joinCode || 'G').slice(0, 2)).toUpperCase()}
+                            </div>
+                            <div className="game-record-main">
+                              <strong>{game.gameName || game.name || game.joinCode}</strong>
+                              <span>{game.joinCode}</span>
+                              <small>
+                                {isHoldemGame
+                                  ? `${game.players?.join(' + ') || 'Waiting'} · ${holdemState?.phase ? HOLDEM_PHASE_LABELS[holdemState.phase] || holdemState.phase : holdemState?.statusMessage || 'Waiting'} · Hands ${holdemHandsPlayed} · Pot ${formatScore(Number(holdemState?.potTotal || 0))} · Created ${formatDate(game.createdAt)}`
+                                  : `${game.players?.join(' + ') || 'Waiting'} · ${game.status || 'active'} · Round ${game.currentRound || '—'} · Questions ${game.actualQuestionCount || game.questionQueueIds?.length || 0}/${game.requestedQuestionCount || game.actualQuestionCount || game.questionQueueIds?.length || 0} · Created ${formatDate(game.createdAt)}`}
+                              </small>
+                              <div className="game-progress">
+                                <span className="game-progress-label">
+                                  {isHoldemGame ? 'Street' : 'Progress'}
+                                  <strong>{progressValue}%</strong>
+                                </span>
+                                <div className="game-progress-track">
+                                  <div
+                                    className="game-progress-fill"
+                                    style={{ width: `${progressValue}%` }}
+                                  />
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          <div className="game-record-actions dashboard-toolbar-actions">
-                            <Button className="ghost-button compact" onClick={() => onResumeGame(game.id)}>
-                              Resume Game
-                            </Button>
-                            <Button className="ghost-button compact" onClick={() => onViewSummary(game.id)}>
-                              View Details
-                            </Button>
-                            <Button className="ghost-button compact" onClick={() => onEndGame(game.id)}>
-                              End Game
-                            </Button>
-                          </div>
-                        </article>
-                      ))
+                            <div className="game-record-actions dashboard-toolbar-actions">
+                              <Button className="ghost-button compact" onClick={() => onResumeGame(game.id)}>
+                                Resume Game
+                              </Button>
+                              <Button className="ghost-button compact" onClick={() => onViewSummary(game.id)}>
+                                View Details
+                              </Button>
+                              <Button className="ghost-button compact" onClick={() => onEndGame(game.id)}>
+                                End Game
+                              </Button>
+                            </div>
+                          </article>
+                        );
+                      })
                     ) : (
                       <div className="activity-empty-state">
                         <h3>No active games yet</h3>
@@ -2221,6 +5687,8 @@ function LobbyScreen({
                       previousGames.map((game) => {
                         const winnerSeat = game.winner === 'jay' || game.winner === 'kim' ? game.winner : 'tie';
                         const completedQuestionCount = getCompletedGameDisplayCount(game);
+                        const isHoldemGame = isHoldemGameMode(game?.gameMode || 'standard');
+                        const holdemStats = game?.holdemStats || defaultHoldemStats();
                         return (
                           <article
                             className={`game-record-row game-record-row--previous game-record-row--winner-${winnerSeat}`}
@@ -2235,10 +5703,14 @@ function LobbyScreen({
                                 {game.joinCode} · Winner {PLAYER_LABEL[winnerSeat] || 'Tie'}
                               </span>
                               <p className="game-record-summary">
-                                Final {formatScore(game.finalScores?.jay || 0)} / {formatScore(game.finalScores?.kim || 0)} · Rounds {completedQuestionCount}
+                                {isHoldemGame
+                                  ? `Final ${formatScore(game.finalScores?.jay || 0)} / ${formatScore(game.finalScores?.kim || 0)} · Hands ${completedQuestionCount} · Biggest Pot ${formatScore(Number(holdemStats?.biggestPot || 0))}`
+                                  : `Final ${formatScore(game.finalScores?.jay || 0)} / ${formatScore(game.finalScores?.kim || 0)} · Rounds ${completedQuestionCount}`}
                               </p>
                               <small>
-                                {game.players?.join(' + ') || 'Waiting'} · Ended {formatDate(game.endedAt)}
+                                {isHoldemGame
+                                  ? `${game.players?.join(' + ') || 'Waiting'} · ${holdemStats?.foldWins || holdemStats?.showdownWins ? `Fold wins ${Number(holdemStats?.foldWins || 0)} · Showdown wins ${Number(holdemStats?.showdownWins || 0)} · ` : ''}Ended ${formatDate(game.endedAt)}`
+                                  : `${game.players?.join(' + ') || 'Waiting'} · Ended ${formatDate(game.endedAt)}`}
                               </small>
                             </div>
                             <div className="game-record-actions game-record-actions--stacked">
@@ -2318,6 +5790,21 @@ function LobbyScreen({
           </section>
         ) : null}
 
+        {activeTab === 'ai' ? (
+          <section className="lobby-tab-panel" aria-label="AI" id="dashboard-ai">
+            <AiAssistantPanel
+              user={user}
+              profile={profile}
+              currentPlayerSeat={currentPlayerSeat}
+              aiChatMessages={aiChatMessages}
+              aiChatDraft={aiChatDraft}
+              setAiChatDraft={setAiChatDraft}
+              sendAiChat={sendAiChat}
+              isAiChatSending={isAiChatSending}
+            />
+          </section>
+        ) : null}
+
         {activeTab === 'analytics' ? (
           <section className="lobby-tab-panel analytics-page-tab" aria-label="Analytics" id="dashboard-analytics-hub">
             <section className="panel lobby-panel lobby-analytics-card lobby-panel--analytics dashboard-page-card analytics-page-shell">
@@ -2370,6 +5857,12 @@ function LobbyScreen({
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('quiz')}>
                   Quiz
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('trueFalse')}>
+                  True or False
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'holdem' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('holdem')}>
+                  Texas Hold Em
                 </button>
               </div>
 
@@ -2567,6 +6060,9 @@ function LobbyScreen({
                         <div className="mini-heading"><div><span>Wagers</span><h3>Penalty moved</h3></div></div>
                         <div className="summary-list">
                           <article className="mini-list-row"><strong>Wager games</strong><span>{quizSessionAnalytics.wagers.games}</span></article>
+                          <article className="mini-list-row"><strong>Points played for</strong><span>{formatScore(quizSessionAnalytics.wagers.totalPlayedFor)}</span></article>
+                          <article className="mini-list-row"><strong>Biggest wager</strong><span>{formatScore(quizSessionAnalytics.wagers.biggestSharedWager)}</span></article>
+                          <article className="mini-list-row"><strong>Average wager</strong><span>{formatScore(quizSessionAnalytics.wagers.averageSharedWager)}</span></article>
                           <article className="mini-list-row"><strong>Jay net shift</strong><span>{formatScore(quizSessionAnalytics.wagers.jayNetShift)}</span></article>
                           <article className="mini-list-row"><strong>Kim net shift</strong><span>{formatScore(quizSessionAnalytics.wagers.kimNetShift)}</span></article>
                           <article className="mini-list-row"><strong>Total moved</strong><span>{formatScore(quizSessionAnalytics.wagers.movedTotal)}</span></article>
@@ -2654,6 +6150,198 @@ function LobbyScreen({
                         </div>
                       </section>
                     </div>
+                  ) : null}
+                </section>
+              ) : analyticsSegment === 'trueFalse' ? (
+                <section className="analytics-questions-panel">
+                  <div className="question-bank-status-grid">
+                    <article className="stat-tile">
+                      <small>Total Games Played</small>
+                      <strong>{trueFalseAnalytics.totalGamesPlayed}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Total Questions</small>
+                      <strong>{trueFalseAnalytics.totalQuestionsAnswered}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Correct</small>
+                      <strong>{trueFalseAnalytics.jayCorrectGuesses}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Correct</small>
+                      <strong>{trueFalseAnalytics.kimCorrectGuesses}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Wrong</small>
+                      <strong>{trueFalseAnalytics.jayWrongGuesses}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Wrong</small>
+                      <strong>{trueFalseAnalytics.kimWrongGuesses}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Penalty</small>
+                      <strong>{formatScore(trueFalseAnalytics.jayPenaltyPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Penalty</small>
+                      <strong>{formatScore(trueFalseAnalytics.kimPenaltyPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Accuracy</small>
+                      <strong>{trueFalseAnalytics.jayAccuracy}%</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Accuracy</small>
+                      <strong>{trueFalseAnalytics.kimAccuracy}%</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Tracked Games</small>
+                      <strong>{trueFalseAnalytics.sessionsTracked}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Active Games</small>
+                      <strong>{trueFalseAnalytics.activeGames}</strong>
+                    </article>
+                  </div>
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>True or False</span>
+                          <h3>Guess Accuracy</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Jay correct guesses</strong><span>{trueFalseAnalytics.jayCorrectGuesses}</span></article>
+                        <article className="mini-list-row"><strong>Jay wrong guesses</strong><span>{trueFalseAnalytics.jayWrongGuesses}</span></article>
+                        <article className="mini-list-row"><strong>Kim correct guesses</strong><span>{trueFalseAnalytics.kimCorrectGuesses}</span></article>
+                        <article className="mini-list-row"><strong>Kim wrong guesses</strong><span>{trueFalseAnalytics.kimWrongGuesses}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Penalty Points</span>
+                          <h3>Auto Scoring</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Jay total penalty</strong><span>{formatScore(trueFalseAnalytics.jayPenaltyPoints)}</span></article>
+                        <article className="mini-list-row"><strong>Kim total penalty</strong><span>{formatScore(trueFalseAnalytics.kimPenaltyPoints)}</span></article>
+                        <article className="mini-list-row"><strong>Questions tracked</strong><span>{trueFalseAnalytics.totalQuestionsAnswered}</span></article>
+                        <article className="mini-list-row"><strong>Completed games</strong><span>{trueFalseAnalytics.totalGamesPlayed}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Categories</span>
+                          <h3>Breakdown</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        {trueFalseAnalytics.categoryRows.length ? (
+                          trueFalseAnalytics.categoryRows.slice(0, 14).map((row) => (
+                            <article className="mini-list-row" key={`true-false-cat-${row.category}`}>
+                              <strong>{row.category}</strong>
+                              <span>{`${row.rounds} rounds`}</span>
+                              <small>{`Jay ${row.jayCorrect}/${row.rounds} · Kim ${row.kimCorrect}/${row.rounds}`}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="empty-copy">No True or False rounds have been recorded yet.</p>
+                        )}
+                      </div>
+                    </section>
+                  </div>
+                </section>
+              ) : analyticsSegment === 'holdem' ? (
+                <section className="analytics-questions-panel">
+                  <div className="question-bank-status-grid">
+                    <article className="stat-tile">
+                      <small>Tracked Sessions</small>
+                      <strong>{holdemAnalytics.sessionsTracked}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Hands Played</small>
+                      <strong>{holdemAnalytics.handsPlayed}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Won</small>
+                      <strong>{holdemAnalytics.handsWonJay}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Won</small>
+                      <strong>{holdemAnalytics.handsWonKim}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Hands Split</small>
+                      <strong>{holdemAnalytics.handsSplit}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Total Wagered</small>
+                      <strong>{formatScore(holdemAnalytics.totalPointsWagered)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Biggest Pot</small>
+                      <strong>{formatScore(holdemAnalytics.biggestPot)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Fold Wins</small>
+                      <strong>{holdemAnalytics.foldWins}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Showdown Wins</small>
+                      <strong>{holdemAnalytics.showdownWins}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>All-Ins</small>
+                      <strong>{holdemAnalytics.allIns}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Net Move</small>
+                      <strong>{formatScore(holdemAnalytics.netMovementJay)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Net Move</small>
+                      <strong>{formatScore(holdemAnalytics.netMovementKim)}</strong>
+                    </article>
+                  </div>
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Outcomes</span>
+                          <h3>Texas Hold Em</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Active sessions</strong><span>{holdemAnalytics.activeSessions}</span></article>
+                        <article className="mini-list-row"><strong>Completed sessions</strong><span>{holdemAnalytics.completedSessions}</span></article>
+                        <article className="mini-list-row"><strong>Fold wins</strong><span>{holdemAnalytics.foldWins}</span></article>
+                        <article className="mini-list-row"><strong>Showdown wins</strong><span>{holdemAnalytics.showdownWins}</span></article>
+                        <article className="mini-list-row"><strong>Split pots</strong><span>{holdemAnalytics.handsSplit}</span></article>
+                        <article className="mini-list-row"><strong>All-ins</strong><span>{holdemAnalytics.allIns}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Penalty Points</span>
+                          <h3>Net Movement</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Jay movement</strong><span>{formatScore(holdemAnalytics.netMovementJay)}</span></article>
+                        <article className="mini-list-row"><strong>Kim movement</strong><span>{formatScore(holdemAnalytics.netMovementKim)}</span></article>
+                        <article className="mini-list-row"><strong>Total wagered</strong><span>{formatScore(holdemAnalytics.totalPointsWagered)}</span></article>
+                        <article className="mini-list-row"><strong>Biggest pot</strong><span>{formatScore(holdemAnalytics.biggestPot)}</span></article>
+                      </div>
+                    </section>
+                  </div>
+                  {!holdemAnalytics.handsPlayed ? (
+                    <p className="empty-copy">No Texas Hold Em hands have been recorded yet.</p>
                   ) : null}
                 </section>
               ) : (
@@ -2792,6 +6480,9 @@ function LobbyScreen({
               roundAnalytics={lobbyRoundAnalytics}
               onSubmitAmaQuestion={onSubmitAmaQuestion}
               onAnswerAmaRequest={onAnswerAmaRequest}
+              onBackfillGameDiaryEntries={onBackfillGameDiaryEntries}
+              gameDiaryBackfillState={gameDiaryBackfillState}
+              missingGameDiaryCount={missingGameDiaryCount}
               isBusy={isBusy}
             />
           </section>
@@ -2991,6 +6682,22 @@ function LobbyScreen({
         </section>
       ) : null}
 
+      {isMobileDashboardNav && activeTab === 'gameLobby' ? (
+        <MobileChatLauncher
+          title="Lobby Chat"
+          isOpen={mobileLobbyChatOpen}
+          onOpen={() => setMobileLobbyChatOpen(true)}
+          onClose={() => setMobileLobbyChatOpen(false)}
+          unreadCount={lobbyChatUnreadCount}
+          messages={lobbyChatMessages}
+          draft={lobbyChatDraft}
+          onDraftChange={setLobbyChatDraft}
+          onSend={sendLobbyChat}
+          isBusy={isLobbyChatSending}
+          displayName={lobbyChatDisplayName}
+        />
+      ) : null}
+
       <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
     </main>
   );
@@ -3044,18 +6751,19 @@ function QuestionAnswerEntryBase({
   embedded = false,
 }) {
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
-  const roundType = currentRound?.roundType || 'numeric';
+  const roundType = normalizeQuestionType(currentRound?.roundType, 'text');
   const choiceOptions = inferChoiceOptions(currentRound);
   const otherPlayer = currentPlayer === 'jay' ? 'kim' : 'jay';
   const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const currentPlayerGuessForOther = currentPlayerAnswer?.guessedOther || '';
   const otherPlayerAnswer = currentRound?.answers?.[otherPlayer]?.ownAnswer || '';
   const otherPlayerGuessForCurrent = currentRound?.answers?.[otherPlayer]?.guessedOther || '';
-  const promptLabel = roundType === 'numeric' ? 'Number' : roundType === 'multipleChoice' || roundType === 'trueFalse' || roundType === 'preference' ? 'Choice' : 'Answer';
+  const promptLabel = usesNumberInputForQuestionType(roundType) ? 'Number' : usesRatingInputForQuestionType(roundType) ? 'Rating' : usesChoiceInputForQuestionType(roundType) ? 'Choice' : 'Answer';
   const options = choiceOptions.length ? choiceOptions : ['Option A', 'Option B'];
-  const isChoiceRound = roundType === 'multipleChoice' || roundType === 'trueFalse' || roundType === 'preference';
-  const isListRound = roundType === 'ranked' || roundType === 'sortIntoOrder';
-  const listCount = roundType === 'ranked' ? 3 : Math.max(3, Math.min(5, options.length || 4));
+  const isChoiceRound = usesChoiceInputForQuestionType(roundType);
+  const isListRound = usesListInputForQuestionType(roundType);
+  const isRatingRound = usesRatingInputForQuestionType(roundType);
+  const listCount = getQuestionTypeListCount(roundType, currentRound?.multipleChoiceOptions || []);
   const isRoundOpen = (currentRound?.status || 'open') === 'open';
   const hasServerSubmittedAnswer = submissionState === 'submitted' || Boolean(normalizeText(currentPlayerAnswer?.ownAnswer || ''));
   // IMPORTANT: This must not flip during Firestore snapshots (e.g. when a field
@@ -3216,7 +6924,7 @@ function QuestionAnswerEntryBase({
     : isQuizRound ? 'Submit Answer' : 'Submit Round';
 
   const renderField = (fieldName, value, setter, placeholder) => {
-    if (roundType === 'numeric') {
+    if (usesNumberInputForQuestionType(roundType)) {
       return (
         <input
           ref={fieldName === 'guessedOther' ? guessedOtherRef : ownAnswerRef}
@@ -3237,12 +6945,31 @@ function QuestionAnswerEntryBase({
       );
     }
 
+    if (isRatingRound) {
+      const ratingOptions = Array.from({ length: 10 }, (_, index) => String(index + 1));
+      return (
+        <div className={`choice-grid rating-choice-grid ${embedded ? 'choice-grid--embedded' : ''}`} role="list" aria-label={`${placeholder} rating`}>
+          {ratingOptions.map((option) => (
+            <button
+              key={`${fieldName}-rating-${option}`}
+              type="button"
+              className={`choice-button ${value === option ? 'is-on' : ''}`}
+              onClick={() => setter(option)}
+              disabled={isLocked || !isRoundOpen}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
     if (isChoiceRound) {
       return (
         <div className={`choice-grid ${embedded ? 'choice-grid--embedded' : ''}`} role="list">
-          {options.map((option) => (
+          {options.map((option, optionIndex) => (
             <button
-              key={option}
+              key={`${option}-${optionIndex}`}
               type="button"
               className={`choice-button ${value === option ? 'is-on' : ''}`}
               onClick={() => setter(option)}
@@ -3256,38 +6983,60 @@ function QuestionAnswerEntryBase({
     }
 
     if (isListRound) {
-      const labels =
-        roundType === 'ranked'
-          ? ['#1', '#2', '#3']
-          : Array.from({ length: listCount }, (_, index) => `Step ${index + 1}`);
+      const labels = getQuestionTypeListLabels(roundType, currentRound?.multipleChoiceOptions || []);
       const values = decodeRankedAnswer(value, listCount);
+      const listHint = Array.isArray(currentRound?.multipleChoiceOptions) && currentRound.multipleChoiceOptions.length
+        ? currentRound.multipleChoiceOptions.join(' • ')
+        : '';
       return (
-        <div className={`ranked-input-grid ${embedded ? 'ranked-input-grid--embedded' : ''}`}>
-          {values.map((entry, index) => (
-            <label className="field ranked-field" key={`${placeholder}-${labels[index]}`}>
-              <span>{labels[index]}</span>
-              <input
-                ref={(node) => {
-                  const key = `${fieldName}:${index}`;
-                  if (node) rankedInputRefs.current[key] = node;
-                  else delete rankedInputRefs.current[key];
-                }}
-                value={entry}
-                onFocus={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
-                onSelect={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
-                onChange={(event) => {
-                  rememberFocusedField(`${fieldName}:${index}`, event);
-                  const next = [...values];
-                  next[index] = event.target.value;
-                  setter(encodeRankedAnswer(next));
-                }}
-                onBlur={() => forgetFocusedField(`${fieldName}:${index}`)}
-                placeholder={roundType === 'ranked' ? `Rank ${index + 1}` : `Position ${index + 1}`}
-                disabled={isLocked || !isRoundOpen}
-              />
-            </label>
-          ))}
-        </div>
+        <>
+          <div className={`ranked-input-grid ${embedded ? 'ranked-input-grid--embedded' : ''}`}>
+            {values.map((entry, index) => (
+              <label className="field ranked-field" key={`${placeholder}-${labels[index]}`}>
+                <span>{labels[index]}</span>
+                <input
+                  ref={(node) => {
+                    const key = `${fieldName}:${index}`;
+                    if (node) rankedInputRefs.current[key] = node;
+                    else delete rankedInputRefs.current[key];
+                  }}
+                  value={entry}
+                  onFocus={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
+                  onSelect={(event) => rememberFocusedField(`${fieldName}:${index}`, event)}
+                  onChange={(event) => {
+                    rememberFocusedField(`${fieldName}:${index}`, event);
+                    const next = [...values];
+                    next[index] = event.target.value;
+                    setter(encodeRankedAnswer(next));
+                  }}
+                  onBlur={() => forgetFocusedField(`${fieldName}:${index}`)}
+                  placeholder={roundType === 'ranked' ? `Rank ${index + 1}` : `Position ${index + 1}`}
+                  disabled={isLocked || !isRoundOpen}
+                />
+              </label>
+            ))}
+          </div>
+          {listHint ? <p className="field-note ranked-input-hint">Available options: {listHint}</p> : null}
+        </>
+      );
+    }
+
+    if (usesTextareaInputForQuestionType(roundType)) {
+      return (
+        <textarea
+          ref={fieldName === 'guessedOther' ? guessedOtherRef : ownAnswerRef}
+          rows={3}
+          value={value}
+          onFocus={(event) => rememberFocusedField(fieldName, event)}
+          onSelect={(event) => rememberFocusedField(fieldName, event)}
+          onChange={(event) => {
+            rememberFocusedField(fieldName, event);
+            setter(event.target.value);
+          }}
+          onBlur={() => forgetFocusedField(fieldName)}
+          placeholder={placeholder}
+          disabled={isLocked || !isRoundOpen}
+        />
       );
     }
 
@@ -3427,23 +7176,31 @@ function SeatFlag({ seat, className = '' }) {
 function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false, disabled = false }) {
   const [nowMs, setNowMs] = useState(Date.now());
   const normalized = normalizeQuizWagerAgreement({ quizWagerAgreement: agreement });
-  const effectiveBaseAmount = normalized.wheelBaseAmount || Math.max(0, Math.floor(Number(baseAmount || 0)));
+  const effectiveBaseAmount = normalized.wheelBaseAmount || QUIZ_WHEEL_MAX_AMOUNT;
   const slots = normalized.wheelSlots.length ? normalized.wheelSlots : buildQuizWheelSlots(effectiveBaseAmount);
-  const resultIndex = Math.max(0, Math.min(Math.max(0, slots.length - 1), Number(normalized.wheelResultIndex || 0)));
-  const rawResultAmount = Number.isFinite(Number(normalized.amount)) ? Number(normalized.amount) : slots[resultIndex] || 0;
-  const resultAmount = effectiveBaseAmount > 0 ? capQuizWheelStake(effectiveBaseAmount, rawResultAmount) : rawResultAmount;
+  const resultIndex = Math.max(0, Math.min(Math.max(0, slots.length - 1), Number(normalized.wheelResultIndex ?? 0)));
+  const storedWheelResultAmount = normalized.wheelResultAmount;
+  const storedAgreementAmount = Number(normalized.amount);
+  const rawResultAmount = Number.isFinite(storedWheelResultAmount) && storedWheelResultAmount > 0
+    ? storedWheelResultAmount
+    : Number.isFinite(storedAgreementAmount) && (storedAgreementAmount > 0 || !normalized.lockedByWheel)
+      ? storedAgreementAmount
+      : slots[resultIndex] || 0;
+  const resultAmount = capQuizWheelStake(effectiveBaseAmount, rawResultAmount);
+  const slotPreviewMin = slots.length ? Math.min(...slots) : 0;
+  const slotPreviewMax = slots.length ? Math.max(...slots) : 0;
   const phase = getQuizWheelPhase(normalized, nowMs);
   const displayPhase = normalized.status === 'wheel_locked' ? 'locked' : phase;
   const spinStartMs = Date.parse(normalized.wheelSpinStartedAt || '');
   const spinEndMs = Date.parse(normalized.wheelSpinEndsAt || '');
   const segmentDegrees = slots.length ? 360 / slots.length : 360;
-  const finalRotation = (360 * 7) + (360 - ((resultIndex * segmentDegrees) + (segmentDegrees / 2)));
-  const spinProgress = phase === 'spinning' && Number.isFinite(spinStartMs) && Number.isFinite(spinEndMs)
-    ? Math.max(0, Math.min(1, (nowMs - spinStartMs) / Math.max(1, spinEndMs - spinStartMs)))
-    : phase === 'landing' || displayPhase === 'locked'
-      ? 1
-      : 0;
-  const rotation = phase === 'spinning' || phase === 'landing' || displayPhase === 'locked' ? finalRotation * spinProgress : 0;
+  const segmentHalfDegrees = segmentDegrees / 2;
+  const wheelGraphicStartDegrees = -90;
+  const selectedSegmentCenterDegrees = wheelGraphicStartDegrees + (resultIndex * segmentDegrees);
+  const finalRotation = (360 * 7) + wheelGraphicStartDegrees - selectedSegmentCenterDegrees;
+  const spinDurationMs = Number.isFinite(spinStartMs) && Number.isFinite(spinEndMs)
+    ? Math.max(1, spinEndMs - spinStartMs)
+    : QUIZ_WHEEL_SPIN_MS;
   const countdownSeconds = Number.isFinite(spinStartMs) ? Math.max(1, Math.ceil((spinStartMs - nowMs) / 1000)) : 3;
   const shouldShowWheel = displayPhase === 'countdown'
     || displayPhase === 'spinning'
@@ -3454,7 +7211,7 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
     || normalized.wheelOptIn?.kim;
 
   useEffect(() => {
-    if (phase !== 'countdown' && phase !== 'spinning') return undefined;
+    if (phase !== 'countdown' && phase !== 'spinning' && phase !== 'landing') return undefined;
     const timer = window.setInterval(() => setNowMs(Date.now()), 100);
     return () => window.clearInterval(timer);
   }, [phase]);
@@ -3465,31 +7222,57 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
     <div className={`quiz-wheel-inline quiz-wheel-inline--${displayPhase || 'ready'} ${disabled ? 'quiz-wheel-inline--disabled' : ''}`} role="status" aria-live="polite">
       <div className="quiz-wheel-stage">
         <div className="quiz-wheel-pointer" aria-hidden="true" />
-        <div className="quiz-wheel-dial" style={{ transform: `rotate(${rotation}deg)`, '--wheel-counter-rotation': `${-rotation}deg` }} aria-hidden="true">
+        <div className="quiz-wheel-dial-wrap">
+        <div
+          className={`quiz-wheel-dial ${displayPhase === 'spinning' ? 'quiz-wheel-dial--spinning' : ''} ${displayPhase === 'landing' || displayPhase === 'locked' ? 'quiz-wheel-dial--settled' : ''}`}
+          style={{
+            transform: displayPhase === 'landing' || displayPhase === 'locked' ? `rotate(${finalRotation}deg)` : 'rotate(0deg)',
+            '--quiz-wheel-segment-half': `${segmentHalfDegrees}deg`,
+            '--wheel-final-rotation': `${finalRotation}deg`,
+            '--wheel-spin-duration': `${spinDurationMs}ms`,
+          }}
+          aria-hidden="true"
+        >
+          {slots.map((_, index) => {
+            const slotBoundaryAngle = wheelGraphicStartDegrees - segmentHalfDegrees + (index * segmentDegrees);
+            return (
+              <Fragment key={`quiz-wheel-boundary-${index}`}>
+                <span
+                  className="quiz-wheel-slot-divider"
+                  style={{ '--slot-divider-angle': `${slotBoundaryAngle}deg` }}
+                />
+                <span
+                  className="quiz-wheel-slot-peg"
+                  style={{ '--slot-divider-angle': `${slotBoundaryAngle}deg` }}
+                />
+              </Fragment>
+            );
+          })}
           {slots.map((slotAmount, index) => {
-            const slotAngle = (index * segmentDegrees) + (segmentDegrees / 2);
+            const slotAngle = wheelGraphicStartDegrees + (index * segmentDegrees);
             return (
               <span
                 className="quiz-wheel-slot-label"
                 key={`quiz-wheel-slot-${index}`}
-                style={{ '--slot-angle': `${slotAngle}deg`, '--slot-counter-angle': `${-slotAngle}deg` }}
+                style={{ '--slot-angle': `${slotAngle}deg`, '--slot-label-angle': `${slotAngle + 90}deg` }}
               >
-                {formatScore(slotAmount)}
+                {formatWheelAmount(slotAmount)}
               </span>
             );
           })}
-          <div className="quiz-wheel-hub" style={{ '--hub-counter-rotation': `${-rotation}deg` }}>
+        </div>
+          <div className="quiz-wheel-hub">
             {displayPhase === 'countdown' ? (
               <strong>{countdownSeconds}</strong>
             ) : (
-              <strong>{displayPhase === 'landing' || displayPhase === 'locked' ? formatScore(resultAmount) : 'Spin'}</strong>
+              <strong>{displayPhase === 'landing' || displayPhase === 'locked' ? formatWheelAmount(resultAmount) : 'Spin'}</strong>
             )}
             <span>{displayPhase === 'countdown' ? 'Get ready' : displayPhase === 'landing' || displayPhase === 'locked' ? 'Wager locked' : 'Wager wheel'}</span>
           </div>
         </div>
         <div className="quiz-wheel-result">
           <span>{displayPhase === 'countdown' ? 'Wheel starts in' : displayPhase === 'spinning' ? 'Spinning for 5 seconds' : displayPhase === 'locked' || displayPhase === 'landing' ? 'Final shared wager' : 'Wheel slots'}</span>
-          <strong>{displayPhase === 'countdown' ? countdownSeconds : displayPhase === 'spinning' ? '...' : displayPhase === 'locked' || displayPhase === 'landing' ? formatScore(resultAmount) : `${formatScore(slots[0])} to ${formatScore(slots[slots.length - 1])}`}</strong>
+          <strong>{displayPhase === 'countdown' ? countdownSeconds : displayPhase === 'spinning' ? '...' : displayPhase === 'locked' || displayPhase === 'landing' ? formatWheelAmount(resultAmount) : `${formatWheelAmount(slotPreviewMin)} to ${formatWheelAmount(slotPreviewMax)}`}</strong>
         </div>
       </div>
     </div>
@@ -3499,6 +7282,7 @@ function QuizWagerWheelOverlay({ agreement, baseAmount = 0, forceVisible = false
 function QuizSetupStagePanel({
   game,
   viewerSeat,
+  currentUserId,
   playerAccounts,
   chatMessages,
   chatDraft,
@@ -3513,28 +7297,89 @@ function QuizSetupStagePanel({
   onSetQuizWheelOptIn,
   onMarkReady,
   isBusy,
+  chatIsBusy = false,
 }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [optimisticWheelRequesterId, setOptimisticWheelRequesterId] = useState('');
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : 'jay';
   const otherPlayer = oppositeSeatOf(currentPlayer);
   const viewerLabel = gameSeatDisplayName(game, currentPlayer, null);
   const oppositeLabel = gameSeatDisplayName(game, otherPlayer, null);
+  const [manualValidationMessage, setManualValidationMessage] = useState('');
   const agreement = normalizeQuizWagerAgreement(game);
   const sharedWagerLocked = isQuizWagerAgreementLocked(game);
   const sharedWagerAmount = getQuizSharedWagerAmount(game);
-  const pendingProposal = agreement.status === 'proposal_pending' && Number.isFinite(Number(agreement.proposedAmount));
+  const pendingProposal = agreement.status === 'proposal_pending' && agreement.proposedAmount !== null;
   const proposalFromViewer = pendingProposal && agreement.proposedBySeat === currentPlayer;
+  const incomingProposal = pendingProposal && agreement.proposedBySeat === otherPlayer;
+  const counterProposalAvailable = pendingProposal && !proposalFromViewer;
+  const wheelPending = agreement.status === 'wheel_pending';
+  const requestOwnedByViewer = Boolean(
+    wheelPending
+    && currentUserId
+    && agreement.wheelRequestedByUserId
+    && agreement.wheelRequestedByUserId === currentUserId,
+  );
+  const wheelPendingFromViewer = wheelPending && (
+    requestOwnedByViewer
+    || (!agreement.wheelRequestedByUserId && agreement.wheelRequestedBySeat === currentPlayer)
+  );
+  const optimisticPendingFromViewer = Boolean(
+    !wheelPending
+    && optimisticWheelRequesterId
+    && currentUserId
+    && optimisticWheelRequesterId === currentUserId,
+  );
+  const effectiveWheelPendingFromViewer = wheelPendingFromViewer || optimisticPendingFromViewer;
+  const wheelPendingFromOther = wheelPending && !wheelPendingFromViewer;
+  const wheelRequesterName = agreement.wheelRequestedByName || gameSeatDisplayName(game, agreement.wheelRequestedBySeat || otherPlayer, null) || 'The other player';
   const canActAsOtherPlayer = Boolean(game?.isLocalOnly);
+  const allowManualAccept = pendingProposal && (incomingProposal || canActAsOtherPlayer);
+  const allowManualReject = pendingProposal && (!proposalFromViewer || canActAsOtherPlayer);
   const proposalLabel = agreement.proposedBySeat ? gameSeatDisplayName(game, agreement.proposedBySeat, null) : 'Player';
   const bothPlayersJoined = Boolean(game?.seats?.jay && game?.seats?.kim);
   const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
   const wheelBaseAmount = game?.isLocalOnly && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
-  const wheelPhase = getQuizWheelPhase(agreement);
-  const wheelActive = wheelPhase === 'countdown' || wheelPhase === 'spinning' || wheelPhase === 'landing';
+  const wheelSpinEndsAtMs = Date.parse(agreement.wheelSpinEndsAt || '');
+  const wheelResolved = agreement.status === 'wheel_countdown'
+    && Number.isFinite(wheelSpinEndsAtMs)
+    && nowMs >= wheelSpinEndsAtMs;
+  const wheelPhase = getQuizWheelPhase(agreement, nowMs);
+  const wheelActive = wheelPhase === 'countdown' || wheelPhase === 'spinning' || (wheelPhase === 'landing' && !wheelResolved);
+  const wheelAwaitingLock = wheelResolved && !sharedWagerLocked;
   const viewerWheelOptedIn = Boolean(agreement.wheelOptIn?.[currentPlayer]);
   const otherWheelOptedIn = Boolean(agreement.wheelOptIn?.[otherPlayer]);
   const viewerReady = hasQuizSetupReadySeat(game, currentPlayer);
+  const otherPlayerReady = hasQuizSetupReadySeat(game, otherPlayer);
+  const effectiveSharedWagerLocked = isQuizWagerEffectivelyLocked(game, nowMs) || wheelResolved;
+  const pendingWheelAmount = agreement.lockedByWheel
+    ? getQuizSharedWagerAmount({ quizWagerAgreement: agreement })
+    : (() => {
+        const storedWheelAmount = agreement.wheelResultAmount;
+        if (storedWheelAmount !== null) return Math.max(0, storedWheelAmount);
+        const resultIndex = agreement.wheelResultIndex;
+        if (resultIndex !== null && Array.isArray(agreement.wheelSlots) && agreement.wheelSlots.length) {
+          return Math.max(0, Number(agreement.wheelSlots[Math.max(0, Math.min(agreement.wheelSlots.length - 1, resultIndex))] || 0));
+        }
+        return Number(sharedWagerAmount || 0);
+      })();
+  const readyState = game?.quizReadyState || defaultQuizReadyState('opening');
+  const readyStage = normalizeText(readyState.stage || 'opening') || 'opening';
+  const countdownEndsAtMs = Date.parse(readyState.countdownEndsAt || '');
+  const countdownSecondsLeft = Number.isFinite(countdownEndsAtMs)
+    ? Math.max(0, Math.ceil((countdownEndsAtMs - nowMs) / 1000))
+    : 0;
+  const countdownActive = readyStage === 'countdown';
+  const bothPlayersReady = Boolean(viewerReady && otherPlayerReady);
+  const launchPending = effectiveSharedWagerLocked
+    && Boolean(game?.quizReadyState?.ready?.jay && game?.quizReadyState?.ready?.kim)
+    && readyStage !== 'countdown'
+    && !game?.currentRound;
+  const showSetupReadyCard = Boolean(effectiveSharedWagerLocked || countdownActive || launchPending);
   const shouldPreferWheelMode = Boolean(agreement.lockedByWheel || wheelActive || viewerWheelOptedIn || otherWheelOptedIn);
-  const [selectionMode, setSelectionMode] = useState(() => (shouldPreferWheelMode ? 'wheel' : 'manual'));
+  const shouldPreferManualMode = Boolean(pendingProposal || (effectiveSharedWagerLocked && !agreement.lockedByWheel));
+  const [selectionMode, setSelectionMode] = useState(() => (shouldPreferWheelMode ? 'wheel' : shouldPreferManualMode ? 'manual' : null));
+  const hasSelectedWagerMode = selectionMode === 'manual' || selectionMode === 'wheel';
   const isManualMode = selectionMode === 'manual';
   const isWheelMode = selectionMode === 'wheel';
   const cappedProposalAmount = capQuizWagerAmount(agreement.proposedAmount, wheelBaseAmount);
@@ -3543,165 +7388,337 @@ function QuizSetupStagePanel({
     : pendingProposal
       ? cappedProposalAmount
       : capQuizWagerAmount(quizWagerDraft, wheelBaseAmount);
+  const displayedQuizWagerDraft = sharedWagerLocked
+    ? String(sharedWagerAmount || 0)
+    : quizWagerDraft;
   const manualIsInactive = !isManualMode;
   const wheelIsInactive = !isWheelMode;
-  const manualIsLocked = manualIsInactive || wheelActive || sharedWagerLocked;
+  const manualIsLocked = manualIsInactive || wheelActive || wheelPending || sharedWagerLocked;
   const wheelIsLocked = wheelIsInactive || sharedWagerLocked;
-  const wheelHelperText = sharedWagerLocked && agreement.lockedByWheel
-    ? `Wheel locked the shared wager at ${formatScore(sharedWagerAmount || 0)}.`
-    : viewerWheelOptedIn
-      ? `Wheel selected. Waiting for ${oppositeLabel}.`
-      : otherWheelOptedIn
-        ? `${oppositeLabel} selected the wheel. Choose wheel to spin.`
-        : 'Both players must choose the wheel before it spins.';
-  const negotiationStatusText = sharedWagerLocked
-    ? `Agreed shared wager: ${formatScore(sharedWagerAmount || 0)}.`
-    : pendingProposal
-      ? `${proposalLabel} proposed ${formatScore(cappedProposalAmount)}.`
-      : bothPlayersJoined
-        ? 'Enter an amount, propose it, then the other player can accept, reject, or counter.'
-        : 'Waiting for both players to join before the wager can be agreed.';
+  const manualActionStackClassName = [
+    'button-row',
+    'live-round-actions',
+    'live-round-actions--embedded',
+    'quiz-wager-action-stack',
+    'quiz-choice-manual-actions',
+    allowManualReject ? '' : 'quiz-choice-manual-single',
+  ].filter(Boolean).join(' ');
+  const wheelHelperText = launchPending
+    ? `Shared wager locked at ${formatScore(sharedWagerAmount || 0)}. Starting Quick Fire...`
+    : effectiveSharedWagerLocked && agreement.lockedByWheel
+      ? `Wheel locked the shared wager at ${formatScore(sharedWagerAmount || 0)}.`
+      : effectiveWheelPendingFromViewer
+        ? `Wheel request sent. Waiting for ${oppositeLabel} to agree or reject.`
+        : wheelPendingFromOther
+          ? `${oppositeLabel} requested wheel mode. Agree and spin or reject.`
+          : wheelActive
+            ? 'Shared countdown is running for both players.'
+            : 'Request a shared wheel spin. The other player must agree before the countdown starts.';
+  const negotiationStatusText = launchPending
+      ? `Accepted shared wager: ${formatScore(sharedWagerAmount || 0)}. Transitioning into the question round.`
+    : sharedWagerLocked
+      ? `Agreed shared wager: ${formatScore(sharedWagerAmount || 0)}.`
+      : effectiveWheelPendingFromViewer
+        ? `Waiting for ${oppositeLabel} to confirm the wheel request.`
+        : wheelPendingFromOther
+          ? `${oppositeLabel} requested wheel mode.`
+          : pendingProposal && proposalFromViewer
+            ? `Waiting for ${oppositeLabel} to accept or counter ${formatScore(cappedProposalAmount)}.`
+            : pendingProposal
+              ? `${proposalLabel} proposed ${formatScore(cappedProposalAmount)}. Accept it or counter with a different amount.`
+              : bothPlayersJoined
+                ? 'Enter an amount, propose it, then the other player can accept, reject, or counter.'
+                : 'Waiting for both players to join before the wager can be agreed.';
+  const readySetupAmount = effectiveSharedWagerLocked
+    ? (sharedWagerLocked ? Number(sharedWagerAmount || 0) : pendingWheelAmount)
+    : Number(sharedWagerAmount || 0);
+  const readySetupAmountText = agreement.lockedByWheel || wheelResolved
+    ? formatWheelAmount(readySetupAmount || 0)
+    : formatScore(readySetupAmount || 0);
+  const readySetupAmountLabel = agreement.lockedByWheel || wheelResolved ? 'Wheel landed on' : 'Shared wager';
+  const readySetupEyebrow = agreement.lockedByWheel || wheelResolved ? 'Wheel spin complete' : 'Shared wager locked';
+  const readySetupHeading = countdownActive
+    ? `Quick Fire starts in ${Math.max(1, countdownSecondsLeft || 0)}`
+    : 'Both players need to click Ready';
+  const readySetupIntro = agreement.lockedByWheel || wheelResolved
+    ? `The wheel locked in ${readySetupAmountText}.`
+    : `The shared wager is locked at ${formatScore(readySetupAmount || 0)}.`;
+  const readySetupStatus = countdownActive
+    ? 'Both players are ready. Launching question one now.'
+    : wheelAwaitingLock
+      ? 'Wheel spin finished. Click Ready; the final wager will be saved automatically.'
+    : launchPending || bothPlayersReady
+      ? 'Both players are ready. Starting the 3 second countdown...'
+      : viewerReady
+        ? `Waiting for ${oppositeLabel} to click Ready.`
+        : otherPlayerReady
+          ? `${oppositeLabel} is ready. Click Ready to start the 3 second countdown.`
+          : 'Both players must click Ready before question one begins.';
 
   useEffect(() => {
     if (shouldPreferWheelMode) {
       setSelectionMode('wheel');
+      return;
     }
-  }, [shouldPreferWheelMode]);
+    if (shouldPreferManualMode) {
+      setSelectionMode('manual');
+    }
+  }, [shouldPreferWheelMode, shouldPreferManualMode]);
+
+  useEffect(() => {
+    setManualValidationMessage('');
+  }, [agreement.status, agreement.proposedAmount, agreement.amount, agreement.wheelRequestedBySeat]);
+
+  useEffect(() => {
+    if (wheelPending) {
+      setOptimisticWheelRequesterId('');
+    }
+  }, [wheelPending]);
+
+  useEffect(() => {
+    if (!isBusy && optimisticWheelRequesterId && !wheelPending) {
+      setOptimisticWheelRequesterId('');
+    }
+  }, [isBusy, optimisticWheelRequesterId, wheelPending]);
+
+  useEffect(() => {
+    const shouldTick = countdownActive || (agreement.status === 'wheel_countdown' && Number.isFinite(wheelSpinEndsAtMs) && !sharedWagerLocked);
+    if (!shouldTick) return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [agreement.status, countdownActive, sharedWagerLocked, wheelSpinEndsAtMs]);
+
+  const onManualPrimaryAction = async () => {
+    const validationMessage = getQuizWagerValidationMessage(quizWagerDraft, wheelBaseAmount, {
+      requireDifferentFrom: incomingProposal ? agreement.proposedAmount : null,
+    });
+    if (validationMessage) {
+      setManualValidationMessage(validationMessage);
+      return;
+    }
+    setManualValidationMessage('');
+    await onSaveQuizWager();
+  };
 
   return (
     <>
     <section className="room-active-frame room-active-frame--setup room-active-frame--quiz room-active-frame--quiz-setup" aria-label="Quick Fire quiz setup">
       <div className="scoreboard-sheen" aria-hidden="true" />
       <div className="room-active-stage room-active-stage--answering">
-        <section className="quiz-wager-mode-panel">
-          <div className={`quiz-choice-grid quiz-choice-grid--selected quiz-choice-grid--selected-${selectionMode}`}>
-          <section className={`quiz-choice-zone quiz-choice-zone--manual ${isManualMode ? 'is-active' : 'is-shaded'}`} aria-disabled={manualIsInactive}>
-            <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--manual">
-              <h2>Agree a shared wager</h2>
-              <p className="quiz-wager-intro">Both players must agree the shared wager or lock a wheel result.</p>
-            </div>
-            <div className={`quiz-choice-zone__content quiz-choice-zone__content--manual ${manualIsLocked ? 'is-locked' : ''}`}>
-              <div className="quiz-wager-amount-card quiz-choice-manual-card">
-                <label className="field quiz-wager-amount-field">
-                  <span>Wager amount</span>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="0"
-                    max={wheelBaseAmount}
-                    value={sharedWagerLocked ? sharedWagerAmount || 0 : quizWagerDraft}
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      setQuizWagerDraft(nextValue === '' ? '' : String(capQuizWagerAmount(nextValue, wheelBaseAmount)));
-                    }}
-                    placeholder="0"
-                    disabled={sharedWagerLocked || manualIsLocked}
+        {showSetupReadyCard ? (
+          <section className="quiz-ready-stage-panel">
+            <section className="quiz-ready-setup-card" role="status" aria-live="polite">
+              <div className="quiz-ready-setup-card__intro">
+                <span className="quiz-ready-setup-card__eyebrow">{readySetupEyebrow}</span>
+                <strong>{readySetupHeading}</strong>
+                <p>{readySetupIntro} Both players must click Ready before the 3 second countdown begins.</p>
+              </div>
+              <div className="quiz-ready-setup-card__amount" aria-label={`${readySetupAmountLabel} ${readySetupAmountText}`}>
+                <span>{readySetupAmountLabel}</span>
+                <strong>{readySetupAmountText}</strong>
+              </div>
+              <div className="quiz-ready-setup-card__seat-grid">
+                <article className={`quiz-ready-seat-card ${viewerReady ? 'is-ready' : ''}`}>
+                  <div className="quiz-ready-seat-card__label">
+                    <SeatFlag seat={currentPlayer} />
+                    <span>{viewerLabel}</span>
+                  </div>
+                  <strong>{viewerReady ? 'Ready' : 'Waiting'}</strong>
+                </article>
+                <article className={`quiz-ready-seat-card ${otherPlayerReady ? 'is-ready' : ''}`}>
+                  <div className="quiz-ready-seat-card__label">
+                    <SeatFlag seat={otherPlayer} />
+                    <span>{oppositeLabel}</span>
+                  </div>
+                  <strong>{otherPlayerReady ? 'Ready' : 'Waiting'}</strong>
+                </article>
+              </div>
+              <div className="quiz-ready-setup-card__footer">
+                {countdownActive ? (
+                  <div className="quiz-ready-countdown" aria-live="polite">
+                    <strong>{Math.max(1, countdownSecondsLeft || 0)}</strong>
+                    <span>Starting Quick Fire...</span>
+                  </div>
+                ) : (
+                  <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !effectiveSharedWagerLocked || viewerReady || wheelActive}>
+                    {viewerReady ? 'Ready' : 'Click Ready'}
+                  </Button>
+                )}
+                <span className="quiz-ready-setup-card__status">{readySetupStatus}</span>
+              </div>
+            </section>
+          </section>
+        ) : (
+          <section className="quiz-wager-mode-panel">
+            <div className={`quiz-choice-grid ${hasSelectedWagerMode ? `quiz-choice-grid--selected quiz-choice-grid--selected-${selectionMode}` : 'quiz-choice-grid--needs-selection'}`}>
+            <section className={`quiz-choice-zone quiz-choice-zone--manual ${isManualMode ? 'is-active' : 'is-shaded'}`} aria-disabled={manualIsInactive}>
+              <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--manual">
+                <h2>Agree a shared wager</h2>
+              </div>
+              <div className={`quiz-choice-zone__content quiz-choice-zone__content--manual ${manualIsLocked ? 'is-locked' : ''}`}>
+                <div className="quiz-wager-amount-card quiz-choice-manual-card">
+                  <label className="field quiz-wager-amount-field">
+                    <span>Insert wager amount here</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      max={wheelBaseAmount}
+                      value={displayedQuizWagerDraft}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        setManualValidationMessage('');
+                        setQuizWagerDraft(nextValue);
+                      }}
+                      onFocus={(event) => event.target.select()}
+                      placeholder="0"
+                      disabled={sharedWagerLocked || manualIsLocked}
+                    />
+                  </label>
+                  <span className="quiz-wager-cap-copy">{`Enter a value between 0 and ${formatScore(wheelBaseAmount)}.`}</span>
+                  {manualValidationMessage ? (
+                    <p className="quiz-wager-validation" role="alert">{manualValidationMessage}</p>
+                  ) : null}
+                  <div className="quiz-negotiation-status">
+                    <span>{negotiationStatusText}</span>
+                  </div>
+                </div>
+                <div className="quiz-negotiation-focus-card">
+                  <span className="quiz-negotiation-focus-label">Shared wager</span>
+                  <div className="quiz-negotiation-focus-body">
+                    <strong>{formatScore(activeWagerDisplayAmount)}</strong>
+                    <p>{negotiationStatusText}</p>
+                  </div>
+                  <div className={manualActionStackClassName}>
+                    {allowManualReject ? (
+                      <Button
+                        className="ghost-button compact quiz-wager-reject-button"
+                        onClick={onRejectQuizWager}
+                        disabled={isBusy || manualIsLocked || !allowManualReject || sharedWagerLocked || wheelActive || wheelPending}
+                      >
+                        Reject
+                      </Button>
+                    ) : null}
+                    <Button
+                      className="ghost-button compact quiz-wager-propose-button"
+                      onClick={onManualPrimaryAction}
+                      disabled={isBusy || manualIsLocked || !bothPlayersJoined || sharedWagerLocked || wheelActive || proposalFromViewer}
+                    >
+                      {counterProposalAvailable ? 'Propose New Wager' : proposalFromViewer ? `Waiting for ${oppositeLabel}` : 'Propose Wager'}
+                    </Button>
+                    <Button
+                      className="primary-button compact quiz-wager-accept-button"
+                      onClick={onAcceptQuizWager}
+                      disabled={isBusy || manualIsLocked || !allowManualAccept || sharedWagerLocked || wheelActive || wheelPending}
+                    >
+                      Accept
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              {manualIsInactive ? (
+                <div className="quiz-choice-inactive-overlay" aria-hidden="true" />
+              ) : null}
+            </section>
+
+            <section className="quiz-choice-zone quiz-choice-zone--chat is-active">
+              <div className="quiz-choice-zone__intro">
+                <span className="quiz-choice-zone__kicker">YOU CHOOSE</span>
+                <p>{hasSelectedWagerMode ? 'Pick how you’d like to agree on the wager.' : 'Select an option to continue.'}</p>
+              </div>
+              <div className="quiz-choice-zone__choice-stack" aria-label="Quick Fire wager mode">
+                <button
+                  type="button"
+                  className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--manual ${isManualMode ? 'is-active' : hasSelectedWagerMode ? 'is-muted' : 'is-unselected'}`}
+                  onClick={() => setSelectionMode('manual')}
+                  aria-pressed={isManualMode}
+                >
+                  <span className="quiz-choice-arrow quiz-choice-arrow--left" aria-hidden="true">←</span>
+                  <span className="quiz-choice-option-text">Manual negotiation</span>
+                </button>
+                <button
+                  type="button"
+                  className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--wheel ${isWheelMode ? 'is-active' : hasSelectedWagerMode ? 'is-muted' : 'is-unselected'}`}
+                  onClick={() => setSelectionMode('wheel')}
+                  aria-pressed={isWheelMode}
+                >
+                  <span className="quiz-choice-option-text">Wheel spin</span>
+                  <span className="quiz-choice-arrow quiz-choice-arrow--right" aria-hidden="true">→</span>
+                </button>
+              </div>
+              <div className="quiz-choice-zone__content quiz-choice-zone__content--chat">
+                <div className="quiz-negotiation-chat quiz-choice-chat">
+                  <ChatPanel
+                    compact
+                    messages={chatMessages}
+                    draft={chatDraft}
+                    onDraftChange={onChatDraftChange}
+                    onSend={onSendChat}
+                    isBusy={chatIsBusy}
+                    seat={currentPlayer}
+                    displayName={chatDisplayName}
                   />
-                </label>
-                <span className="quiz-wager-cap-copy">{`Enter a value between 0 and ${formatScore(wheelBaseAmount)}.`}</span>
-                <div className="quiz-negotiation-status">
-                  <span>{negotiationStatusText}</span>
                 </div>
               </div>
-              <div className="quiz-negotiation-focus-card">
-                <span className="quiz-negotiation-focus-label">Shared wager</span>
-                <strong>{formatScore(activeWagerDisplayAmount)}</strong>
-                <p>{negotiationStatusText}</p>
-                <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-choice-manual-actions">
-                  <Button className="ghost-button compact quiz-wager-reject-button" onClick={onRejectQuizWager} disabled={isBusy || manualIsLocked || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || wheelActive}>
-                    Reject
-                  </Button>
-                  <Button className="ghost-button compact quiz-wager-propose-button" onClick={onSaveQuizWager} disabled={isBusy || manualIsLocked || !bothPlayersJoined || sharedWagerLocked || wheelActive}>
-                    Propose New Price
-                  </Button>
-                  <Button className="primary-button compact quiz-wager-accept-button" onClick={onAcceptQuizWager} disabled={isBusy || manualIsLocked || !pendingProposal || (proposalFromViewer && !canActAsOtherPlayer) || sharedWagerLocked || wheelActive}>
-                    Accept
-                  </Button>
+            </section>
+
+            <section className={`quiz-choice-zone quiz-choice-zone--wheel ${isWheelMode ? 'is-active' : 'is-shaded'}`} aria-disabled={wheelIsInactive}>
+              <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--wheel">
+                <h2>Wager Wheel</h2>
+                <p className="quiz-wager-intro">Let the wheel set one shared wager.</p>
+              </div>
+              <div className={`quiz-choice-zone__content quiz-choice-zone__content--wheel ${wheelIsLocked ? 'is-locked' : ''}`}>
+                <div className="quiz-wager-wheel-card quiz-choice-wheel-card">
+                  <QuizWagerWheelOverlay agreement={agreement} baseAmount={wheelBaseAmount} forceVisible disabled={wheelIsLocked} />
+                </div>
+                <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-wheel-action-stack">
+                  {wheelPendingFromOther ? (
+                    <>
+                      <Button
+                        className="primary-button compact"
+                        onClick={onAcceptQuizWager}
+                        disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive}
+                      >
+                        Accept &amp; Spin
+                      </Button>
+                      <Button
+                        className="ghost-button compact"
+                        onClick={onRejectQuizWager}
+                        disabled={isBusy || wheelIsInactive || sharedWagerLocked || wheelActive}
+                      >
+                        Reject
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      className="primary-button compact"
+                      onClick={() => {
+                        setOptimisticWheelRequesterId(currentUserId || 'pending-wheel-request');
+                        onSetQuizWheelOptIn?.(true);
+                      }}
+                      disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelPending || viewerWheelOptedIn}
+                    >
+                      {effectiveWheelPendingFromViewer ? `Waiting for ${oppositeLabel}` : 'Spin the Wheel'}
+                    </Button>
+                  )}
+                  <p className="quiz-mode-helper">{wheelHelperText}</p>
                 </div>
               </div>
-            </div>
-            {manualIsInactive ? (
-              <div className="quiz-choice-inactive-overlay" aria-hidden="true" />
-            ) : null}
-          </section>
-
-          <section className="quiz-choice-zone quiz-choice-zone--chat is-active">
-            <div className="quiz-choice-zone__intro">
-              <span className="quiz-choice-zone__kicker">YOU CHOOSE</span>
-              <p>Pick how you’d like to agree on the wager.</p>
-            </div>
-            <div className="quiz-choice-zone__choice-stack" aria-label="Quick Fire wager mode">
-              <button
-                type="button"
-                className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--manual ${isManualMode ? 'is-active' : ''}`}
-                onClick={() => setSelectionMode('manual')}
-                aria-pressed={isManualMode}
-              >
-                <span className="quiz-choice-arrow quiz-choice-arrow--left" aria-hidden="true">←</span>
-                <span className="quiz-choice-option-text">Manual negotiation</span>
-              </button>
-              <button
-                type="button"
-                className={`dashboard-pill tab-button quiz-choice-pill quiz-choice-pill--wheel ${isWheelMode ? 'is-active' : ''}`}
-                onClick={() => setSelectionMode('wheel')}
-                aria-pressed={isWheelMode}
-              >
-                <span className="quiz-choice-option-text">Wheel spin</span>
-                <span className="quiz-choice-arrow quiz-choice-arrow--right" aria-hidden="true">→</span>
-              </button>
-            </div>
-            <div className="quiz-choice-zone__content quiz-choice-zone__content--chat">
-              <div className="quiz-negotiation-chat quiz-choice-chat">
-                <ChatPanel
-                  compact
-                  messages={chatMessages}
-                  draft={chatDraft}
-                  onDraftChange={onChatDraftChange}
-                  onSend={onSendChat}
-                  isBusy={isBusy}
-                  seat={currentPlayer}
-                  displayName={chatDisplayName}
-                />
-              </div>
+              {wheelIsInactive ? (
+                <div className="quiz-choice-inactive-overlay" aria-hidden="true" />
+              ) : null}
+            </section>
             </div>
           </section>
-
-          <section className={`quiz-choice-zone quiz-choice-zone--wheel ${isWheelMode ? 'is-active' : 'is-shaded'}`} aria-disabled={wheelIsInactive}>
-            <div className="quiz-choice-zone__panel-head quiz-choice-zone__panel-head--wheel">
-              <h2>Wager Wheel</h2>
-              <p className="quiz-wager-intro">Let the wheel set one shared wager.</p>
-            </div>
-            <div className={`quiz-choice-zone__content quiz-choice-zone__content--wheel ${wheelIsLocked ? 'is-locked' : ''}`}>
-              <div className="quiz-wager-wheel-card quiz-choice-wheel-card">
-                <QuizWagerWheelOverlay agreement={agreement} baseAmount={wheelBaseAmount} forceVisible disabled={wheelIsLocked} />
-              </div>
-              <div className="button-row live-round-actions live-round-actions--embedded quiz-wager-action-stack quiz-wheel-action-stack">
-                <Button className="primary-button compact" onClick={() => onSetQuizWheelOptIn?.(true)} disabled={isBusy || wheelIsInactive || !bothPlayersJoined || sharedWagerLocked || wheelActive || wheelBaseAmount <= 0 || viewerWheelOptedIn}>
-                  Spin the Wheel
-                </Button>
-                <p className="quiz-mode-helper">{wheelHelperText}</p>
-              </div>
-            </div>
-            {wheelIsInactive ? (
-              <div className="quiz-choice-inactive-overlay" aria-hidden="true" />
-            ) : null}
-          </section>
-          </div>
-        </section>
-        </div>
+        )}
+      </div>
     </section>
-    <div className="quiz-ready-inline quiz-ready-inline--outside" role="status" aria-live="polite">
-      <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || !sharedWagerLocked || viewerReady || wheelActive}>
-        {viewerReady ? 'Ready' : 'Ready to Start'}
-      </Button>
-      {sharedWagerLocked ? (
-        <span>
-          {viewerReady
-            ? 'Waiting for the other player. The question appears once both players are ready.'
-            : 'Tap Ready once the shared wager looks right.'}
-        </span>
-      ) : null}
-    </div>
+    {effectiveWheelPendingFromViewer ? (
+      <div className="quiz-wheel-request-banner" role="status" aria-live="polite">
+        <strong>Loading, waiting for {oppositeLabel} to confirm the wheel request.</strong>
+        <span>{oppositeLabel} can spin the wheel or reject and return both players to negotiation.</span>
+      </div>
+    ) : null}
     </>
   );
 }
@@ -3746,7 +7763,227 @@ function QuizLiveStatus({ currentRound, revealIsReady }) {
   );
 }
 
-function RoomRevealPlayerCard({ game, viewerSeat, seat, currentRound, totalPenalty, roundPenalty, isQuizGame = false, totalQuizPoints = 0 }) {
+function TrueFalseLiveStatus({ currentRound, revealIsReady }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  const isRoundOpen = (currentRound?.status || 'open') === 'open';
+
+  useEffect(() => {
+    if (revealIsReady || !isRoundOpen) return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [revealIsReady, isRoundOpen, stableRoundIdentityKey(currentRound || {})]);
+
+  const endsAtMs = Date.parse(currentRound?.trueFalseTimerEndsAt || '');
+  const msLeft = Number.isFinite(endsAtMs) ? Math.max(0, endsAtMs - nowMs) : TRUE_FALSE_TIMER_SECONDS * 1000;
+  const secondsLeft = Math.max(0, msLeft / 1000);
+  const displaySeconds = Math.ceil(secondsLeft);
+  const timerProgress = Math.max(0, Math.min(1, msLeft / (TRUE_FALSE_TIMER_SECONDS * 1000)));
+
+  if (revealIsReady) return null;
+
+  return (
+    <div className="quiz-live-status true-false-live-status">
+      <div className="quiz-status-grid">
+        <article className="quiz-status-card">
+          <span>Timer</span>
+          <strong>{displaySeconds}s</strong>
+        </article>
+        <article className="quiz-status-card">
+          <span>Scoring</span>
+          <strong>0 / +10</strong>
+        </article>
+      </div>
+      <div className="quiz-timer-bar" aria-hidden="true">
+        <div className="quiz-timer-bar-fill true-false-timer-bar-fill" style={{ transform: `scaleX(${timerProgress})` }} />
+      </div>
+    </div>
+  );
+}
+
+function ThisOrThatLiveStatus({ currentRound, revealIsReady }) {
+  const options = getThisOrThatOptions(currentRound);
+
+  if (revealIsReady) return null;
+
+  return (
+    <div className="quiz-live-status true-false-live-status">
+      <div className="quiz-status-grid">
+        <article className="quiz-status-card">
+          <span>Mode</span>
+          <strong>This or That</strong>
+        </article>
+        <article className="quiz-status-card">
+          <span>Scoring</span>
+          <strong>0 / +10</strong>
+        </article>
+      </div>
+      <p className="field-note true-false-answer-note">
+        {options.length >= 2
+          ? `Choose between ${options[0]} and ${options[1]}. First tap locks each answer.`
+          : 'Pick your side, then predict the other player. First tap locks each answer.'}
+      </p>
+    </div>
+  );
+}
+
+function TrueFalseAutoAnswerEntryBase({
+  currentRound,
+  viewerSeat,
+  oppositeLabel,
+  onLockAnswerField,
+  isBusy = false,
+  embedded = false,
+}) {
+  const currentPlayer = viewerSeat === 'kim' ? 'kim' : 'jay';
+  const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
+  const ownAnswer = normalizeTrueFalseChoice(currentPlayerAnswer?.ownAnswer || '');
+  const guessedOther = normalizeTrueFalseChoice(currentPlayerAnswer?.guessedOther || '');
+  const options = ['True', 'False'];
+  const isRoundOpen = (currentRound?.status || 'open') === 'open';
+  const lockedChoiceLabel = ownAnswer && guessedOther ? 'Both picks locked' : 'First tap locks each choice';
+
+  const renderChoiceField = (fieldName, value, heading, subheading) => (
+    <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
+      <div className="mini-heading">
+        <div>
+          <span>{heading}</span>
+          <h3>{subheading}</h3>
+        </div>
+      </div>
+      <div className={`choice-grid ${embedded ? 'choice-grid--embedded' : ''}`} role="list" aria-label={subheading}>
+        {options.map((option) => (
+          <button
+            key={`${fieldName}-${option}`}
+            type="button"
+            className={`choice-button ${value === option ? 'is-on' : ''} ${value ? 'is-locked' : ''}`}
+            onClick={() => onLockAnswerField?.(fieldName, option)}
+            disabled={isBusy || !isRoundOpen || Boolean(value)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <p className="field-note true-false-answer-note">
+        {value ? `Locked: ${value}` : 'First tap locks instantly.'}
+      </p>
+    </section>
+  );
+
+  return (
+    <div className={`room-answer-entry room-answer-entry--true-false ${embedded ? 'room-answer-entry--embedded' : ''}`}>
+      <div className="true-false-answer-header">
+        <p>Guess their answer, then lock your own.</p>
+        <span className="status-pill">{lockedChoiceLabel}</span>
+      </div>
+      <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''}`}>
+        {renderChoiceField('guessedOther', guessedOther, 'Their Answer', `What I think ${oppositeLabel} will say`)}
+        {renderChoiceField('ownAnswer', ownAnswer, 'Your Answer', 'What I will actually answer')}
+      </div>
+    </div>
+  );
+}
+
+const TrueFalseAutoAnswerEntry = memo(TrueFalseAutoAnswerEntryBase, (previous, next) => {
+  const previousPlayer = previous.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const nextPlayer = next.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const previousAnswer = previous.currentRound?.answers?.[previousPlayer] || {};
+  const nextAnswer = next.currentRound?.answers?.[nextPlayer] || {};
+  return stableRoundIdentityKey(previous.currentRound || {}) === stableRoundIdentityKey(next.currentRound || {})
+    && previous.viewerSeat === next.viewerSeat
+    && previous.oppositeLabel === next.oppositeLabel
+    && previous.isBusy === next.isBusy
+    && previous.embedded === next.embedded
+    && previousAnswer.ownAnswer === nextAnswer.ownAnswer
+    && previousAnswer.guessedOther === nextAnswer.guessedOther
+    && previous.currentRound?.status === next.currentRound?.status;
+});
+
+function ThisOrThatAutoAnswerEntryBase({
+  currentRound,
+  viewerSeat,
+  oppositeLabel,
+  onLockAnswerField,
+  isBusy = false,
+  embedded = false,
+}) {
+  const currentPlayer = viewerSeat === 'kim' ? 'kim' : 'jay';
+  const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
+  const ownAnswer = normalizeThisOrThatChoice(currentPlayerAnswer?.ownAnswer || '', currentRound);
+  const guessedOther = normalizeThisOrThatChoice(currentPlayerAnswer?.guessedOther || '', currentRound);
+  const options = getThisOrThatOptions(currentRound);
+  const renderedOptions = options.length >= 2 ? options : ['Option A', 'Option B'];
+  const isRoundOpen = (currentRound?.status || 'open') === 'open';
+  const lockedChoiceLabel = ownAnswer && guessedOther ? 'Both picks locked' : 'First tap locks each pick';
+
+  const renderChoiceField = (fieldName, value, heading, subheading) => (
+    <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
+      <div className="mini-heading">
+        <div>
+          <span>{heading}</span>
+          <h3>{subheading}</h3>
+        </div>
+      </div>
+      <div className={`choice-grid ${embedded ? 'choice-grid--embedded' : ''}`} role="list" aria-label={subheading}>
+        {renderedOptions.map((option) => (
+          <button
+            key={`${fieldName}-${option}`}
+            type="button"
+            className={`choice-button ${value === option ? 'is-on' : ''} ${value ? 'is-locked' : ''}`}
+            onClick={() => onLockAnswerField?.(fieldName, option)}
+            disabled={isBusy || !isRoundOpen || Boolean(value)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <p className="field-note true-false-answer-note">
+        {value ? `Locked: ${value}` : 'First tap locks instantly.'}
+      </p>
+    </section>
+  );
+
+  return (
+    <div className={`room-answer-entry room-answer-entry--true-false ${embedded ? 'room-answer-entry--embedded' : ''}`}>
+      <div className="true-false-answer-header">
+        <p>Pick your answer, then guess what the other person will choose.</p>
+        <span className="status-pill">{lockedChoiceLabel}</span>
+      </div>
+      <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''}`}>
+        {renderChoiceField('guessedOther', guessedOther, 'Their Pick', `What I think ${oppositeLabel} will choose`)}
+        {renderChoiceField('ownAnswer', ownAnswer, 'Your Pick', 'What I would actually choose')}
+      </div>
+    </div>
+  );
+}
+
+const ThisOrThatAutoAnswerEntry = memo(ThisOrThatAutoAnswerEntryBase, (previous, next) => {
+  const previousPlayer = previous.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const nextPlayer = next.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const previousAnswer = previous.currentRound?.answers?.[previousPlayer] || {};
+  const nextAnswer = next.currentRound?.answers?.[nextPlayer] || {};
+  return stableRoundIdentityKey(previous.currentRound || {}) === stableRoundIdentityKey(next.currentRound || {})
+    && previous.viewerSeat === next.viewerSeat
+    && previous.oppositeLabel === next.oppositeLabel
+    && previous.isBusy === next.isBusy
+    && previous.embedded === next.embedded
+    && previousAnswer.ownAnswer === nextAnswer.ownAnswer
+    && previousAnswer.guessedOther === nextAnswer.guessedOther
+    && previous.currentRound?.status === next.currentRound?.status
+    && JSON.stringify(getThisOrThatOptions(previous.currentRound || {})) === JSON.stringify(getThisOrThatOptions(next.currentRound || {}));
+});
+
+function RoomRevealPlayerCard({
+  game,
+  viewerSeat,
+  seat,
+  currentRound,
+  totalPenalty,
+  roundPenalty,
+  isQuizGame = false,
+  isTrueFalseGame = false,
+  isThisOrThatGame = false,
+  totalQuizPoints = 0,
+}) {
   const playerSeat = seat === 'kim' ? 'kim' : 'jay';
   const oppositeSeat = playerSeat === 'jay' ? 'kim' : 'jay';
   const playerLabel = gameSeatDisplayName(game, playerSeat, currentRound);
@@ -3815,6 +8052,142 @@ function RoomRevealPlayerCard({ game, viewerSeat, seat, currentRound, totalPenal
       </article>
     );
   }
+  if (isTrueFalseGame) {
+    const outcome = buildTrueFalseRoundOutcome(currentRound || {});
+    const viewerGuess = playerSeat === 'jay' ? outcome.jayGuess : outcome.kimGuess;
+    const actualAnswer = playerSeat === 'jay' ? outcome.jayActual : outcome.kimActual;
+    const targetAnswer = playerSeat === 'jay' ? outcome.kimActual : outcome.jayActual;
+    const guessScorable = playerSeat === 'jay' ? outcome.jayGuessScorable : outcome.kimGuessScorable;
+    const missingGuess = playerSeat === 'jay' ? outcome.jayMissingGuess : outcome.kimMissingGuess;
+    const missingOwnAnswer = playerSeat === 'jay' ? outcome.jayMissingOwnAnswer : outcome.kimMissingOwnAnswer;
+    const wasCorrect = playerSeat === 'jay' ? outcome.jayCorrect : outcome.kimCorrect;
+    const penalty = playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty;
+    const matchTone = missingGuess || missingOwnAnswer || !guessScorable
+      ? 'neutral'
+      : wasCorrect
+        ? 'success'
+        : 'warning';
+    const matchLabel = missingGuess
+      ? `No guess locked: +${formatScore(TRUE_FALSE_UNANSWERED_PENALTY)}`
+      : !guessScorable
+        ? 'Other player gave no real answer, so this guess was not charged'
+        : wasCorrect
+          ? 'Correct guess'
+          : 'Wrong guess';
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>{`${playerLabel}'s guess`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{viewerGuess || 'No answer submitted'}</strong>
+            </div>
+          </div>
+
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>{`${oppositeLabel}'s real answer`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{targetAnswer || 'No answer submitted'}</strong>
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
+              {matchLabel}
+            </small>
+          </div>
+        </div>
+
+        <div className="room-reveal-score-strip">
+          <div>
+            <span>{`${playerLabel}'s real answer`}</span>
+            <strong>{actualAnswer || 'No answer'}</strong>
+          </div>
+          <div>
+            <span>Round penalty</span>
+            <strong>{formatScore(penalty || roundPenalty || 0)}</strong>
+          </div>
+          <div>
+            <span>{missingOwnAnswer ? 'Missed-answer penalty included' : 'Total penalty'}</span>
+            <strong>{formatScore(totalPenalty || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
+  if (isThisOrThatGame) {
+    const outcome = buildThisOrThatRoundOutcome(currentRound || {});
+    const viewerGuess = playerSeat === 'jay' ? outcome.jayGuess : outcome.kimGuess;
+    const actualAnswer = playerSeat === 'jay' ? outcome.jayActual : outcome.kimActual;
+    const targetAnswer = playerSeat === 'jay' ? outcome.kimActual : outcome.jayActual;
+    const guessScorable = playerSeat === 'jay' ? outcome.jayGuessScorable : outcome.kimGuessScorable;
+    const missingGuess = playerSeat === 'jay' ? outcome.jayMissingGuess : outcome.kimMissingGuess;
+    const missingOwnAnswer = playerSeat === 'jay' ? outcome.jayMissingOwnAnswer : outcome.kimMissingOwnAnswer;
+    const wasCorrect = playerSeat === 'jay' ? outcome.jayCorrect : outcome.kimCorrect;
+    const penalty = playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty;
+    const matchTone = missingGuess || missingOwnAnswer || !guessScorable
+      ? 'neutral'
+      : wasCorrect
+        ? 'success'
+        : 'warning';
+    const matchLabel = missingGuess
+      ? `No guess locked: +${formatScore(THIS_OR_THAT_UNANSWERED_PENALTY)}`
+      : !guessScorable
+        ? 'Other player gave no real answer, so this guess was not charged'
+        : wasCorrect
+          ? 'Correct guess'
+          : 'Wrong guess';
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>{`${playerLabel}'s guess`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{viewerGuess || 'No answer submitted'}</strong>
+            </div>
+          </div>
+
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>{`${oppositeLabel}'s real pick`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{targetAnswer || 'No answer submitted'}</strong>
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
+              {matchLabel}
+            </small>
+          </div>
+        </div>
+
+        <div className="room-reveal-score-strip">
+          <div>
+            <span>{`${playerLabel}'s real pick`}</span>
+            <strong>{actualAnswer || 'No answer'}</strong>
+          </div>
+          <div>
+            <span>Round penalty</span>
+            <strong>{formatScore(penalty || roundPenalty || 0)}</strong>
+          </div>
+          <div>
+            <span>{missingOwnAnswer ? 'Missed-answer penalty included' : 'Total penalty'}</span>
+            <strong>{formatScore(totalPenalty || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
   const actualAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
   const guessedAnswerRaw = currentRound?.answers?.[oppositeSeat]?.guessedOther || '';
   const actualAnswer = formatRoundAnswerValue(actualAnswerRaw, currentRound?.roundType);
@@ -3876,6 +8249,8 @@ function RoomActiveFrameBase({
   baseTotals,
   liveTotals,
   onSubmitAnswer,
+  onLockTrueFalseAnswer,
+  onLockThisOrThatAnswer,
   onMarkReady,
   onRequestQuizOverride,
   onRespondQuizOverride,
@@ -3897,6 +8272,7 @@ function RoomActiveFrameBase({
   chatSeat = '',
   chatDisplayName = '',
   isBusy,
+  chatIsBusy = false,
 }) {
   const question = currentRound?.question || 'Question loaded';
   const questionDensity = getQuestionDensityClass(question);
@@ -3904,12 +8280,22 @@ function RoomActiveFrameBase({
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
   const otherPlayer = oppositeSeatOf(currentPlayer);
   const roundTypeLabel = ROUND_TYPE_LABEL[currentRound?.roundType] || currentRound?.roundType || 'Question';
+  const isQuizGame = (game?.gameMode || 'standard') === 'quiz' && (game?.questionBankType || 'game') === 'quiz';
+  const isTrueFalseGame =
+    isTrueFalseGameMode(game?.gameMode || 'standard')
+    && normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard')) === 'trueFalseGame';
+  const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
   const penaltyPreview = useMemo(
-    () => ({
-      jay: parseNumber(penaltyDraft?.jay, 0),
-      kim: parseNumber(penaltyDraft?.kim, 0),
-    }),
-    [penaltyDraft?.jay, penaltyDraft?.kim],
+    () => ((isTrueFalseGame || isThisOrThatGame)
+      ? {
+          jay: parseNumber(currentRound?.penalties?.jay, 0),
+          kim: parseNumber(currentRound?.penalties?.kim, 0),
+        }
+      : {
+          jay: parseNumber(penaltyDraft?.jay, 0),
+          kim: parseNumber(penaltyDraft?.kim, 0),
+        }),
+    [currentRound?.penalties?.jay, currentRound?.penalties?.kim, isTrueFalseGame, isThisOrThatGame, penaltyDraft?.jay, penaltyDraft?.kim],
   );
   const previewRoundResult = useMemo(() => {
     if (!revealIsReady || !currentRound) return null;
@@ -3944,13 +8330,13 @@ function RoomActiveFrameBase({
   const viewerLabel = gameSeatDisplayName(game, currentPlayer, currentRound);
   const oppositeLabel = gameSeatDisplayName(game, otherPlayer, currentRound);
   const hostLabel = gameSeatDisplayName(game, seatForUid(game, game?.hostUid) || currentPlayer, currentRound);
-  const isQuizGame = (game?.gameMode || 'standard') === 'quiz' && (game?.questionBankType || 'game') === 'quiz';
   const stageStatusLabel = revealIsReady
     ? 'Results'
     : submissionState === 'submitted'
       ? 'Waiting'
       : 'Answering';
   const showReplayAction = (game?.gameMode || 'standard') === 'standard' && (game?.questionBankType || 'game') === 'game';
+  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame;
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
   const viewerOverrideRequest = currentRound?.overrideRequests?.[currentPlayer] || null;
@@ -3966,11 +8352,33 @@ function RoomActiveFrameBase({
     jay: hasNextReadySeat(currentRound, 'jay'),
     kim: hasNextReadySeat(currentRound, 'kim'),
   };
+  const trueFalseOutcome = useMemo(
+    () => (isTrueFalseGame ? buildTrueFalseRoundOutcome(currentRound || {}) : null),
+    [currentRound, isTrueFalseGame],
+  );
+  const thisOrThatOutcome = useMemo(
+    () => (isThisOrThatGame ? buildThisOrThatRoundOutcome(currentRound || {}) : null),
+    [currentRound, isThisOrThatGame],
+  );
+  const trueFalseSummaryLabel = !trueFalseOutcome
+    ? ''
+    : trueFalseOutcome.jayCorrect && trueFalseOutcome.kimCorrect
+      ? 'Both guessed correctly'
+      : trueFalseOutcome.jayMissingResponse || trueFalseOutcome.kimMissingResponse
+        ? 'Missed answers triggered penalties'
+        : 'Automatic penalties applied';
+  const thisOrThatSummaryLabel = !thisOrThatOutcome
+    ? ''
+    : thisOrThatOutcome.jayCorrect && thisOrThatOutcome.kimCorrect
+      ? 'Both guessed correctly'
+      : thisOrThatOutcome.jayMissingResponse || thisOrThatOutcome.kimMissingResponse
+        ? 'Missed answers triggered penalties'
+        : 'Automatic penalties applied';
 
   return (
-    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''}`} aria-label="Active round scoreboard">
+    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''}`} aria-label="Active round scoreboard">
       <div className="scoreboard-sheen" aria-hidden="true" />
-      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''}`}>
+      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''}`}>
         <header className="room-active-header">
           <div>
             <span className="scoreboard-kicker">{revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
@@ -3983,6 +8391,8 @@ function RoomActiveFrameBase({
           </div>
         </header>
         {isQuizGame ? <QuizLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
+        {isTrueFalseGame ? <TrueFalseLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
+        {isThisOrThatGame ? <ThisOrThatLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer ? (
           <div className="quiz-override-strip">
             <span className={`quiz-override-status ${viewerQuizResult === 'correct' ? 'is-correct' : 'is-incorrect'}`}>
@@ -4028,24 +8438,28 @@ function RoomActiveFrameBase({
               {!isQuizGame ? (
                 <div className="question-note-actions">
                   <button type="button" className="ghost-button compact question-flag-button" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
-                  <button
-                    type="button"
-                    className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
-                    onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
-                    disabled={isBusy}
-                    aria-label="Thumbs up this question"
-                  >
-                    👍
-                  </button>
-                  <button
-                    type="button"
-                    className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
-                    onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
-                    disabled={isBusy}
-                    aria-label="Thumbs down this question"
-                  >
-                    👎
-                  </button>
+                  {showFeedbackActions ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
+                        onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
+                        disabled={isBusy}
+                        aria-label="Thumbs up this question"
+                      >
+                        👍
+                      </button>
+                      <button
+                        type="button"
+                        className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
+                        onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
+                        disabled={isBusy}
+                        aria-label="Thumbs down this question"
+                      >
+                        👎
+                      </button>
+                    </>
+                  ) : null}
                   {showReplayAction ? (
                     <button
                       type="button"
@@ -4060,18 +8474,38 @@ function RoomActiveFrameBase({
                 </div>
               ) : null}
             </div>
-            <QuestionAnswerEntry
-              gameId={game?.id || ''}
-              embedded
-              seat={currentPlayer}
-              viewerSeat={currentPlayer}
-              currentRound={currentRound}
-              answerLabel={viewerLabel}
-              oppositeLabel={oppositeLabel}
-              onSubmitAnswer={onSubmitAnswer}
-              submissionState={submissionState}
-              isQuizRound={isQuizGame}
-            />
+            {isTrueFalseGame ? (
+              <TrueFalseAutoAnswerEntry
+                embedded
+                viewerSeat={currentPlayer}
+                currentRound={currentRound}
+                oppositeLabel={oppositeLabel}
+                onLockAnswerField={onLockTrueFalseAnswer}
+                isBusy={isBusy}
+              />
+            ) : isThisOrThatGame ? (
+              <ThisOrThatAutoAnswerEntry
+                embedded
+                viewerSeat={currentPlayer}
+                currentRound={currentRound}
+                oppositeLabel={oppositeLabel}
+                onLockAnswerField={onLockThisOrThatAnswer}
+                isBusy={isBusy}
+              />
+            ) : (
+              <QuestionAnswerEntry
+                gameId={game?.id || ''}
+                embedded
+                seat={currentPlayer}
+                viewerSeat={currentPlayer}
+                currentRound={currentRound}
+                answerLabel={viewerLabel}
+                oppositeLabel={oppositeLabel}
+                onSubmitAnswer={onSubmitAnswer}
+                submissionState={submissionState}
+                isQuizRound={isQuizGame}
+              />
+            )}
           </div>
         ) : (
           <div className={`room-active-reveal-stack ${isQuizGame ? 'room-active-reveal-stack--quiz' : ''}`}>
@@ -4079,24 +8513,28 @@ function RoomActiveFrameBase({
               <p>{question}</p>
               <div className="question-note-actions">
                 <button type="button" className="ghost-button compact question-flag-button" onClick={() => onOpenQuestionNote?.(currentRound)} disabled={isBusy} aria-label="Flag question for private note">🚩</button>
-                <button
-                  type="button"
-                  className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
-                  onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
-                  disabled={isBusy}
-                  aria-label="Thumbs up this question"
-                >
-                  👍
-                </button>
-                <button
-                  type="button"
-                  className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
-                  onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
-                  disabled={isBusy}
-                  aria-label="Thumbs down this question"
-                >
-                  👎
-                </button>
+                {showFeedbackActions ? (
+                  <>
+                    <button
+                      type="button"
+                      className={`ghost-button compact question-like-button ${currentFeedbackValue === 'liked' ? 'is-on' : ''}`}
+                      onClick={() => onSetQuestionFeedback?.(currentRound, 'liked')}
+                      disabled={isBusy}
+                      aria-label="Thumbs up this question"
+                    >
+                      👍
+                    </button>
+                    <button
+                      type="button"
+                      className={`ghost-button compact question-dislike-button ${currentFeedbackValue === 'disliked' ? 'is-on' : ''}`}
+                      onClick={() => onSetQuestionFeedback?.(currentRound, 'disliked')}
+                      disabled={isBusy}
+                      aria-label="Thumbs down this question"
+                    >
+                      👎
+                    </button>
+                  </>
+                ) : null}
                 {showReplayAction ? (
                   <button
                     type="button"
@@ -4120,6 +8558,8 @@ function RoomActiveFrameBase({
                 totalPenalty={liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0}
                 roundPenalty={penaltyPreview[currentPlayer]}
                 isQuizGame={isQuizGame}
+                isTrueFalseGame={isTrueFalseGame}
+                isThisOrThatGame={isThisOrThatGame}
                 totalQuizPoints={quizRevealTotals[currentPlayer]}
               />
 
@@ -4153,6 +8593,42 @@ function RoomActiveFrameBase({
                       </span>
                     </div>
                   </>
+                ) : isTrueFalseGame ? (
+                  <>
+                    <span>Round Result</span>
+                    <strong>{trueFalseSummaryLabel}</strong>
+                    <p>
+                      {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])}
+                      {' · '}
+                      {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
+                    </p>
+                    <small>
+                      Wrong guesses add {formatScore(TRUE_FALSE_WRONG_PENALTY)}. Missing either locked answer adds another {formatScore(TRUE_FALSE_UNANSWERED_PENALTY)}.
+                    </small>
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
+                ) : isThisOrThatGame ? (
+                  <>
+                    <span>Round Result</span>
+                    <strong>{thisOrThatSummaryLabel}</strong>
+                    <p>
+                      {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])}
+                      {' · '}
+                      {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
+                    </p>
+                    <small>
+                      Wrong guesses add {formatScore(THIS_OR_THAT_WRONG_PENALTY)}. Missing either locked answer adds another {formatScore(THIS_OR_THAT_UNANSWERED_PENALTY)}.
+                    </small>
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
                 ) : (
                   <>
                     <span>Round Result</span>
@@ -4182,6 +8658,8 @@ function RoomActiveFrameBase({
                 totalPenalty={liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0}
                 roundPenalty={penaltyPreview[otherPlayer]}
                 isQuizGame={isQuizGame}
+                isTrueFalseGame={isTrueFalseGame}
+                isThisOrThatGame={isThisOrThatGame}
                 totalQuizPoints={quizRevealTotals[otherPlayer]}
               />
             </div>
@@ -4200,7 +8678,7 @@ function RoomActiveFrameBase({
                   draft={chatDraft}
                   onDraftChange={onChatDraftChange}
                   onSend={onSendChat}
-                  isBusy={isBusy}
+                  isBusy={chatIsBusy}
                   seat={chatSeat || currentPlayer}
                   displayName={chatDisplayName || viewerLabel}
                 />
@@ -4245,6 +8723,7 @@ const RoomActiveFrame = memo(RoomActiveFrameBase, (previous, next) => {
     && previous.currentFeedbackValue === next.currentFeedbackValue
     && previous.currentReplayRequested === next.currentReplayRequested
     && previous.isBusy === next.isBusy
+    && previous.chatIsBusy === next.chatIsBusy
     && previous.currentRound?.status === next.currentRound?.status
     && previous.currentRound?.question === next.currentRound?.question
     && previous.currentRound?.category === next.currentRound?.category
@@ -4279,10 +8758,10 @@ function RevealCards({ currentRound }) {
           <span>{answer.displayName || '-'}</span>
         </div>
         <p>
-          <span>My answer:</span> {answer.ownAnswer || '-'}
+          <span>My answer:</span> {formatRoundAnswerValue(answer.ownAnswer, currentRound?.roundType)}
         </p>
         <p>
-          <span>I guessed:</span> {answer.guessedOther || '-'}
+          <span>I guessed:</span> {formatRoundAnswerValue(answer.guessedOther, currentRound?.roundType)}
         </p>
       </article>
     );
@@ -4308,13 +8787,28 @@ function RevealPopup({ currentRound }) {
   );
 }
 
-function ChatPanel({ messages, draft, onDraftChange, onSend, isBusy, seat, displayName, compact = false }) {
+function ChatPanel({
+  messages,
+  draft,
+  onDraftChange,
+  onSend,
+  isBusy,
+  seat,
+  displayName,
+  compact = false,
+  emptyCopy = 'No chat yet. Send a message to the other player here.',
+  placeholderText = '',
+  sendLabel = 'Send',
+}) {
   const chatLogRef = useRef(null);
+  const composerInputRef = useRef(null);
   const chatScrollStateRef = useRef({
     scrollTop: 0,
     nearBottom: true,
     lastMessageId: '',
   });
+  // Guard to prevent double-send when Enter is pressed rapidly or key events fire multiple times
+  const sendLockRef = useRef(false);
 
   const syncChatScrollState = (node, lastMessageId = chatScrollStateRef.current.lastMessageId) => {
     const maxScrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
@@ -4359,6 +8853,29 @@ function ChatPanel({ messages, draft, onDraftChange, onSend, isBusy, seat, displ
     return () => observer.disconnect();
   }, []);
 
+  const submitChatMessage = useCallback((textOverride = '') => {
+    const nextText = String(textOverride || draft || '').trim();
+    if (isBusy || !nextText || sendLockRef.current) return;
+    try {
+      sendLockRef.current = true;
+      const res = onSend(nextText);
+      Promise.resolve(res).finally(() => {
+        sendLockRef.current = false;
+      });
+    } catch (err) {
+      sendLockRef.current = false;
+      throw err;
+    }
+  }, [draft, isBusy, onSend]);
+
+  const handleChatSubmitKeyDown = useCallback((event) => {
+    if (event.nativeEvent?.isComposing) return;
+    if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    submitChatMessage();
+  }, [submitChatMessage]);
+
   const content = (
     <>
       {!compact ? (
@@ -4390,27 +8907,31 @@ function ChatPanel({ messages, draft, onDraftChange, onSend, isBusy, seat, displ
             </article>
           ))
           ) : (
-            <p className="empty-copy">No chat yet. Send a message to the other player here.</p>
+            <p className="empty-copy">{emptyCopy}</p>
           )}
       </div>
 
-      <div className="chat-compose">
+      <form
+        className="chat-compose"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submitChatMessage(composerInputRef.current?.value || '');
+        }}
+      >
         <textarea
+          ref={composerInputRef}
           value={draft}
           onChange={(event) => onDraftChange(event.target.value)}
-          placeholder={`Message as ${displayName || 'player'}`}
+          placeholder={placeholderText || `Message as ${displayName || 'player'}`}
           maxLength={240}
           rows={2}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' || event.shiftKey) return;
-            event.preventDefault();
-            if (!isBusy && draft.trim()) onSend();
-          }}
+          enterKeyHint="send"
+          onKeyDown={handleChatSubmitKeyDown}
         />
-        <Button className="primary-button compact" onClick={onSend} disabled={isBusy || !draft.trim()}>
-          Send
+        <Button type="submit" className="primary-button compact" disabled={isBusy || !draft.trim()}>
+          {sendLabel}
         </Button>
-      </div>
+      </form>
     </>
   );
 
@@ -4419,6 +8940,654 @@ function ChatPanel({ messages, draft, onDraftChange, onSend, isBusy, seat, displ
   }
 
   return <section className="panel chat-panel">{content}</section>;
+}
+
+const HOLDEM_SUIT_SYMBOLS = {
+  s: '♠',
+  h: '♥',
+  d: '♦',
+  c: '♣',
+};
+
+const HOLDEM_PHASE_LABELS = {
+  preflop: 'Pre-Flop',
+  flop: 'Flop',
+  turn: 'Turn',
+  river: 'River',
+  showdown: 'Showdown',
+  complete: 'Hand Complete',
+};
+
+const formatHoldemCardFace = (card = '') => {
+  const rawCard = String(card || '').trim();
+  if (!rawCard) return '';
+  const rank = rawCard.charAt(0).toUpperCase();
+  const suit = rawCard.slice(1, 2).toLowerCase();
+  return `${rank}${HOLDEM_SUIT_SYMBOLS[suit] || suit.toUpperCase()}`;
+};
+
+const holdemCardTone = (card = '') => {
+  const suit = String(card || '').slice(1, 2).toLowerCase();
+  return suit === 'h' || suit === 'd' ? 'is-red' : 'is-black';
+};
+
+function HoldemActionControls({
+  holdemState,
+  viewerSeat,
+  isBusy,
+  startHandBusy = false,
+  onStartHand,
+  onTakeAction,
+}) {
+  const actionState = useMemo(
+    () => getHoldemActionStateFromRules(holdemState || {}, viewerSeat),
+    [holdemState, viewerSeat],
+  );
+  const dealReadyBySeat = holdemState?.dealReadyBySeat || { jay: false, kim: false };
+  const viewerDealReady = Boolean(dealReadyBySeat?.[viewerSeat]);
+  const bothPlayersDealReady = Boolean(dealReadyBySeat.jay && dealReadyBySeat.kim);
+  const isFirstHoldemHand = Number(holdemState?.handNumber || 0) <= 0;
+  const otherSeatWaitingOnDeal = dealReadyBySeat.jay && !dealReadyBySeat.kim
+    ? 'kim'
+    : dealReadyBySeat.kim && !dealReadyBySeat.jay
+      ? 'jay'
+      : '';
+  const draftKey = [
+    holdemState?.handNumber || 0,
+    holdemState?.phase || '',
+    holdemState?.actionSeat || '',
+    actionState.amountToCall || 0,
+    actionState.minBetTo || 0,
+    actionState.minRaiseTo || 0,
+    actionState.maxTotal || 0,
+  ].join(':');
+  const [amountDraft, setAmountDraft] = useState('');
+
+  useEffect(() => {
+    const defaultAmount = actionState.actions.raise
+      ? actionState.minRaiseTo
+      : actionState.actions.bet
+        ? actionState.minBetTo
+        : actionState.maxTotal;
+    setAmountDraft(defaultAmount ? String(defaultAmount) : '');
+  }, [draftKey, actionState.actions.bet, actionState.actions.raise, actionState.maxTotal, actionState.minBetTo, actionState.minRaiseTo]);
+
+  if (!holdemState) return null;
+
+  if (holdemState.sessionStatus === 'waiting_for_players') {
+    return <p className="panel-copy holdem-action-copy">{holdemState.statusMessage || 'Waiting for both players to join.'}</p>;
+  }
+
+  if (holdemState.sessionStatus === 'bankroll_blocked') {
+    return <p className="panel-copy holdem-action-copy">{holdemState.statusMessage || 'Both players need penalty points before the next hand can begin.'}</p>;
+  }
+
+  if (holdemState.sessionStatus === 'ready_to_deal') {
+    return (
+      <div className="holdem-action-stack">
+        <p className="panel-copy holdem-action-copy">
+          {bothPlayersDealReady
+            ? 'Both players are ready. The table is dealing now.'
+            : viewerDealReady && otherSeatWaitingOnDeal
+            ? `You are ready. Waiting for ${PLAYER_LABEL[otherSeatWaitingOnDeal] || otherSeatWaitingOnDeal} to click Deal First Hand.`
+            : isFirstHoldemHand
+              ? 'Use the ready popup to lock in the first hand.'
+              : holdemState.statusMessage || 'Players are seated. Both players must click Deal First Hand to begin.'}
+        </p>
+        {(!isFirstHoldemHand || bothPlayersDealReady) ? (
+          <div className="button-row holdem-action-row">
+            <Button className="primary-button compact" onClick={onStartHand} disabled={startHandBusy || (viewerDealReady && !bothPlayersDealReady)}>
+              {bothPlayersDealReady
+                ? 'Deal Now'
+                : viewerDealReady
+                  ? 'Ready'
+                  : 'Deal Next Hand'}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (holdemState.sessionStatus === 'hand_complete') {
+    const winningSeats = holdemState?.settlement?.winningSeats || [];
+    const resultLabel = winningSeats.length > 1
+      ? 'Pot split'
+      : winningSeats[0]
+        ? `${PLAYER_LABEL[winningSeats[0]] || winningSeats[0]} wins`
+        : 'Hand complete';
+    return (
+      <div className="holdem-action-stack">
+        <p className="panel-copy holdem-action-copy">
+          {resultLabel}. {bothPlayersDealReady
+            ? 'Both players are ready. The next hand should deal now.'
+            : viewerDealReady && otherSeatWaitingOnDeal
+              ? `You are ready for the next hand. Waiting for ${PLAYER_LABEL[otherSeatWaitingOnDeal] || otherSeatWaitingOnDeal}.`
+              : holdemState.statusMessage || 'Review the showdown, then both players can deal the next hand.'}
+        </p>
+        <div className="button-row holdem-action-row">
+          <Button className="primary-button compact" onClick={onStartHand} disabled={startHandBusy || (viewerDealReady && !bothPlayersDealReady)}>
+            {bothPlayersDealReady ? 'Deal Now' : viewerDealReady ? 'Ready' : 'Deal Next Hand'}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!actionState.canAct) {
+    const actingLabel = holdemState?.actionSeat ? PLAYER_LABEL[holdemState.actionSeat] || holdemState.actionSeat : 'the other player';
+    return <p className="panel-copy holdem-action-copy">Waiting for {actingLabel} to act.</p>;
+  }
+
+  return (
+    <div className="holdem-action-stack">
+      <p className="panel-copy holdem-action-copy">
+        {actionState.amountToCall > 0
+          ? `Call ${formatScore(actionState.amountToCall)} to stay in the hand.`
+          : 'No bet to call. You can check or open the action.'}
+      </p>
+      <div className="button-row holdem-action-row">
+        <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'fold' })} disabled={isBusy || !actionState.actions.fold}>
+          Fold
+        </Button>
+        <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'check' })} disabled={isBusy || !actionState.actions.check}>
+          Check
+        </Button>
+        <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'call' })} disabled={isBusy || !actionState.actions.call}>
+          {`Call ${formatScore(actionState.amountToCall)}`}
+        </Button>
+      </div>
+      {(actionState.actions.bet || actionState.actions.raise) ? (
+        <div className="holdem-raise-row">
+          <label className="field">
+            <span>{actionState.actions.raise ? 'Raise To' : 'Bet'}</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={actionState.actions.raise ? actionState.minRaiseTo : actionState.minBetTo}
+              max={actionState.maxTotal}
+              value={amountDraft}
+              onChange={(event) => setAmountDraft(event.target.value)}
+              placeholder={String(actionState.actions.raise ? actionState.minRaiseTo : actionState.minBetTo)}
+            />
+          </label>
+          <div className="button-row holdem-action-row">
+            <Button
+              className="primary-button compact"
+              onClick={() => onTakeAction({ action: actionState.actions.raise ? 'raise' : 'bet', amount: Number(amountDraft || 0) })}
+              disabled={isBusy || !(actionState.actions.bet || actionState.actions.raise)}
+            >
+              {actionState.actions.raise ? 'Raise' : 'Bet'}
+            </Button>
+            <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'all-in' })} disabled={isBusy || !actionState.actions.allIn}>
+              All-In
+            </Button>
+          </div>
+          <p className="field-note">
+            {actionState.actions.raise
+              ? `Minimum raise to ${formatScore(actionState.minRaiseTo)}. Maximum ${formatScore(actionState.maxTotal)}.`
+              : `Minimum bet ${formatScore(actionState.minBetTo)}. Maximum ${formatScore(actionState.maxTotal)}.`}
+          </p>
+        </div>
+      ) : (
+        <div className="button-row holdem-action-row">
+          <Button className="ghost-button compact" onClick={() => onTakeAction({ action: 'all-in' })} disabled={isBusy || !actionState.actions.allIn}>
+            All-In
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HoldemReadyModal({
+  holdemState,
+  viewerSeat,
+  startHandBusy = false,
+  onStartHand,
+}) {
+  if (!holdemState || holdemState.sessionStatus !== 'ready_to_deal' || Number(holdemState.handNumber || 0) > 0) {
+    return null;
+  }
+
+  const dealReadyBySeat = holdemState?.dealReadyBySeat || { jay: false, kim: false };
+  const viewerDealReady = Boolean(dealReadyBySeat?.[viewerSeat]);
+  const bothPlayersDealReady = Boolean(dealReadyBySeat.jay && dealReadyBySeat.kim);
+  const waitingSeat = dealReadyBySeat.jay && !dealReadyBySeat.kim
+    ? 'kim'
+    : dealReadyBySeat.kim && !dealReadyBySeat.jay
+      ? 'jay'
+      : '';
+  const title = bothPlayersDealReady
+    ? 'Both Players Ready'
+    : viewerDealReady
+      ? 'Ready Locked In'
+      : 'Ready For First Hand';
+  const body = bothPlayersDealReady
+    ? 'Both players have clicked ready. The cards should deal immediately, and you can tap below to retry the deal if the table is still waiting.'
+    : viewerDealReady && waitingSeat
+      ? `Your ready click is locked in. Waiting for ${PLAYER_LABEL[waitingSeat] || waitingSeat} to confirm the first hand.`
+      : 'Both players need to click ready before the first Hold’em hand will be dealt.';
+
+  return (
+    <section className="modal-backdrop holdem-ready-modal-backdrop" role="presentation">
+      <div
+        className="panel modal-panel holdem-ready-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Ready for first hand"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Texas Hold'em</p>
+            <h2>{title}</h2>
+          </div>
+          <span className="status-pill">
+            {viewerDealReady ? 'Ready' : 'Waiting'}
+          </span>
+        </div>
+        <p className="panel-copy">{body}</p>
+        <div className="holdem-ready-modal-status">
+          {seats.map((seatName) => (
+            <article className="mini-list-row" key={`holdem-ready-seat-${seatName}`}>
+              <strong>{PLAYER_LABEL[seatName] || seatName}</strong>
+              <span>{dealReadyBySeat?.[seatName] ? 'Ready' : 'Waiting'}</span>
+            </article>
+          ))}
+        </div>
+        <div className="button-row holdem-ready-modal-actions">
+          <Button className="primary-button compact" onClick={onStartHand} disabled={startHandBusy || (viewerDealReady && !bothPlayersDealReady)}>
+            {bothPlayersDealReady
+              ? 'Deal Cards Now'
+              : viewerDealReady
+                ? 'Ready Locked'
+                : 'Ready For First Hand'}
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function HoldemTable({
+  game,
+  viewerSeat,
+  editingModeEnabled,
+  isBusy,
+  startHandBusy = false,
+  onStartHand,
+  onTakeAction,
+}) {
+  const holdemState = game?.holdemState || null;
+  const communityCards = getHoldemVisibleCommunityCards(holdemState || {});
+  const showAllCards = editingModeEnabled || isLocalTestGame(game) || holdemState?.sessionStatus === 'hand_complete';
+  const displayedStacks = {
+    jay: holdemState?.sessionStatus === 'hand_live'
+      ? Number(holdemState?.players?.jay?.stack || 0)
+      : Number(holdemState?.lastSettledBalances?.jay || holdemState?.players?.jay?.stack || 0),
+    kim: holdemState?.sessionStatus === 'hand_live'
+      ? Number(holdemState?.players?.kim?.stack || 0)
+      : Number(holdemState?.lastSettledBalances?.kim || holdemState?.players?.kim?.stack || 0),
+  };
+  const currentBet = Number(holdemState?.currentBet || 0);
+  const potTotal = Number(holdemState?.potTotal || 0);
+  const phaseLabel = HOLDEM_PHASE_LABELS[holdemState?.phase] || 'Waiting';
+  const winningSeats = holdemState?.settlement?.winningSeats || [];
+
+  return (
+    <section className="panel room-panel holdem-table-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Texas Hold'em</p>
+          <h2>Poker Table</h2>
+        </div>
+        <span className="status-pill">{phaseLabel}</span>
+      </div>
+
+      <div className="holdem-status-grid">
+        <article className="stat-tile">
+          <small>Hand</small>
+          <strong>{Number(holdemState?.handNumber || 0)}</strong>
+          <span>{holdemState?.sessionStatus === 'hand_live' ? 'in progress' : 'ready status'}</span>
+        </article>
+        <article className="stat-tile">
+          <small>Pot</small>
+          <strong>{formatScore(potTotal)}</strong>
+          <span>chips in the middle</span>
+        </article>
+        <article className="stat-tile">
+          <small>Current Bet</small>
+          <strong>{formatScore(currentBet)}</strong>
+          <span>big blind is {formatScore(HOLDEM_BIG_BLIND)}</span>
+        </article>
+      </div>
+
+      <div className="holdem-table-surface">
+        <article className={`holdem-player-panel holdem-player-panel--kim ${holdemState?.actionSeat === 'kim' ? 'is-acting' : ''} ${winningSeats.includes('kim') ? 'is-winning' : ''}`}>
+          <div className="holdem-player-head">
+            <div>
+              <span className="holdem-player-badges">
+                {holdemState?.dealerSeat === 'kim' ? <span className="status-pill">Button</span> : null}
+                {holdemState?.smallBlindSeat === 'kim' ? <span className="status-pill">Small Blind {formatScore(HOLDEM_SMALL_BLIND)}</span> : null}
+                {holdemState?.bigBlindSeat === 'kim' ? <span className="status-pill">Big Blind {formatScore(HOLDEM_BIG_BLIND)}</span> : null}
+              </span>
+              <h3>Kim</h3>
+            </div>
+            <strong>{formatScore(displayedStacks.kim)}</strong>
+          </div>
+          <div className="holdem-card-row">
+            {(holdemState?.players?.kim?.holeCards || ['', '']).map((card, index) => {
+              const revealCard = showAllCards || viewerSeat === 'kim';
+              return (
+                <span key={`kim-card-${index + 1}`} className={`holdem-card ${revealCard ? holdemCardTone(card) : 'is-hidden'}`}>
+                  {revealCard ? formatHoldemCardFace(card) : '??'}
+                </span>
+              );
+            })}
+          </div>
+          <small>{`Available balance ${formatScore(displayedStacks.kim)} · Committed ${formatScore(Number(holdemState?.players?.kim?.totalCommitted || 0))}`}</small>
+        </article>
+
+        <div className="holdem-board-panel">
+          <div className="holdem-board-pot">
+            <span className="status-pill">{holdemState?.statusMessage || 'Table ready'}</span>
+          </div>
+          <div className="holdem-community-row" aria-label="Community cards">
+            {[0, 1, 2, 3, 4].map((index) => {
+              const card = communityCards[index] || '';
+              const revealed = Boolean(card);
+              return (
+                <span key={`community-card-${index + 1}`} className={`holdem-card holdem-card--community ${revealed ? holdemCardTone(card) : 'is-hidden'}`}>
+                  {revealed ? formatHoldemCardFace(card) : '??'}
+                </span>
+              );
+            })}
+          </div>
+          {holdemState?.settlement?.reason === 'showdown' ? (
+            <div className="holdem-showdown-grid">
+              {(['jay', 'kim']).map((seat) => {
+                const hand = holdemState?.settlement?.evaluations?.[seat] || null;
+                if (!hand) return null;
+                return (
+                  <article className="mini-list-row" key={`showdown-${seat}`}>
+                    <strong>{PLAYER_LABEL[seat] || seat}</strong>
+                    <span>{hand.description || hand.label || 'Made hand'}</span>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+          <section className="holdem-board-controls">
+            <div className="mini-heading">
+              <div>
+                <span>Action Controls</span>
+                <h3>{holdemState?.actionSeat ? `${PLAYER_LABEL[holdemState.actionSeat] || holdemState.actionSeat} to act` : 'Table Controls'}</h3>
+              </div>
+            </div>
+            <HoldemActionControls
+              holdemState={holdemState}
+              viewerSeat={viewerSeat}
+              isBusy={isBusy}
+              startHandBusy={startHandBusy}
+              onStartHand={onStartHand}
+              onTakeAction={onTakeAction}
+            />
+          </section>
+        </div>
+
+        <article className={`holdem-player-panel holdem-player-panel--jay ${holdemState?.actionSeat === 'jay' ? 'is-acting' : ''} ${winningSeats.includes('jay') ? 'is-winning' : ''}`}>
+          <div className="holdem-player-head">
+            <div>
+              <span className="holdem-player-badges">
+                {holdemState?.dealerSeat === 'jay' ? <span className="status-pill">Button</span> : null}
+                {holdemState?.smallBlindSeat === 'jay' ? <span className="status-pill">Small Blind {formatScore(HOLDEM_SMALL_BLIND)}</span> : null}
+                {holdemState?.bigBlindSeat === 'jay' ? <span className="status-pill">Big Blind {formatScore(HOLDEM_BIG_BLIND)}</span> : null}
+              </span>
+              <h3>Jay</h3>
+            </div>
+            <strong>{formatScore(displayedStacks.jay)}</strong>
+          </div>
+          <div className="holdem-card-row">
+            {(holdemState?.players?.jay?.holeCards || ['', '']).map((card, index) => {
+              const revealCard = showAllCards || viewerSeat === 'jay';
+              return (
+                <span key={`jay-card-${index + 1}`} className={`holdem-card ${revealCard ? holdemCardTone(card) : 'is-hidden'}`}>
+                  {revealCard ? formatHoldemCardFace(card) : '??'}
+                </span>
+              );
+            })}
+          </div>
+          <small>{`Available balance ${formatScore(displayedStacks.jay)} · Committed ${formatScore(Number(holdemState?.players?.jay?.totalCommitted || 0))}`}</small>
+        </article>
+      </div>
+    </section>
+  );
+}
+
+function HoldemGameRoom({
+  user,
+  profile,
+  game,
+  playerAccounts,
+  editingModeEnabled,
+  onToggleEditingMode,
+  role,
+  seat,
+  onLeaveGame,
+  onEndGame,
+  onSignOut,
+  isBusy,
+  notice,
+  chatMessages,
+  chatDraft,
+  setChatDraft,
+  onSendChat,
+  chatIsBusy,
+  confirmAction,
+  onConfirmAction,
+  onCancelAction,
+  holdemStartBusy = false,
+  onStartHoldemHand,
+  onTakeHoldemAction,
+}) {
+  const activePalette = PALETTES[loadThemeIndex() % PALETTES.length];
+  const isMobile = useMediaQuery('(max-width: 900px)');
+  const resolvedViewerSeat = seatForUid(game, user?.uid)
+    || (seat === 'kim' ? 'kim' : seat === 'jay' ? 'jay' : null)
+    || inferSeatFromUser(user, profile)
+    || 'jay';
+  const viewerLabel = gameSeatDisplayName(game, resolvedViewerSeat, null);
+  const holdemState = game?.holdemState || null;
+  const displayedBalances = {
+    jay: holdemState?.sessionStatus === 'hand_live'
+      ? Number(holdemState?.players?.jay?.stack || 0)
+      : Number(holdemState?.lastSettledBalances?.jay || holdemState?.players?.jay?.stack || playerAccounts?.jay?.lifetimePenaltyPoints || 0),
+    kim: holdemState?.sessionStatus === 'hand_live'
+      ? Number(holdemState?.players?.kim?.stack || 0)
+      : Number(holdemState?.lastSettledBalances?.kim || holdemState?.players?.kim?.stack || playerAccounts?.kim?.lifetimePenaltyPoints || 0),
+  };
+  const roomMenuRef = useRef(null);
+  const autoDealAttemptRef = useRef('');
+  const readySeats = holdemState?.dealReadyBySeat || { jay: false, kim: false };
+  const bothPlayersDealReady = Boolean(readySeats.jay && readySeats.kim);
+  const shouldAutoRetryReadyDeal = Boolean(
+    game?.id
+    && bothPlayersDealReady
+    && (holdemState?.sessionStatus === 'ready_to_deal' || holdemState?.sessionStatus === 'hand_complete'),
+  );
+  const autoDealAttemptKey = [
+    game?.id || '',
+    holdemState?.sessionStatus || '',
+    Number(holdemState?.handNumber || 0),
+    Number(readySeats.jay),
+    Number(readySeats.kim),
+  ].join(':');
+
+  useEffect(() => {
+    if (!shouldAutoRetryReadyDeal || holdemStartBusy || typeof onStartHoldemHand !== 'function') return;
+    if (autoDealAttemptRef.current === autoDealAttemptKey) return;
+    autoDealAttemptRef.current = autoDealAttemptKey;
+    Promise.resolve(onStartHoldemHand()).catch((error) => {
+      console.warn('Could not auto-start the ready Hold’em hand.', error);
+      autoDealAttemptRef.current = '';
+    });
+  }, [autoDealAttemptKey, holdemStartBusy, onStartHoldemHand, shouldAutoRetryReadyDeal]);
+
+  useEffect(() => {
+    if (!shouldAutoRetryReadyDeal) autoDealAttemptRef.current = '';
+  }, [shouldAutoRetryReadyDeal]);
+
+  const closeRoomMenu = () => {
+    roomMenuRef.current?.removeAttribute('open');
+  };
+  const handleToggleEditingModeFromRoomMenu = () => {
+    closeRoomMenu();
+    onToggleEditingMode();
+  };
+  const handleSignOutFromRoomMenu = () => {
+    closeRoomMenu();
+    onSignOut();
+  };
+  const gameEnded = game?.status === 'ended' || game?.status === 'completed';
+  const showTestModeBanner = editingModeEnabled || isLocalTestGame(game);
+  const roomPlayerScorePills = (
+    <div className="room-player-score-pills" aria-label="Texas Hold’em balances">
+      {seats.map((playerSeat) => (
+        <span className={`status-pill room-player-score-pill room-player-score-pill--${playerSeat}`} key={`holdem-score-${playerSeat}`}>
+          <SeatFlag seat={playerSeat} className="dashboard-balance-flag" />
+          <span className="room-player-score-pill__name">{PLAYER_LABEL[playerSeat] || playerSeat}</span>
+          <strong>{formatScore(displayedBalances[playerSeat])}</strong>
+        </span>
+      ))}
+    </div>
+  );
+
+  return (
+    <main className={`app production-app ${isMobile ? 'mobile-app' : ''}`} style={{ '--accent': activePalette.accent, '--accent-2': activePalette.accent2, '--accent-3': activePalette.accent3, '--accent-glow': activePalette.glow, '--accent-wash': activePalette.wash }}>
+      <header className="top-bar top-bar--room">
+        <div className="top-bar-left">
+          <div className="brand-lockup brand-lockup--left">
+            <p className="eyebrow sponsor-tag">Game {game?.joinCode || '------'}</p>
+            <h1><span className="brand-mobile-mark">92.1 JKC Radio</span><span className="brand-full-text">KJK KIMJAYKINKS</span></h1>
+          </div>
+        </div>
+        <div className="top-actions top-actions--room">
+          {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
+          {roomPlayerScorePills}
+          {!gameEnded ? (
+            <Button className="ghost-button compact room-end-game-button" onClick={onEndGame}>
+              End Game
+            </Button>
+          ) : null}
+          <Button className="ghost-button compact" onClick={onLeaveGame}>
+            Leave
+          </Button>
+          <details className="top-menu settings-menu room-settings-menu" ref={roomMenuRef}>
+            <summary aria-label="Open room actions">
+              <span className="settings-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                  <path d="M5 7.5h14M5 12h14M5 16.5h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              </span>
+              <span className="settings-label">More</span>
+            </summary>
+            <div className="top-menu-panel settings-menu-panel room-settings-menu-panel">
+              <section className="settings-menu-section">
+                <span className="settings-section-label">Room Actions</span>
+                <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromRoomMenu} disabled={isBusy}>
+                  {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
+                </Button>
+                <Button className="ghost-button compact" onClick={handleSignOutFromRoomMenu}>
+                  Sign out
+                </Button>
+              </section>
+            </div>
+          </details>
+        </div>
+      </header>
+
+      {showTestModeBanner ? (
+        <section className="editing-mode-banner editing-mode-banner--room" role="status" aria-live="polite">
+          <strong>TEST MODE / EDITING MODE</strong>
+          <span>
+            {isLocalTestGame(game)
+              ? 'This Hold’em room is local only. Hand results are not written to live totals, analytics, or session history.'
+              : 'Editing Mode is enabled. New Hold’em sessions can still use the live table, but test-room creates stay local only.'}
+          </span>
+        </section>
+      ) : null}
+
+      {gameEnded ? (
+        <section className="mobile-game-shell">
+          <section className="panel game-complete-panel">
+            <GameSummaryContent
+              gameSummary={game}
+              categoryColorMap={categoryColorMap}
+              showActions
+              onClose={onLeaveGame}
+              onBackToLobby={onLeaveGame}
+              onViewOverallAnalytics={() => {
+                safeLocalStorageSet('kjk-dashboard-tab', 'analytics');
+                onLeaveGame();
+              }}
+            />
+          </section>
+        </section>
+      ) : (
+        <section className="holdem-room-layout">
+          <div className="holdem-room-main">
+            <HoldemTable
+              game={game}
+              viewerSeat={resolvedViewerSeat}
+              editingModeEnabled={editingModeEnabled}
+              isBusy={isBusy}
+              startHandBusy={holdemStartBusy}
+              onStartHand={onStartHoldemHand}
+              onTakeAction={onTakeHoldemAction}
+            />
+          </div>
+          <div className="holdem-room-side">
+            <section className="panel room-status-panel holdem-room-status">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Seat</p>
+                  <h2>{viewerLabel}</h2>
+                </div>
+                <span className="status-pill">{holdemState?.actionSeat === resolvedViewerSeat ? 'Your turn' : 'Watching'}</span>
+              </div>
+              <p className="panel-copy">
+                {holdemState?.sessionStatus === 'hand_live'
+                  ? `You are seated as ${PLAYER_LABEL[resolvedViewerSeat] || resolvedViewerSeat}. Use your penalty points as your Hold’em bankroll for this hand.`
+                  : holdemState?.statusMessage || 'The table is waiting for the next hand.'}
+              </p>
+            </section>
+            <ChatPanel
+              messages={chatMessages}
+              draft={chatDraft}
+              onDraftChange={setChatDraft}
+              onSend={onSendChat}
+              isBusy={chatIsBusy}
+              seat={resolvedViewerSeat}
+              displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+              compact={false}
+              emptyCopy="No Hold’em chat yet. Send a message to the other player here."
+              placeholderText="Message at the poker table"
+              sendLabel="Send"
+            />
+          </div>
+        </section>
+      )}
+      {notice ? <div className="toast">{notice}</div> : null}
+      <HoldemReadyModal
+        holdemState={holdemState}
+        viewerSeat={resolvedViewerSeat}
+        startHandBusy={holdemStartBusy}
+        onStartHand={onStartHoldemHand}
+      />
+      <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
+    </main>
+  );
 }
 
 function GameSummaryContent({
@@ -4432,7 +9601,63 @@ function GameSummaryContent({
 }) {
   const summaryRounds = useMemo(() => normalizeStoredRounds(gameSummary?.rounds || []), [gameSummary?.rounds]);
   const summaryAnalytics = useMemo(() => calculateAnalytics(summaryRounds), [summaryRounds]);
-  const finalScores = gameSummary?.finalScores || gameSummary?.totals || summaryAnalytics.totals || { jay: 0, kim: 0 };
+  const isHoldemGame = isHoldemGameMode(gameSummary?.gameMode || 'standard');
+  const isTrueFalseGame = isTrueFalseGameMode(gameSummary?.gameMode || 'standard');
+  const holdemStats = gameSummary?.holdemStats || defaultHoldemStats();
+  const holdemState = gameSummary?.holdemState || null;
+  const finalScores = isHoldemGame
+    ? (gameSummary?.finalScores || gameSummary?.totals || holdemState?.lastSettledBalances || { jay: 0, kim: 0 })
+    : (gameSummary?.finalScores || gameSummary?.totals || summaryAnalytics.totals || { jay: 0, kim: 0 });
+  const isQuizGame = (gameSummary?.gameMode || 'standard') === 'quiz';
+  const trueFalseRoundRows = useMemo(
+    () => summaryRounds.map((round) => ({ round, outcome: buildTrueFalseRoundOutcome(round) })),
+    [summaryRounds],
+  );
+  const trueFalseCategoryRows = useMemo(() => {
+    const rowsByCategory = new Map();
+    trueFalseRoundRows.forEach(({ round, outcome }) => {
+      const categoryKey = normalizeText(round?.category) || 'uncategorised';
+      const entry = rowsByCategory.get(categoryKey) || {
+        category: round?.category || 'Uncategorised',
+        rounds: 0,
+        jayCorrect: 0,
+        kimCorrect: 0,
+        jayPenalty: 0,
+        kimPenalty: 0,
+      };
+      entry.rounds += 1;
+      entry.jayCorrect += outcome.jayCorrect ? 1 : 0;
+      entry.kimCorrect += outcome.kimCorrect ? 1 : 0;
+      entry.jayPenalty += Number(outcome.jayPenalty || 0);
+      entry.kimPenalty += Number(outcome.kimPenalty || 0);
+      rowsByCategory.set(categoryKey, entry);
+    });
+    return [...rowsByCategory.values()].sort((left, right) => right.rounds - left.rounds);
+  }, [trueFalseRoundRows]);
+  const trueFalseCorrectTotals = useMemo(
+    () =>
+      trueFalseRoundRows.reduce(
+        (totals, entry) => ({
+          jay: totals.jay + (entry.outcome.jayCorrect ? 1 : 0),
+          kim: totals.kim + (entry.outcome.kimCorrect ? 1 : 0),
+        }),
+        { jay: 0, kim: 0 },
+      ),
+    [trueFalseRoundRows],
+  );
+  const quizTotals = gameSummary?.quizTotals || { jay: 0, kim: 0 };
+  const completedCount = isHoldemGame
+    ? Math.max(0, Number(holdemStats?.handsPlayed || gameSummary?.roundsPlayed || 0))
+    : summaryRounds.length;
+  const wagerSettlement = gameSummary?.wagerSettlement || null;
+  const sharedWagerAmount = wagerSettlement
+    ? Math.max(
+        0,
+        Number(wagerSettlement.sharedWager || 0),
+        Number(wagerSettlement.jayWager || 0),
+        Number(wagerSettlement.kimWager || 0),
+      )
+    : 0;
   const summaryScrollRef = useRef(null);
   const summaryScrollKey = [
     gameSummary?.id,
@@ -4441,15 +9666,39 @@ function GameSummaryContent({
     gameSummary?.endedAt,
     gameSummary?.updatedAt,
   ].filter(Boolean).join(':');
-  const winner =
-    gameSummary?.winner ||
-    (Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
-      ? 'tie'
-      : Number(finalScores.jay || 0) < Number(finalScores.kim || 0)
-        ? 'jay'
-        : 'kim');
+  const jayWonSummary = isHoldemGame
+    ? getHoldemSessionWinner(holdemStats, finalScores) === 'jay'
+    : Number(finalScores.jay || 0) < Number(finalScores.kim || 0);
+  const winner = isHoldemGame
+    ? getHoldemSessionWinner(holdemStats, finalScores)
+    : (
+      gameSummary?.winner ||
+      (Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
+        ? 'tie'
+        : jayWonSummary
+          ? 'jay'
+          : 'kim')
+    );
   const gameLabel = gameSummary?.gameName || gameSummary?.name || gameSummary?.joinCode || 'Game summary';
   const completedLabel = formatShortDateTime(gameSummary?.endedAt || gameSummary?.updatedAt || gameSummary?.createdAt);
+  const lastHoldemSettlement = holdemState?.settlement || holdemState?.showdown || null;
+  const holdemResultLabel = lastHoldemSettlement?.winningSeats?.length > 1
+    ? 'Split pot'
+    : lastHoldemSettlement?.winningSeats?.[0]
+      ? `${PLAYER_LABEL[lastHoldemSettlement.winningSeats[0]] || lastHoldemSettlement.winningSeats[0]} won the last hand`
+      : 'No settled hand yet';
+  const holdemOutcomeRows = [
+    { label: 'Hands won by Jay', value: holdemStats.handsWonJay },
+    { label: 'Hands won by Kim', value: holdemStats.handsWonKim },
+    { label: 'Hands split', value: holdemStats.handsSplit },
+    { label: 'Fold wins', value: holdemStats.foldWins },
+    { label: 'Showdown wins', value: holdemStats.showdownWins },
+    { label: 'All-ins', value: holdemStats.allIns },
+    { label: 'Total wagered', value: formatScore(holdemStats.totalPointsWagered) },
+    { label: 'Biggest pot', value: formatScore(holdemStats.biggestPot) },
+    { label: 'Jay net movement', value: formatScore(holdemStats.netMovementJay) },
+    { label: 'Kim net movement', value: formatScore(holdemStats.netMovementKim) },
+  ];
 
   useEffect(() => {
     const resetScroll = () => {
@@ -4470,8 +9719,14 @@ function GameSummaryContent({
           <h2>{gameLabel}</h2>
           <div className="game-summary-meta">
             <span className="game-summary-meta-pill">Completed {completedLabel}</span>
-            <span className="game-summary-meta-pill">{summaryRounds.length} {summaryRounds.length === 1 ? 'round' : 'rounds'} played</span>
+            <span className="game-summary-meta-pill">{completedCount} {completedCount === 1 ? (isHoldemGame ? 'hand' : 'round') : (isHoldemGame ? 'hands' : 'rounds')} played</span>
             <span className="game-summary-meta-pill">{winner === 'tie' ? 'Tied game' : `${PLAYER_LABEL[winner] || winner} won`}</span>
+            {isQuizGame && sharedWagerAmount > 0 ? (
+              <span className="game-summary-meta-pill">{`Played for ${formatScore(sharedWagerAmount)}`}</span>
+            ) : null}
+            {isHoldemGame ? (
+              <span className="game-summary-meta-pill">{`Biggest pot ${formatScore(holdemStats.biggestPot)}`}</span>
+            ) : null}
           </div>
         </div>
         <div className="game-summary-header-actions">
@@ -4497,9 +9752,33 @@ function GameSummaryContent({
 
               <div className="summary-scoreboard">
                 <div className="stat-tile"><small>Winner</small><strong>{winner === 'tie' ? 'Tie' : PLAYER_LABEL[winner] || winner}</strong></div>
-                <div className="stat-tile"><small>Questions</small><strong>{summaryRounds.length}</strong></div>
-                <div className="stat-tile"><small>Jay Final</small><strong>{formatScore(finalScores.jay || 0)}</strong></div>
-                <div className="stat-tile"><small>Kim Final</small><strong>{formatScore(finalScores.kim || 0)}</strong></div>
+                <div className="stat-tile"><small>{isHoldemGame ? 'Hands' : 'Questions'}</small><strong>{completedCount}</strong></div>
+                {isHoldemGame ? (
+                  <>
+                    <div className="stat-tile"><small>Total Wagered</small><strong>{formatScore(holdemStats.totalPointsWagered || 0)}</strong></div>
+                    <div className="stat-tile"><small>Biggest Pot</small><strong>{formatScore(holdemStats.biggestPot || 0)}</strong></div>
+                    <div className="stat-tile"><small>Jay Final</small><strong>{formatScore(finalScores.jay || 0)}</strong></div>
+                    <div className="stat-tile"><small>Kim Final</small><strong>{formatScore(finalScores.kim || 0)}</strong></div>
+                  </>
+                ) : isTrueFalseGame ? (
+                  <>
+                    <div className="stat-tile"><small>Jay Correct</small><strong>{trueFalseCorrectTotals.jay}</strong></div>
+                    <div className="stat-tile"><small>Kim Correct</small><strong>{trueFalseCorrectTotals.kim}</strong></div>
+                    <div className="stat-tile"><small>Jay Penalty</small><strong>{formatScore(finalScores.jay || 0)}</strong></div>
+                    <div className="stat-tile"><small>Kim Penalty</small><strong>{formatScore(finalScores.kim || 0)}</strong></div>
+                  </>
+                ) : isQuizGame ? (
+                  <>
+                    <div className="stat-tile"><small>Played For</small><strong>{formatScore(sharedWagerAmount || 0)}</strong></div>
+                    <div className="stat-tile"><small>Jay Quiz</small><strong>{formatScore(quizTotals.jay || 0)}</strong></div>
+                    <div className="stat-tile"><small>Kim Quiz</small><strong>{formatScore(quizTotals.kim || 0)}</strong></div>
+                  </>
+                ) : (
+                  <>
+                    <div className="stat-tile"><small>Jay Final</small><strong>{formatScore(finalScores.jay || 0)}</strong></div>
+                    <div className="stat-tile"><small>Kim Final</small><strong>{formatScore(finalScores.kim || 0)}</strong></div>
+                  </>
+                )}
               </div>
 
               {showActions ? (
@@ -4514,69 +9793,211 @@ function GameSummaryContent({
               ) : null}
             </section>
 
-            <section className="game-summary-section">
-              <div className="mini-heading">
-                <div>
-                  <span>Round History</span>
-                  <h3>Every Question</h3>
-                </div>
-              </div>
-              <div className="summary-list">
-                {summaryRounds.length ? (
-                  summaryRounds.map((round, index) => (
-                    <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
-                      <strong>Round {index + 1}</strong>
-                      <span>{round.question}</span>
-                      <small>
-                        Jay {formatScore(round.penaltyAdded?.jay || 0)} · Kim {formatScore(round.penaltyAdded?.kim || 0)} · Winner {round.winner || 'tie'}
-                      </small>
-                      <small>
-                        Jay answered {round.actualAnswers?.jay || '-'} / guessed {round.guessedAnswers?.jay || '-'}
-                      </small>
-                      <small>
-                        Kim answered {round.actualAnswers?.kim || '-'} / guessed {round.guessedAnswers?.kim || '-'}
-                      </small>
-                    </article>
-                  ))
-                ) : (
-                  <p className="empty-copy">No rounds were archived for this game.</p>
-                )}
-              </div>
-            </section>
+            {isHoldemGame ? (
+              <>
+                <section className="game-summary-section">
+                  <div className="mini-heading">
+                    <div>
+                      <span>Texas Hold Em</span>
+                      <h3>Session Results</h3>
+                    </div>
+                  </div>
+                  <div className="summary-list">
+                    {holdemOutcomeRows.map((row) => (
+                      <article className="mini-list-row" key={row.label}>
+                        <strong>{row.label}</strong>
+                        <span>{row.value}</span>
+                      </article>
+                    ))}
+                  </div>
+                </section>
 
-            <section className="game-summary-section">
-              <div className="mini-heading">
-                <div>
-                  <span>Category Breakdown</span>
-                  <h3>How The Game Broke Down</h3>
-                </div>
-              </div>
-              <div className="summary-list">
-                {summaryAnalytics.categoryRows?.length ? (
-                  summaryAnalytics.categoryRows.map((row) => (
-                    <article className="mini-list-row" key={row.category}>
-                      <strong>{row.category}</strong>
-                      <span>Rounds {row.rounds}</span>
-                      <small>Jay {formatScore(row.totals.jay)} · Kim {formatScore(row.totals.kim)} · Winner {row.winner}</small>
+                <section className="game-summary-section">
+                  <div className="mini-heading">
+                    <div>
+                      <span>Last Hand</span>
+                      <h3>{holdemResultLabel}</h3>
+                    </div>
+                  </div>
+                  <div className="summary-list">
+                    <article className="mini-list-row">
+                      <strong>Result</strong>
+                      <span>{lastHoldemSettlement?.reason === 'fold' ? 'Won by fold' : lastHoldemSettlement?.reason === 'showdown' ? 'Showdown' : 'No showdown saved'}</span>
                     </article>
-                  ))
-                ) : (
-                  <p className="empty-copy">No category breakdown is available for this game yet.</p>
-                )}
-              </div>
-            </section>
+                    {(['jay', 'kim']).map((seat) => {
+                      const hand = lastHoldemSettlement?.evaluations?.[seat] || null;
+                      return (
+                        <article className="mini-list-row" key={`holdem-last-${seat}`}>
+                          <strong>{PLAYER_LABEL[seat] || seat}</strong>
+                          <span>{hand?.description || hand?.label || (lastHoldemSettlement ? 'Folded before showdown' : 'No settled hand yet')}</span>
+                        </article>
+                      );
+                    })}
+                    <article className="mini-list-row">
+                      <strong>Payout</strong>
+                      <span>{`Jay ${formatScore(lastHoldemSettlement?.payouts?.jay || 0)} · Kim ${formatScore(lastHoldemSettlement?.payouts?.kim || 0)}`}</span>
+                    </article>
+                  </div>
+                </section>
+              </>
+            ) : (
+              <>
+                <section className="game-summary-section">
+                  <div className="mini-heading">
+                    <div>
+                      <span>Round History</span>
+                      <h3>Every Question</h3>
+                    </div>
+                  </div>
+                  <div className="summary-list">
+                    {summaryRounds.length ? (
+                      isTrueFalseGame ? (
+                        trueFalseRoundRows.map(({ round, outcome }, index) => {
+                          const metadataEntries = buildRoundMetadataEntries(round);
+                          return (
+                            <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
+                              <strong>Round {index + 1}</strong>
+                              <span>{round.question}</span>
+                              <small>{`Jay guessed ${outcome.jayGuess || 'No answer'} / Kim said ${outcome.kimActual || 'No answer'} · ${outcome.jayCorrect ? 'Jay was correct' : `Jay +${formatScore(outcome.jayPenalty)}`}`}</small>
+                              <small>{`Kim guessed ${outcome.kimGuess || 'No answer'} / Jay said ${outcome.jayActual || 'No answer'} · ${outcome.kimCorrect ? 'Kim was correct' : `Kim +${formatScore(outcome.kimPenalty)}`}`}</small>
+                              {metadataEntries.length ? (
+                                <details className="round-metadata-details">
+                                  <summary className="round-metadata-summary">Question metadata</summary>
+                                  <div className="round-metadata-grid">
+                                    {metadataEntries.map((entry) => (
+                                      <div className="round-metadata-row" key={`${round.id || round.questionId || index}-${entry.label}`}>
+                                        <strong>{entry.label}</strong>
+                                        {entry.items?.length ? (
+                                          <div className="round-metadata-pills">
+                                            {entry.items.map((item) => (
+                                              <span className="filter-chip round-metadata-pill" key={`${entry.label}-${item}`}>{item}</span>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <span className="round-metadata-value">{entry.value}</span>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </details>
+                              ) : null}
+                            </article>
+                          );
+                        })
+                      ) : (
+                        summaryRounds.map((round, index) => {
+                          const metadataEntries = buildRoundMetadataEntries(round);
+                          return (
+                            <article className="mini-list-row" key={round.id || `${round.questionId || 'round'}-${index + 1}`}>
+                              <strong>Round {index + 1}</strong>
+                              <span>{round.question}</span>
+                              <small>
+                                Jay {formatScore(round.penaltyAdded?.jay || 0)} · Kim {formatScore(round.penaltyAdded?.kim || 0)} · Winner {round.winner || 'tie'}
+                              </small>
+                              <small>
+                                Jay answered {formatRoundAnswerValue(round.actualAnswers?.jay, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.jay, round.roundType)}
+                              </small>
+                              <small>
+                                Kim answered {formatRoundAnswerValue(round.actualAnswers?.kim, round.roundType)} / guessed {formatRoundAnswerValue(round.guessedAnswers?.kim, round.roundType)}
+                              </small>
+                              {metadataEntries.length ? (
+                                <details className="round-metadata-details">
+                                  <summary className="round-metadata-summary">Question metadata</summary>
+                                  <div className="round-metadata-grid">
+                                    {metadataEntries.map((entry) => (
+                                      <div className="round-metadata-row" key={`${round.id || round.questionId || index}-${entry.label}`}>
+                                        <strong>{entry.label}</strong>
+                                        {entry.items?.length ? (
+                                          <div className="round-metadata-pills">
+                                            {entry.items.map((item) => (
+                                              <span className="filter-chip round-metadata-pill" key={`${entry.label}-${item}`}>{item}</span>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <span className="round-metadata-value">{entry.value}</span>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </details>
+                              ) : null}
+                            </article>
+                          );
+                        })
+                      )
+                    ) : (
+                      <p className="empty-copy">No rounds were archived for this game.</p>
+                    )}
+                  </div>
+                </section>
+
+                <section className="game-summary-section">
+                  <div className="mini-heading">
+                    <div>
+                      <span>Category Breakdown</span>
+                      <h3>How The Game Broke Down</h3>
+                    </div>
+                  </div>
+                  <div className="summary-list">
+                    {(isTrueFalseGame ? trueFalseCategoryRows : summaryAnalytics.categoryRows)?.length ? (
+                      (isTrueFalseGame ? trueFalseCategoryRows : summaryAnalytics.categoryRows).map((row) => (
+                        <article className="mini-list-row" key={row.category}>
+                          <strong>{row.category}</strong>
+                          <span>Rounds {row.rounds}</span>
+                          {isTrueFalseGame ? (
+                            <small>{`Jay correct ${row.jayCorrect}/${row.rounds} · Kim correct ${row.kimCorrect}/${row.rounds} · Jay ${formatScore(row.jayPenalty)} · Kim ${formatScore(row.kimPenalty)}`}</small>
+                          ) : (
+                            <small>Jay {formatScore(row.totals.jay)} · Kim {formatScore(row.totals.kim)} · Winner {row.winner}</small>
+                          )}
+                        </article>
+                      ))
+                    ) : (
+                      <p className="empty-copy">No category breakdown is available for this game yet.</p>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
           </div>
 
           <aside className="game-summary-analytics-column">
-            <section className="game-summary-section game-summary-section--analytics">
-              <div className="mini-heading">
-                <div>
-                  <span>Analytics Dashboard</span>
-                  <h3>Post-Game Analytics</h3>
+            {isHoldemGame ? (
+              <section className="game-summary-section game-summary-section--analytics">
+                <div className="mini-heading">
+                  <div>
+                    <span>Poker Ledger</span>
+                    <h3>Penalty Point Balances</h3>
+                  </div>
                 </div>
-              </div>
-              <AnalyticsPanel analytics={summaryAnalytics} categoryColorMap={categoryColorMap} variant="summary" summary={gameSummary} />
-            </section>
+                <div className="summary-list">
+                  <article className="mini-list-row"><strong>Jay final balance</strong><span>{formatScore(finalScores.jay || 0)}</span></article>
+                  <article className="mini-list-row"><strong>Kim final balance</strong><span>{formatScore(finalScores.kim || 0)}</span></article>
+                  <article className="mini-list-row"><strong>Jay net change</strong><span>{formatScore(holdemStats.netMovementJay || 0)}</span></article>
+                  <article className="mini-list-row"><strong>Kim net change</strong><span>{formatScore(holdemStats.netMovementKim || 0)}</span></article>
+                  <article className="mini-list-row"><strong>Split pots</strong><span>{holdemStats.handsSplit || 0}</span></article>
+                  <article className="mini-list-row"><strong>All-ins</strong><span>{holdemStats.allIns || 0}</span></article>
+                </div>
+              </section>
+            ) : (
+              <section className="game-summary-section game-summary-section--analytics">
+                <div className="mini-heading">
+                  <div>
+                    <span>Analytics Dashboard</span>
+                    <h3>Post-Game Analytics</h3>
+                  </div>
+                </div>
+                {isTrueFalseGame ? (
+                  <div className="summary-list">
+                    <article className="mini-list-row"><strong>Jay accuracy</strong><span>{completedCount ? Math.round((trueFalseCorrectTotals.jay / completedCount) * 100) : 0}%</span></article>
+                    <article className="mini-list-row"><strong>Kim accuracy</strong><span>{completedCount ? Math.round((trueFalseCorrectTotals.kim / completedCount) * 100) : 0}%</span></article>
+                    <article className="mini-list-row"><strong>Jay total penalty</strong><span>{formatScore(finalScores.jay || 0)}</span></article>
+                    <article className="mini-list-row"><strong>Kim total penalty</strong><span>{formatScore(finalScores.kim || 0)}</span></article>
+                  </div>
+                ) : (
+                  <AnalyticsPanel analytics={summaryAnalytics} categoryColorMap={categoryColorMap} variant="summary" summary={gameSummary} />
+                )}
+              </section>
+            )}
           </aside>
         </div>
       </div>
@@ -5234,6 +10655,9 @@ function DiaryDashboardSection({
   roundAnalytics = null,
   onSubmitAmaQuestion,
   onAnswerAmaRequest,
+  onBackfillGameDiaryEntries,
+  gameDiaryBackfillState = {},
+  missingGameDiaryCount = 0,
   isBusy = false,
 }) {
   const viewerSeat = currentPlayerSeat || inferSeatFromUser(user, profile) || '';
@@ -5247,24 +10671,56 @@ function DiaryDashboardSection({
   const chapters = useMemo(
     () =>
       diaryEntries
-        .filter((entry) => isAmaDiaryEntry(entry))
+        .filter((entry) => isDiaryBookEntry(entry))
         .sort(sortByOldest)
         .map((entry, index) => {
-          const chapterNumber = Number(entry.chapterNumber || index + 1);
-          const askedByPlayerId = entry.requestedByPlayerId || entry.requestedByUserId || '';
-          const answeredByPlayerId = entry.ownerPlayerId || entry.receiverPlayerId || entry.storeOwnerUserId || '';
-          const chapterTitle = normalizeText(entry.question)
-            ? buildAmaChapterTitle(entry.question, chapterNumber)
-            : normalizeText(entry.chapterTitle) || buildAmaChapterTitle(entry.title || '', chapterNumber);
-          const snapshotInsights = Array.isArray(entry.analyticsSnapshot?.categoryInsights) && entry.analyticsSnapshot.categoryInsights.length
+          const bookChapterNumber = index + 1;
+          const baseSnapshotInsights = Array.isArray(entry.analyticsSnapshot?.categoryInsights) && entry.analyticsSnapshot.categoryInsights.length
             ? entry.analyticsSnapshot.categoryInsights
             : Array.isArray(entry.analyticsSnapshot?.categoryRows)
               ? entry.analyticsSnapshot.categoryRows.map((row) => buildDiarySnapshotInsight(row))
               : [];
+          if (isGameDiaryEntry(entry)) {
+            const aiDiaryStatus = normalizeIdentity(entry.aiDiaryStatus || (entry.aiGenerated ? 'ready' : ''));
+            const scoreContext = buildGameDiaryScoreContext(entry);
+            const playedLabel = formatShortDateTime(entry.endedAt || entry.createdAt || entry.updatedAt);
+            const generatedLabel = formatShortDateTime(entry.generatedAt || entry.updatedAt || entry.endedAt || entry.createdAt);
+            return {
+              ...entry,
+              entryType: 'game',
+              bookChapterNumber,
+              chapterNumber: bookChapterNumber,
+              chapterTitle: normalizeText(entry.chapterTitle) || buildGameDiaryChapterTitleFallback(entry, scoreContext),
+              createdLabel: playedLabel,
+              answeredLabel: generatedLabel,
+              statusLabel: aiDiaryStatus === 'generating'
+                ? 'Writing'
+                : aiDiaryStatus === 'error'
+                  ? 'Needs retry'
+                  : 'Ready',
+              gameModeLabel: normalizeText(entry.gameModeLabel) || getDiaryGameModeLabel(entry.gameMode || 'standard'),
+              resultSummary: normalizeText(entry.resultSummary || entry.aiDiarySummary || ''),
+              snapshotInsights: baseSnapshotInsights,
+              askedByPlayerId: '',
+              answeredByPlayerId: '',
+              askedByLabel: '',
+              answeredByLabel: '',
+            };
+          }
+
+          const amaChapterNumber = Number(entry.chapterNumber || index + 1);
+          const askedByPlayerId = entry.requestedByPlayerId || entry.requestedByUserId || '';
+          const answeredByPlayerId = entry.ownerPlayerId || entry.receiverPlayerId || entry.storeOwnerUserId || '';
+          const chapterTitle = normalizeText(entry.question)
+            ? buildAmaChapterTitle(entry.question, amaChapterNumber)
+            : normalizeText(entry.chapterTitle) || buildAmaChapterTitle(entry.title || '', amaChapterNumber);
           const status = normalizeIdentity(entry.chapterState || entry.status);
           return {
             ...entry,
-            chapterNumber,
+            entryType: 'ama',
+            bookChapterNumber,
+            chapterNumber: bookChapterNumber,
+            amaChapterNumber,
             chapterTitle,
             askedByPlayerId,
             answeredByPlayerId,
@@ -5277,22 +10733,27 @@ function DiaryDashboardSection({
               : entry.question
                 ? 'Awaiting answer'
                 : 'Awaiting question',
-            snapshotInsights,
+            snapshotInsights: baseSnapshotInsights,
           };
         }),
     [diaryEntries],
   );
+  const gameChapterCount = chapters.filter((entry) => entry.entryType === 'game').length;
+  const amaChapterCount = chapters.filter((entry) => entry.entryType === 'ama').length;
   const selectedChapter = chapters.find((entry) => entry.id === selectedChapterId) || chapters.at(-1) || null;
   const selectedCategories = Array.isArray(selectedChapter?.relatedCategories) ? selectedChapter.relatedCategories.filter(Boolean) : [];
   const analyticsSnapshot = selectedChapter?.analyticsSnapshot || null;
+  const selectedAiDiaryStatus = normalizeIdentity(selectedChapter?.aiDiaryStatus || (selectedChapter?.aiGenerated ? 'ready' : ''));
   const canAskQuestion = Boolean(
     selectedChapter
+    && selectedChapter.entryType === 'ama'
     && viewerSeat
     && seatFromPlayerRef(selectedChapter.askedByPlayerId) === viewerSeat
     && !normalizeText(selectedChapter.question),
   );
   const canAnswerChapter = Boolean(
     selectedChapter
+    && selectedChapter.entryType === 'ama'
     && viewerSeat
     && seatFromPlayerRef(selectedChapter.answeredByPlayerId) === viewerSeat
     && normalizeText(selectedChapter.question)
@@ -5356,29 +10817,61 @@ function DiaryDashboardSection({
     });
     setMediaFiles([]);
   };
+  const backfillStatusCopy = gameDiaryBackfillState?.status === 'running'
+    ? `Backfilling game chapters: ${Number(gameDiaryBackfillState?.processed || 0)} processed, ${Number(gameDiaryBackfillState?.created || 0)} created or refreshed.`
+    : gameDiaryBackfillState?.status === 'done'
+      ? `Backfill finished: ${Number(gameDiaryBackfillState?.created || 0)} created or refreshed, ${Number(gameDiaryBackfillState?.skipped || 0)} skipped.`
+      : gameDiaryBackfillState?.status === 'done-with-errors'
+        ? `Backfill finished with some misses: ${Number(gameDiaryBackfillState?.created || 0)} created or refreshed, ${Number(gameDiaryBackfillState?.skipped || 0)} skipped.`
+        : '';
+  const selectedGameFeedbackHighlights = selectedChapter?.feedbackHighlights || {};
+  const selectedGameReplayHighlights = Array.isArray(selectedChapter?.replayHighlights) ? selectedChapter.replayHighlights : [];
+  const selectedGameQuestionHighlights = Array.isArray(selectedChapter?.questionHighlights) ? selectedChapter.questionHighlights : [];
 
   return (
     <section className="panel lobby-panel lobby-panel--archive lobby-diary-card dashboard-page-card">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">Shared AMA Diary</p>
-          <h2>KJK Kinks AMA Stories & Secrets</h2>
+          <p className="eyebrow">Shared Diary</p>
+          <h2>KJK Game Stories & AMA Secrets</h2>
         </div>
-        <span className="status-pill">{chapters.length} chapters</span>
+        <div className="button-row diary-heading-actions">
+          <span className="status-pill">{chapters.length} chapters</span>
+          <span className="status-pill">{gameChapterCount} game</span>
+          <span className="status-pill">{amaChapterCount} AMA</span>
+          <Button
+            className="ghost-button compact"
+            onClick={() => onBackfillGameDiaryEntries?.()}
+            disabled={isBusy || gameDiaryBackfillState?.status === 'running'}
+          >
+            {gameDiaryBackfillState?.status === 'running'
+              ? 'Backfilling...'
+              : missingGameDiaryCount > 0
+                ? `Backfill ${missingGameDiaryCount} Games`
+                : 'Refresh Game Chapters'}
+          </Button>
+        </div>
       </div>
+      {backfillStatusCopy ? (
+        <p className={`field-note diary-ai-status ${gameDiaryBackfillState?.status === 'done-with-errors' ? 'has-error' : ''}`}>
+          {backfillStatusCopy}
+          {gameDiaryBackfillState?.error ? ` ${gameDiaryBackfillState.error}` : ''}
+        </p>
+      ) : null}
 
       <div className={`diary-book shared-diary-book ${isDiaryOpen ? 'is-open' : 'is-closed'} ${isDiaryOpening ? 'is-opening' : ''}`}>
         {!isDiaryOpen ? (
           <article className="diary-cover shared-diary-cover">
             <div className="diary-cover-copy">
               <p className="eyebrow">KJK School Diary</p>
-              <h3>KJK Kinks AMA Stories & Secrets</h3>
-              <p>Open your keepsake journal to read chapters, stories, and snapshots from redeemed AMA moments.</p>
+              <h3>KJK Game Stories & AMA Secrets</h3>
+              <p>Open your keepsake journal to read AI-written game recaps, AMA stories, and frozen snapshots from the moments worth keeping.</p>
             </div>
             <div className="diary-cover-stats shared-diary-stats">
               <span>{chapters.length} chapters</span>
+              <span>{gameChapterCount} game nights</span>
+              <span>{amaChapterCount} AMA moments</span>
               <span>Frozen snapshots</span>
-              <span>Shared memories</span>
             </div>
             <div className="button-row">
               <Button className="primary-button compact diary-open-button" onClick={() => setIsDiaryOpen(true)}>
@@ -5391,12 +10884,14 @@ function DiaryDashboardSection({
         <section className="shared-diary-intro">
           <div className="shared-diary-intro-copy">
             <p className="eyebrow">Private Chapters</p>
-            <h3>KJK Kinks AMA Stories & Secrets</h3>
-            <p>Each redeemed AMA becomes its own chapter, with the question, answer, story, categories, and a frozen analytics snapshot saved exactly as it was at that moment.</p>
+            <h3>KJK Game Stories & AMA Secrets</h3>
+            <p>Completed games can turn into funny, affectionate diary chapters, and AMA moments still keep their question, answer, story, and frozen analytics snapshot exactly as they happened.</p>
           </div>
           <div className="diary-cover-stats shared-diary-stats">
-            <span>Shared AMA book</span>
+            <span>Shared diary book</span>
             <span>{chapters.length} chapters</span>
+            <span>{gameChapterCount} game chapters</span>
+            <span>{amaChapterCount} AMA chapters</span>
             <span>Frozen snapshots</span>
           </div>
           <div className="button-row">
@@ -5410,8 +10905,8 @@ function DiaryDashboardSection({
           <article className="diary-cover shared-diary-empty">
             <div className="diary-cover-copy">
               <p className="eyebrow">No Chapters Yet</p>
-              <h3>No AMA stories yet</h3>
-              <p>Redeemed AMA forfeits will appear here as chapters.</p>
+              <h3>No diary chapters yet</h3>
+              <p>Completed games and redeemed AMA moments will land here as shared chapters.</p>
             </div>
           </article>
         ) : (
@@ -5429,12 +10924,18 @@ function DiaryDashboardSection({
                     className={`shared-diary-chapter-card ${selectedChapter?.id === chapter.id ? 'is-active' : ''}`}
                     onClick={() => setSelectedChapterId(chapter.id)}
                   >
-                    <small>Chapter {chapter.chapterNumber}</small>
+                    <small>Chapter {chapter.bookChapterNumber} · {chapter.entryType === 'game' ? 'Game' : 'AMA'}</small>
                     <strong>{chapter.chapterTitle}</strong>
-                    <span>{chapter.question ? `${chapter.askedByLabel} asked ${chapter.answeredByLabel}` : `Waiting for ${chapter.askedByLabel} to add the question`}</span>
+                    <span>
+                      {chapter.entryType === 'game'
+                        ? (chapter.resultSummary || `${chapter.gameModeLabel} chapter`)
+                        : chapter.question
+                          ? `${chapter.askedByLabel} asked ${chapter.answeredByLabel}`
+                          : `Waiting for ${chapter.askedByLabel} to add the question`}
+                    </span>
                     <div className="shared-diary-chapter-meta">
                       <span>{chapter.statusLabel}</span>
-                      <span>{chapter.answeredAt || chapter.respondedAt ? chapter.answeredLabel : chapter.createdLabel}</span>
+                      <span>{chapter.entryType === 'game' ? chapter.createdLabel : (chapter.answeredAt || chapter.respondedAt ? chapter.answeredLabel : chapter.createdLabel)}</span>
                     </div>
                   </button>
                 ))}
@@ -5446,19 +10947,52 @@ function DiaryDashboardSection({
                 <div className={`diary-spread shared-diary-spread ${isDiaryOpening ? 'diary-spread--next' : ''}`}>
                   <article className={`diary-page diary-page--left shared-diary-page ${isDiaryOpening ? 'diary-page--enter-next' : ''}`}>
                     <div className="shared-diary-page-header">
-                      <span className="status-pill diary-page-pill">Chapter {selectedChapter.chapterNumber}</span>
-                      <span className="status-pill diary-page-pill">{selectedChapter.statusLabel}</span>
+                      <span className="status-pill diary-page-pill">Chapter {selectedChapter.bookChapterNumber}</span>
+                      <span className="status-pill diary-page-pill">{selectedChapter.entryType === 'game' ? selectedChapter.gameModeLabel : selectedChapter.statusLabel}</span>
                     </div>
-                    <small>AMA chapter</small>
+                    <small>{selectedChapter.entryType === 'game' ? 'AI game diary' : 'AMA chapter'}</small>
                     <h3>{selectedChapter.chapterTitle}</h3>
                     <div className="shared-diary-meta-grid">
-                      <span><strong>Asked by</strong>{selectedChapter.askedByLabel}</span>
-                      <span><strong>Answered by</strong>{selectedChapter.answeredByLabel}</span>
-                      <span><strong>Created</strong>{selectedChapter.createdLabel}</span>
-                      <span><strong>Answered</strong>{selectedChapter.answeredLabel}</span>
+                      {selectedChapter.entryType === 'game' ? (
+                        <>
+                          <span><strong>Game</strong>{selectedChapter.gameModeLabel}</span>
+                          <span><strong>Winner</strong>{selectedChapter.winner === 'tie' ? 'Tie' : PLAYER_LABEL[selectedChapter.winner] || selectedChapter.winner || 'Pending'}</span>
+                          <span><strong>Score</strong>{selectedChapter.scoreDisplay || 'Score still loading'}</span>
+                          <span><strong>Played</strong>{selectedChapter.createdLabel}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span><strong>Asked by</strong>{selectedChapter.askedByLabel}</span>
+                          <span><strong>Answered by</strong>{selectedChapter.answeredByLabel}</span>
+                          <span><strong>Created</strong>{selectedChapter.createdLabel}</span>
+                          <span><strong>Answered</strong>{selectedChapter.answeredLabel}</span>
+                        </>
+                      )}
                     </div>
 
-                    {canAskQuestion ? (
+                    {selectedChapter.entryType === 'game' ? (
+                      <>
+                        <div className="shared-diary-question-block">
+                          <strong>Result</strong>
+                          <p>{selectedChapter.resultSummary || selectedChapter.aiDiarySummary || 'KJK AI is still writing this chapter.'}</p>
+                        </div>
+                        {selectedGameQuestionHighlights.length ? (
+                          <div className="diary-appendix">
+                            <strong>Question highlights</strong>
+                            <div className="summary-list">
+                              {selectedGameQuestionHighlights.map((highlight) => (
+                                <article className="mini-list-row" key={`${selectedChapter.id}-round-${highlight.round}`}>
+                                  <strong>Round {highlight.round}: {highlight.question}</strong>
+                                  <small>{highlight.category} · {highlight.roundType}</small>
+                                  <span>Jay: {highlight.jayAnswer}</span>
+                                  <span>Kim: {highlight.kimAnswer}</span>
+                                </article>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : canAskQuestion ? (
                       <div className="shared-diary-editor">
                         <label className="field">
                           <span>AMA question</span>
@@ -5540,7 +11074,31 @@ function DiaryDashboardSection({
                           </Button>
                         </div>
                       </div>
-                    ) : selectedChapter.answer || selectedChapter.story ? (
+                    ) : selectedChapter.entryType === 'game' ? (
+                      selectedAiDiaryStatus === 'generating' ? (
+                        <p className="empty-copy">KJK AI is turning this game into a diary chapter right now.</p>
+                      ) : selectedAiDiaryStatus === 'error' ? (
+                        <div className="shared-diary-answer-block shared-diary-answer-block--error">
+                          <strong>AI write-up unavailable</strong>
+                          <p>{selectedChapter.aiDiaryError || 'This chapter could not be generated just yet. Use the backfill button to try again.'}</p>
+                        </div>
+                      ) : (
+                        <>
+                          {selectedChapter.aiDiarySummary ? (
+                            <div className="shared-diary-answer-block">
+                              <strong>Chapter summary</strong>
+                              <p>{selectedChapter.aiDiarySummary}</p>
+                            </div>
+                          ) : null}
+                          {selectedChapter.aiDiaryWriteup ? (
+                            <div className="shared-diary-answer-block">
+                              <strong>Diary write-up</strong>
+                              <p className="diary-ai-prose">{selectedChapter.aiDiaryWriteup}</p>
+                            </div>
+                          ) : null}
+                        </>
+                      )
+                    ) : selectedChapter.answer || selectedChapter.story || selectedChapter.aiDiaryWriteup ? (
                       <>
                         {selectedChapter.answer ? (
                           <div className="shared-diary-answer-block">
@@ -5552,6 +11110,27 @@ function DiaryDashboardSection({
                           <div className="shared-diary-answer-block">
                             <strong>Story</strong>
                             <p>{selectedChapter.story}</p>
+                          </div>
+                        ) : null}
+                        {selectedAiDiaryStatus === 'generating' ? (
+                          <p className="empty-copy">KJK AI is writing the diary-style AMA recap now.</p>
+                        ) : null}
+                        {selectedAiDiaryStatus === 'error' ? (
+                          <div className="shared-diary-answer-block shared-diary-answer-block--error">
+                            <strong>AI write-up unavailable</strong>
+                            <p>{selectedChapter.aiDiaryError || 'The AMA answer saved, but the AI recap still needs another try.'}</p>
+                          </div>
+                        ) : null}
+                        {selectedChapter.aiDiarySummary ? (
+                          <div className="shared-diary-answer-block">
+                            <strong>Diary summary</strong>
+                            <p>{selectedChapter.aiDiarySummary}</p>
+                          </div>
+                        ) : null}
+                        {selectedChapter.aiDiaryWriteup ? (
+                          <div className="shared-diary-answer-block">
+                            <strong>Diary write-up</strong>
+                            <p className="diary-ai-prose">{selectedChapter.aiDiaryWriteup}</p>
                           </div>
                         ) : null}
                       </>
@@ -5601,6 +11180,39 @@ function DiaryDashboardSection({
                           ))}
                         </div>
                         {analyticsSnapshot?.capturedAt ? <p className="diary-analytics-note-caption">Frozen at {formatShortDateTime(analyticsSnapshot.capturedAt)}</p> : null}
+                      </div>
+                    ) : null}
+
+                    {selectedChapter.entryType === 'game' && (
+                      (selectedGameFeedbackHighlights?.sharedLiked?.length
+                      || selectedGameFeedbackHighlights?.splitOpinions?.length
+                      || selectedGameReplayHighlights.length)
+                    ) ? (
+                      <div className="diary-appendix">
+                        <strong>Signals from the game</strong>
+                        <div className="summary-list">
+                          {selectedGameFeedbackHighlights?.sharedLiked?.slice(0, AI_DIARY_SIGNAL_LIMIT).map((entry) => (
+                            <article className="mini-list-row" key={`${selectedChapter.id}-shared-${entry.questionText}`}>
+                              <strong>Shared like</strong>
+                              <span>{entry.questionText}</span>
+                              <small>{entry.category} · {entry.roundType}</small>
+                            </article>
+                          ))}
+                          {selectedGameFeedbackHighlights?.splitOpinions?.slice(0, AI_DIARY_SIGNAL_LIMIT).map((entry) => (
+                            <article className="mini-list-row" key={`${selectedChapter.id}-split-${entry.questionText}`}>
+                              <strong>Split opinion</strong>
+                              <span>{entry.questionText}</span>
+                              <small>{entry.category} · {entry.roundType}</small>
+                            </article>
+                          ))}
+                          {selectedGameReplayHighlights.slice(0, AI_DIARY_SIGNAL_LIMIT).map((entry) => (
+                            <article className="mini-list-row" key={`${selectedChapter.id}-replay-${entry.questionText}`}>
+                              <strong>Replay request</strong>
+                              <span>{entry.questionText}</span>
+                              <small>{entry.category} · requested by {formatAiList(entry.requestedBy || []) || 'someone'}</small>
+                            </article>
+                          ))}
+                        </div>
                       </div>
                     ) : null}
 
@@ -6632,7 +12244,11 @@ function GameRoomView({
   onEndGame,
   onPauseToggle,
   onNextQuestion,
+  onStartHoldemHand,
+  onTakeHoldemAction,
   onSubmitAnswer,
+  onLockTrueFalseAnswer,
+  onLockThisOrThatAnswer,
   onMarkReady,
   onAddQuestion,
   onSyncSheet,
@@ -6642,6 +12258,7 @@ function GameRoomView({
   onConfirmAction,
   onCancelAction,
   isBusy,
+  holdemStartBusy = false,
   currentRound,
   penaltyDraft,
   setPenaltyDraft,
@@ -6656,6 +12273,7 @@ function GameRoomView({
   chatDraft,
   setChatDraft,
   onSendChat,
+  chatIsBusy = false,
   onReconnectLiveRoom,
   onSaveQuestionNote,
   onSaveQuestionFeedback,
@@ -6707,13 +12325,24 @@ function GameRoomView({
         kim: addScores(baseTotals.kim, parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0)),
       }
     : baseTotals;
+  const isHoldemGame = isHoldemGameMode(game?.gameMode || 'standard');
   const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-  const bothPlayersSubmitted = Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
+  const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+  const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
+  const bothPlayersSubmitted = isTrueFalseGame
+    ? Boolean(hasCompletedTrueFalseRoundAnswer(currentRound, 'jay') && hasCompletedTrueFalseRoundAnswer(currentRound, 'kim'))
+    : isThisOrThatGame
+      ? Boolean(hasCompletedThisOrThatRoundAnswer(currentRound, 'jay') && hasCompletedThisOrThatRoundAnswer(currentRound, 'kim'))
+    : Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
   const revealIsReady = bothPlayersSubmitted || currentRound?.status === 'reveal';
-  const submissionState = currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft';
+  const submissionState = isTrueFalseGame
+    ? (hasCompletedTrueFalseRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
+    : isThisOrThatGame
+      ? (hasCompletedThisOrThatRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
+    : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
   const submittedBySeat = {
-    jay: hasSubmittedRoundAnswer(currentRound, 'jay'),
-    kim: hasSubmittedRoundAnswer(currentRound, 'kim'),
+    jay: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'jay'),
+    kim: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'kim'),
   };
   const quizSetupReadyBySeat = {
     jay: hasQuizSetupReadySeat(game, 'jay'),
@@ -6739,14 +12368,44 @@ function GameRoomView({
   const quizWagerAgreement = normalizeQuizWagerAgreement(game);
   const sharedQuizWagerLocked = isQuizWagerAgreementLocked(game);
   const sharedQuizWagerAmount = getQuizSharedWagerAmount(game);
+  const showQuizSetupPanel = isQuizGame && !currentRound && !gameEnded;
+  const roomWheelPending = quizWagerAgreement.status === 'wheel_pending';
+  const roomWheelRequestedByViewer = Boolean(
+    roomWheelPending
+    && (
+      (user?.uid && quizWagerAgreement.wheelRequestedByUserId && quizWagerAgreement.wheelRequestedByUserId === user.uid)
+      || (!quizWagerAgreement.wheelRequestedByUserId && quizWagerAgreement.wheelRequestedBySeat === resolvedViewerSeat)
+    ),
+  );
+  const roomWheelRequestedByOther = showQuizSetupPanel && roomWheelPending && !roomWheelRequestedByViewer;
+  const roomWheelRequesterName = quizWagerAgreement.wheelRequestedByName
+    || gameSeatDisplayName(game, quizWagerAgreement.wheelRequestedBySeat || oppositeSeatOf(resolvedViewerSeat), null)
+    || 'The other player';
+  const roomWheelPhase = getQuizWheelPhase(quizWagerAgreement);
+  const roomWheelActive = roomWheelPhase === 'countdown' || roomWheelPhase === 'spinning' || roomWheelPhase === 'landing';
   const quizWagerStatusLabel = sharedQuizWagerLocked
     ? `Shared ${formatScore(sharedQuizWagerAmount || 0)}`
     : quizWagerAgreement.status === 'proposal_pending'
       ? `Proposal ${formatScore(quizWagerAgreement.proposedAmount || 0)}`
-      : quizWagerAgreement.wheelOptIn?.jay || quizWagerAgreement.wheelOptIn?.kim
+      : quizWagerAgreement.status === 'wheel_pending' || quizWagerAgreement.status === 'wheel_countdown'
         ? 'Wheel pending'
         : 'Negotiating';
-  const showQuizSetupPanel = isQuizGame && !currentRound && !gameEnded;
+  const roomWheelRequestModal = roomWheelRequestedByOther ? (
+    <div className="quiz-wheel-request-modal-backdrop" role="presentation">
+      <section className="quiz-wheel-request-modal" role="dialog" aria-modal="true" aria-labelledby="quiz-wheel-request-title">
+        <h3 id="quiz-wheel-request-title">{roomWheelRequesterName} has clicked Spin the Wheel</h3>
+        <p>Do you want to spin the wheel, or reject and go back to the negotiation screen?</p>
+        <div className="button-row live-round-actions quiz-wheel-request-modal__actions">
+          <Button className="primary-button compact" onClick={onAcceptQuizWager} disabled={isBusy || sharedQuizWagerLocked || roomWheelActive}>
+            Spin the Wheel
+          </Button>
+          <Button className="ghost-button compact quiz-wager-reject-button" onClick={onRejectQuizWager} disabled={isBusy || sharedQuizWagerLocked || roomWheelActive}>
+            Reject and go back to negotiation screen
+          </Button>
+        </div>
+      </section>
+    </div>
+  ) : null;
   const roomPlayerScorePills = (
     <div className="room-player-score-pills" aria-label="Player penalty point balances">
       {seats.map((playerSeat) => (
@@ -6764,6 +12423,15 @@ function GameRoomView({
   const [quizSidebarOpen, setQuizSidebarOpen] = useState(false);
   const [noteModalRound, setNoteModalRound] = useState(null);
   const [questionNoteDraft, setQuestionNoteDraft] = useState('');
+  const [mobileRoomChatOpen, setMobileRoomChatOpen] = useState(false);
+  const [mobileHostDrawerOpen, setMobileHostDrawerOpen] = useState(false);
+  const roomChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
+  const roomChatUnreadCount = useChatUnreadCount(
+    chatMessages,
+    mobileRoomChatOpen,
+    user?.uid || '',
+    `${game?.id || ''}:${resolvedViewerSeat}`,
+  );
   const currentFeedbackValue = useMemo(() => {
     const qKey = normalizeText(currentRound?.questionId || '') || sanitizeNoteKey(currentRound?.question || '');
     if (!qKey || !user?.uid || !game?.id) return '';
@@ -6787,9 +12455,16 @@ function GameRoomView({
     const scoreboardNode = scoreboardColumnRef.current;
     if (!scoreboardNode) return undefined;
 
-    const syncChatHeight = () => {
+    const rafRef = { current: null };
+
+    const syncChatHeightNow = () => {
       const nextHeight = Math.round(scoreboardNode.getBoundingClientRect().height);
       setChatColumnHeight((currentHeight) => (Math.abs(currentHeight - nextHeight) <= 4 ? currentHeight : nextHeight));
+    };
+
+    const syncChatHeight = () => {
+      if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
+      rafRef.current = window.requestAnimationFrame(syncChatHeightNow);
     };
 
     syncChatHeight();
@@ -6797,12 +12472,29 @@ function GameRoomView({
     if (typeof ResizeObserver !== 'undefined') {
       const observer = new ResizeObserver(syncChatHeight);
       observer.observe(scoreboardNode);
-      return () => observer.disconnect();
+      return () => {
+        observer.disconnect();
+        if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
+      };
     }
 
     window.addEventListener('resize', syncChatHeight);
-    return () => window.removeEventListener('resize', syncChatHeight);
+    return () => {
+      window.removeEventListener('resize', syncChatHeight);
+      if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
+    };
   }, [isMobile]);
+
+  useEffect(() => {
+    if (isMobile && !gameEnded) return;
+    setMobileRoomChatOpen(false);
+    setMobileHostDrawerOpen(false);
+  }, [gameEnded, isMobile]);
+
+  useEffect(() => {
+    if (role === 'host' && !gameEnded) return;
+    setMobileHostDrawerOpen(false);
+  }, [gameEnded, role]);
 
   const closeRoomMenu = () => {
     roomMenuRef.current?.removeAttribute('open');
@@ -6907,10 +12599,57 @@ function GameRoomView({
     onLeaveGame();
   };
 
+  const renderMobileHostDrawerContent = () => {
+    if (role !== 'host' || gameEnded) return null;
+
+    return (
+      <>
+        {renderMobileHostControls()}
+        <details className="panel mobile-host-drawer__details">
+          <summary>Question Bank</summary>
+          <QuestionBankMini
+            questions={bankQuestions}
+            draft={bankDraft}
+            setDraft={setBankDraft}
+            onAddQuestion={onAddQuestion}
+            onSyncSheet={onSyncSheet}
+            onImportSheet={onImportSheet}
+            syncNotice={syncNotice}
+          />
+        </details>
+      </>
+    );
+  };
+
   const renderMobileHostControls = () => {
     if (role !== 'host') return null;
 
     if (currentRound && revealIsReady && !isQuizGame) {
+      if (isTrueFalseGame || isThisOrThatGame) {
+        const modeLabel = isThisOrThatGame ? 'This or That' : 'True or False';
+        return (
+          <section className="mobile-entry-panel mobile-round-panel">
+            <section className="panel room-status-panel room-status-panel--host-mobile">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">{modeLabel}</p>
+                  <h2>Next Question</h2>
+                </div>
+              </div>
+              <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
+              <p className="panel-copy">Both answers are locked. Penalties were scored automatically, so you can move straight to the next question.</p>
+              <div className="button-row room-host-sidebar-actions">
+                <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
+                  Next Question
+                </Button>
+                <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
+                  {status === 'paused' ? 'Resume' : 'Pause'}
+                </Button>
+              </div>
+            </section>
+          </section>
+        );
+      }
       return (
         <section className="mobile-entry-panel mobile-round-panel">
           <QuickDesk
@@ -6984,6 +12723,37 @@ function GameRoomView({
       </section>
     );
   };
+
+  if (isHoldemGame) {
+    return (
+      <HoldemGameRoom
+        user={user}
+        profile={profile}
+        game={game}
+        playerAccounts={playerAccounts}
+        editingModeEnabled={editingModeEnabled}
+        onToggleEditingMode={onToggleEditingMode}
+        role={role}
+        seat={seat}
+        onLeaveGame={onLeaveGame}
+        onEndGame={onEndGame}
+        onSignOut={onSignOut}
+        isBusy={isBusy}
+        notice={notice}
+        chatMessages={chatMessages}
+        chatDraft={chatDraft}
+        setChatDraft={setChatDraft}
+        onSendChat={onSendChat}
+        chatIsBusy={chatIsBusy}
+        confirmAction={confirmAction}
+        onConfirmAction={onConfirmAction}
+        onCancelAction={onCancelAction}
+        holdemStartBusy={holdemStartBusy}
+        onStartHoldemHand={onStartHoldemHand}
+        onTakeHoldemAction={onTakeHoldemAction}
+      />
+    );
+  }
 
   if (isMobile) {
     return (
@@ -7079,6 +12849,8 @@ function GameRoomView({
 	                  baseTotals={baseTotals}
 	                  liveTotals={liveTotals}
 	                  onSubmitAnswer={onSubmitAnswer}
+	                  onLockTrueFalseAnswer={onLockTrueFalseAnswer}
+                    onLockThisOrThatAnswer={onLockThisOrThatAnswer}
 	                  onMarkReady={onMarkReady}
 	                  onRequestQuizOverride={onRequestQuizOverride}
 	                  onRespondQuizOverride={onRespondQuizOverride}
@@ -7098,19 +12870,21 @@ function GameRoomView({
                   onChatDraftChange={setChatDraft}
                   onSendChat={onSendChat}
                   chatSeat={seat}
-                  chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+                  chatDisplayName={roomChatDisplayName}
 	                  isBusy={isBusy}
+                    chatIsBusy={chatIsBusy}
 	                />
 	              ) : showQuizSetupPanel ? (
 	                <QuizSetupStagePanel
                     game={game}
                     viewerSeat={resolvedViewerSeat}
+                    currentUserId={user?.uid || ''}
                     playerAccounts={playerAccounts}
                     chatMessages={chatMessages}
                     chatDraft={chatDraft}
                     onChatDraftChange={setChatDraft}
                     onSendChat={onSendChat}
-                    chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+                    chatDisplayName={roomChatDisplayName}
                     quizWagerDraft={quizWagerDraft}
                     setQuizWagerDraft={setQuizWagerDraft}
                     onSaveQuizWager={onSaveQuizWager}
@@ -7119,6 +12893,7 @@ function GameRoomView({
                     onSetQuizWheelOptIn={onSetQuizWheelOptIn}
                     onMarkReady={onMarkReady}
                     isBusy={isBusy}
+                    chatIsBusy={chatIsBusy}
                   />
 	              ) : (
                 <MainScoreboard16x9 rounds={rounds} selectedQuestion={currentQuestion} form={boardForm} editingRound={null} liveTotals={liveTotals} joinedSeats={game?.seats || {}} />
@@ -7146,24 +12921,6 @@ function GameRoomView({
               </section>
             ) : null}
 
-            {renderMobileHostControls()}
-
-            {!isQuizGame ? (
-            <details className="panel mobile-collapsible mobile-collapsible--chat">
-              <summary>Chat</summary>
-              <ChatPanel
-                compact
-                messages={chatMessages}
-                draft={chatDraft}
-                onDraftChange={setChatDraft}
-                onSend={onSendChat}
-                isBusy={isBusy}
-                seat={seat}
-                displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
-              />
-            </details>
-            ) : null}
-
             <details className="panel mobile-collapsible mobile-collapsible--analytics">
               <summary>Live Stats</summary>
               <MobileAnalyticsSummary
@@ -7173,24 +12930,41 @@ function GameRoomView({
                 embedded
               />
             </details>
-
-            {role === 'host' ? (
-              <details className="panel mobile-collapsible">
-                <summary>Host tools</summary>
-                <QuestionBankMini
-                  questions={bankQuestions}
-                  draft={bankDraft}
-                  setDraft={setBankDraft}
-                  onAddQuestion={onAddQuestion}
-                  onSyncSheet={onSyncSheet}
-                  onImportSheet={onImportSheet}
-                  syncNotice={syncNotice}
-                />
-              </details>
-            ) : null}
           </section>
         )}
+        {!gameEnded ? (
+          <MobileChatLauncher
+            title={isQuizGame ? 'Game Chat' : 'Room Chat'}
+            isOpen={mobileRoomChatOpen}
+            onOpen={() => {
+              setMobileHostDrawerOpen(false);
+              setMobileRoomChatOpen(true);
+            }}
+            onClose={() => setMobileRoomChatOpen(false)}
+            unreadCount={roomChatUnreadCount}
+            messages={chatMessages}
+            draft={chatDraft}
+            onDraftChange={setChatDraft}
+            onSend={onSendChat}
+            isBusy={chatIsBusy}
+            seat={resolvedViewerSeat}
+            displayName={roomChatDisplayName}
+          />
+        ) : null}
+        {role === 'host' && !gameEnded ? (
+          <MobileHostDrawer
+            isOpen={mobileHostDrawerOpen}
+            onOpen={() => {
+              setMobileRoomChatOpen(false);
+              setMobileHostDrawerOpen(true);
+            }}
+            onClose={() => setMobileHostDrawerOpen(false)}
+          >
+            {renderMobileHostDrawerContent()}
+          </MobileHostDrawer>
+        ) : null}
         {questionNoteModalNode}
+        {roomWheelRequestModal}
         {notice ? <div className="toast">{notice}</div> : null}
       </main>
     );
@@ -7321,17 +13095,39 @@ function GameRoomView({
             </div>
             {role === 'host' ? (
               isQuizGame ? null : currentRound && revealIsReady ? (
-                <QuickDesk
-                  currentRound={currentRound}
-                  penaltyDraft={penaltyDraft}
-                  setPenaltyDraft={setPenaltyDraft}
-                  onNextQuestion={onNextQuestion}
-                  onPauseToggle={onPauseToggle}
-                  status={status}
-                  isPaused={status === 'paused'}
-                  isCompleted={status === 'completed'}
-                  isBusy={isBusy}
-                />
+                isTrueFalseGame || isThisOrThatGame ? (
+                  <section className="panel host-queue-panel room-status-panel">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">{isThisOrThatGame ? 'This or That' : 'True or False'}</p>
+                        <h2>Automatic Scoring</h2>
+                      </div>
+                    </div>
+                    <span className="quick-desk-status quick-desk-status--inline">{`Play as ${viewerLabel}`}</span>
+                    <p className="panel-copy">Both answers are locked in. Penalties were applied automatically, so you can load the next question.</p>
+                    <div className="button-row room-host-sidebar-actions">
+                      <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || status === 'completed'}>
+                        Next Question
+                      </Button>
+                      <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || status === 'completed'}>
+                        {status === 'paused' ? 'Resume' : 'Pause'}
+                      </Button>
+                      <span className="quick-desk-status">{currentRound ? `Round ${currentRound.number}` : 'Waiting'}</span>
+                    </div>
+                  </section>
+                ) : (
+                  <QuickDesk
+                    currentRound={currentRound}
+                    penaltyDraft={penaltyDraft}
+                    setPenaltyDraft={setPenaltyDraft}
+                    onNextQuestion={onNextQuestion}
+                    onPauseToggle={onPauseToggle}
+                    status={status}
+                    isPaused={status === 'paused'}
+                    isCompleted={status === 'completed'}
+                    isBusy={isBusy}
+                  />
+                )
               ) : (
                 <section className="panel host-queue-panel room-status-panel">
                   <div className="panel-heading">
@@ -7382,8 +13178,10 @@ function GameRoomView({
               currentRound={currentRound}
 	              baseTotals={baseTotals}
 	              liveTotals={liveTotals}
-	              onSubmitAnswer={onSubmitAnswer}
-	              onMarkReady={onMarkReady}
+                  onSubmitAnswer={onSubmitAnswer}
+                  onLockTrueFalseAnswer={onLockTrueFalseAnswer}
+                  onLockThisOrThatAnswer={onLockThisOrThatAnswer}
+                  onMarkReady={onMarkReady}
 	              onRequestQuizOverride={onRequestQuizOverride}
 	              onRespondQuizOverride={onRespondQuizOverride}
               submissionState={submissionState}
@@ -7402,19 +13200,21 @@ function GameRoomView({
               onChatDraftChange={setChatDraft}
               onSendChat={onSendChat}
               chatSeat={seat}
-              chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+              chatDisplayName={roomChatDisplayName}
 	              isBusy={isBusy}
+              chatIsBusy={chatIsBusy}
 	            />
 	          ) : showQuizSetupPanel ? (
             <QuizSetupStagePanel
               game={game}
               viewerSeat={resolvedViewerSeat}
+              currentUserId={user?.uid || ''}
               playerAccounts={playerAccounts}
               chatMessages={chatMessages}
               chatDraft={chatDraft}
               onChatDraftChange={setChatDraft}
               onSendChat={onSendChat}
-              chatDisplayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+              chatDisplayName={roomChatDisplayName}
               quizWagerDraft={quizWagerDraft}
               setQuizWagerDraft={setQuizWagerDraft}
               onSaveQuizWager={onSaveQuizWager}
@@ -7423,6 +13223,7 @@ function GameRoomView({
               onSetQuizWheelOptIn={onSetQuizWheelOptIn}
               onMarkReady={onMarkReady}
               isBusy={isBusy}
+              chatIsBusy={chatIsBusy}
             />
 	          ) : (
             <MainScoreboard16x9 rounds={rounds} selectedQuestion={currentQuestion} form={boardForm} editingRound={null} liveTotals={liveTotals} joinedSeats={game?.seats || {}} />
@@ -7447,15 +13248,16 @@ function GameRoomView({
             draft={chatDraft}
             onDraftChange={setChatDraft}
             onSend={onSendChat}
-            isBusy={isBusy}
+            isBusy={chatIsBusy}
             seat={seat}
-            displayName={profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player'}
+            displayName={roomChatDisplayName}
           />
         </section>
         ) : null}
       </section>
       )}
       {questionNoteModalNode}
+      {roomWheelRequestModal}
       {notice ? <div className="toast">{notice}</div> : null}
       <ConfirmModal action={confirmAction} onConfirm={onConfirmAction} onCancel={onCancelAction} />
     </main>
@@ -7469,6 +13271,7 @@ function ProductionApp() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [isHoldemStartBusy, setIsHoldemStartBusy] = useState(false);
   const [connectionState, setConnectionState] = useState(() => ({
     online: typeof navigator !== 'undefined' ? navigator.onLine : true,
     lastGameSnapshotAt: 0,
@@ -7478,6 +13281,14 @@ function ProductionApp() {
   const [lobbyCode, setLobbyCode] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [lobbyQuestionCount, setLobbyQuestionCount] = useState('10');
+  const [deferredLobbyDataReady, setDeferredLobbyDataReady] = useState(false);
+  const [dashboardTabState, setDashboardTabState] = useState(() => {
+    try {
+      return window.localStorage.getItem('kjk-dashboard-tab') || 'gameLobby';
+    } catch {
+      return 'gameLobby';
+    }
+  });
   const [editingModeEnabled, setEditingModeEnabled] = useState(() => {
     try {
       return window.localStorage.getItem(editingModeKey) === 'true';
@@ -7502,11 +13313,14 @@ function ProductionApp() {
   const [pairHistory, setPairHistory] = useState({ playedQuestionIds: [], completedGameIds: [] });
   const [selectedGameId, setSelectedGameId] = useState('');
   const [localEndedGameSummary, setLocalEndedGameSummary] = useState(null);
+  const [pendingDeletedGameIds, setPendingDeletedGameIds] = useState(() => readPendingDeletedGameIds());
   const [confirmAction, setConfirmAction] = useState(null);
   const [bankDraft, setBankDraft] = useState(defaultBankDraft);
   const [sheetInput, setSheetInput] = useState(DEFAULT_SETTINGS.googleSheetInput);
   const [syncNotice, setSyncNotice] = useState('');
   const [isBusy, setIsBusy] = useState(false);
+  const [isLobbyChatSending, setIsLobbyChatSending] = useState(false);
+  const [isRoomChatSending, setIsRoomChatSending] = useState(false);
   const [roomLoadState, setRoomLoadState] = useState({ status: 'idle', gameId: '', reason: '', message: '' });
   const [playerAccounts, setPlayerAccounts] = useState({
     jay: { uid: fixedPlayerUids.jay, displayName: 'Jay', lifetimePenaltyPoints: 0 },
@@ -7516,6 +13330,7 @@ function ProductionApp() {
   const [redemptionHistory, setRedemptionHistory] = useState([]);
   const [forfeitPriceRequests, setForfeitPriceRequests] = useState([]);
   const [gameInvites, setGameInvites] = useState([]);
+  const [roomGameInvites, setRoomGameInvites] = useState([]);
   const [amaRequests, setAmaRequests] = useState([]);
   const [diaryEntries, setDiaryEntries] = useState([]);
   const [questionNotes, setQuestionNotes] = useState([]);
@@ -7524,21 +13339,104 @@ function ProductionApp() {
   const [quizAnswers, setQuizAnswers] = useState([]);
   const [quizWagerDraft, setQuizWagerDraft] = useState('');
   const [listenerRefreshKey, setListenerRefreshKey] = useState(0);
+  const [isFirestoreCoolingDown, setIsFirestoreCoolingDown] = useState(false);
   const [penaltyDraft, setPenaltyDraft] = useState(defaultPenaltyDraft);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatDraft, setChatDraft] = useState(defaultChatDraft);
+  const [lobbyChatMessages, setLobbyChatMessages] = useState([]);
+  const [lobbyChatDraft, setLobbyChatDraft] = useState(defaultChatDraft);
+  const [aiChatMessages, setAiChatMessages] = useState([]);
+  const [optimisticAiChatMessages, setOptimisticAiChatMessages] = useState([]);
+  const [aiChatDraft, setAiChatDraft] = useState(defaultChatDraft);
+  const [isAiChatSending, setIsAiChatSending] = useState(false);
   const [lobbyGameName, setLobbyGameName] = useState('');
-  const isMobileDashboard = useMediaQuery('(max-width: 900px)');
   const leavePendingGameRef = useRef('');
   const autoSheetImportAttemptedRef = useRef(false);
+  const autoThisOrThatSheetSyncInFlightRef = useRef(false);
+  const autoTrueFalseSheetSyncInFlightRef = useRef(false);
   const roomLoadTimeoutRef = useRef(null);
+  const firestoreCooldownTimerRef = useRef(null);
+  const pendingDeleteRetryInFlightRef = useRef(false);
+  const gameListenerRetryRef = useRef({ timer: null, gameId: '', attempts: 0 });
   const amaStoreSeededRef = useRef({ jay: false, kim: false });
   const autoResumedGameIdRef = useRef(gameId || '');
   const lastAuthUserIdRef = useRef(firebaseAuth?.currentUser?.uid || '');
   const staleCompletedRestoreRef = useRef(new Set());
+  const completedLiveRoomHandledRef = useRef(new Set());
   const gameLibraryRoundsCacheRef = useRef(new Map());
+  const gameLibrarySnapshotRequestRef = useRef(0);
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
+  const hiddenGameIdSet = useMemo(() => new Set(pendingDeletedGameIds), [pendingDeletedGameIds]);
+  const shouldPauseBackgroundFirestore = isFirestoreCoolingDown && !hasOpenRoomSession;
+  const shouldLoadQuestionBankData = Boolean(
+    user
+    && firestore
+    && (hasOpenRoomSession || dashboardTabState === 'gameLobby' || dashboardTabState === 'questionBank'),
+  );
+  const shouldLoadStoreCollections = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'forfeitStore' || dashboardTabState === 'activity'),
+  );
+  const shouldLoadDiaryCollections = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'diary' || dashboardTabState === 'activity' || dashboardTabState === 'ai'),
+  );
+  const shouldLoadQuestionFeedback = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'ai' || dashboardTabState === 'diary'),
+  );
+  const shouldLoadQuestionReplays = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'diary'),
+  );
+  const shouldLoadQuizAnswerHistory = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'ai' || dashboardTabState === 'diary'),
+  );
+  const shouldLoadAiChatHistory = Boolean(
+    user?.uid
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && dashboardTabState === 'ai',
+  );
+  const shouldAutoTopUpQuestionBanks = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && dashboardTabState === 'questionBank',
+  );
+  const shouldLoadAllCompletedGameRounds = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && ['analytics', 'ai', 'diary'].includes(dashboardTabState),
+  );
+  const shouldLoadSelectedCompletedGameRoundHistory = Boolean(
+    user
+    && firestore
+    && deferredLobbyDataReady
+    && !hasOpenRoomSession
+    && (selectedGameId || localEndedGameSummary?.id),
+  );
   const localTestGameForId = (targetGameId = '') => {
     if (!targetGameId) return null;
     if (game?.id === targetGameId && isLocalTestGame(game)) return game;
@@ -7554,10 +13452,37 @@ function ProductionApp() {
     }
   };
 
+  const clearGameListenerRetry = () => {
+    const retryTimer = gameListenerRetryRef.current?.timer || null;
+    if (retryTimer) window.clearTimeout(retryTimer);
+    gameListenerRetryRef.current = { timer: null, gameId: '', attempts: 0 };
+  };
+
   const resetRoomLoadState = () => {
     clearRoomLoadTimer();
+    clearGameListenerRetry();
     setRoomLoadState({ status: 'idle', gameId: '', reason: '', message: '' });
   };
+
+  const enterFirestoreCooldown = useCallback((source = '') => {
+    if (firestoreCooldownTimerRef.current) {
+      window.clearTimeout(firestoreCooldownTimerRef.current);
+    }
+    debugRoom('enterFirestoreCooldown', { source });
+    setIsFirestoreCoolingDown(true);
+    setNotice((current) => current || 'Firebase is rate-limiting the app right now. Pausing background sync for 30 seconds.');
+    firestoreCooldownTimerRef.current = window.setTimeout(() => {
+      firestoreCooldownTimerRef.current = null;
+      setIsFirestoreCoolingDown(false);
+    }, 30000);
+  }, []);
+
+  const reportFirestoreListenerError = useCallback((tag, error) => {
+    if (isFirestoreRateLimitedError(error)) {
+      enterFirestoreCooldown(tag);
+    }
+    debugRoom(tag, { message: error?.message || String(error) });
+  }, [enterFirestoreCooldown]);
 
   const armRoomLoadTimeout = (nextGameId, reason = 'loading room') => {
     if (!nextGameId) return;
@@ -7586,6 +13511,7 @@ function ProductionApp() {
     if (!nextGameId) return;
     debugRoom('resolveRoomLoad', { nextGameId, source });
     clearRoomLoadTimer();
+    if (gameListenerRetryRef.current.gameId === nextGameId) clearGameListenerRetry();
     setRoomLoadState((current) => {
       if (current.gameId && current.gameId !== nextGameId) return current;
       return { status: 'idle', gameId: '', reason: '', message: '' };
@@ -7613,6 +13539,26 @@ function ProductionApp() {
       // Ignore storage failures.
     }
   };
+
+  const addPendingDeletedGameId = useCallback((targetGameId = '') => {
+    const normalizedGameId = String(targetGameId || '');
+    if (!normalizedGameId) return;
+    setPendingDeletedGameIds((current) => {
+      const next = [...new Set([...current, normalizedGameId])];
+      writePendingDeletedGameIds(next);
+      return next;
+    });
+  }, []);
+
+  const removePendingDeletedGameId = useCallback((targetGameId = '') => {
+    const normalizedGameId = String(targetGameId || '');
+    if (!normalizedGameId) return;
+    setPendingDeletedGameIds((current) => {
+      const next = current.filter((entry) => entry !== normalizedGameId);
+      writePendingDeletedGameIds(next);
+      return next;
+    });
+  }, []);
 
   const clearCompletedGameProfiles = async (targetGameId, participantUids = []) => {
     if (!firestore || !targetGameId) return;
@@ -7650,7 +13596,13 @@ function ProductionApp() {
     await clearCompletedGameProfiles(targetGame.id, targetGame.playerUids || []);
   };
 
-  useEffect(() => () => clearRoomLoadTimer(), []);
+  useEffect(() => () => {
+    clearRoomLoadTimer();
+    if (firestoreCooldownTimerRef.current) {
+      window.clearTimeout(firestoreCooldownTimerRef.current);
+      firestoreCooldownTimerRef.current = null;
+    }
+  }, []);
 
   const appStyle = useMemo(
     () => ({
@@ -7695,39 +13647,103 @@ function ProductionApp() {
       setAuthLoading(false);
       return undefined;
     }
-    const unsubscribe = onAuthStateChanged(firebaseAuth, async (nextUser) => {
-      debugRoom('authStateChanged', { uid: nextUser?.uid || '', email: nextUser?.email || '' });
-      const previousAuthUserId = lastAuthUserIdRef.current;
-      const nextAuthUserId = nextUser?.uid || '';
-      lastAuthUserIdRef.current = nextAuthUserId;
-      if (nextAuthUserId && nextAuthUserId !== previousAuthUserId) {
-        setMobilePostAuthDashboardDefault();
-      }
-      setUser(nextUser);
+    let cancelled = false;
+    let authResolved = false;
+    const resolveAuthLoading = () => {
+      if (cancelled || authResolved) return;
+      authResolved = true;
       setAuthLoading(false);
-      if (nextUser && firestore) {
-        const profileRef = doc(firestore, 'users', nextUser.uid);
-        await setDoc(
-          profileRef,
-          {
-            uid: nextUser.uid,
-            displayName: nextUser.displayName || nextUser.email?.split('@')[0] || 'Player',
-            email: nextUser.email || '',
-            photoURL: nextUser.photoURL || '',
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true },
-        );
-      } else {
-        setProfile(null);
-        autoResumedGameIdRef.current = '';
-        setGameId('');
-        localStorage.removeItem(activeGameKey);
-        resetRoomLoadState();
+    };
+    const initialCurrentUser = firebaseAuth.currentUser || null;
+    if (initialCurrentUser) {
+      setUser((current) => current || initialCurrentUser);
+      resolveAuthLoading();
+    }
+    const authFallbackTimer = window.setTimeout(() => {
+      if (cancelled || authResolved) return;
+      setUser((current) => current || firebaseAuth.currentUser || null);
+      resolveAuthLoading();
+    }, 2500);
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (nextUser) => {
+      try {
+        debugRoom('authStateChanged', { uid: nextUser?.uid || '', email: nextUser?.email || '' });
+        const previousAuthUserId = lastAuthUserIdRef.current;
+        const nextAuthUserId = nextUser?.uid || '';
+        lastAuthUserIdRef.current = nextAuthUserId;
+        if (nextAuthUserId && nextAuthUserId !== previousAuthUserId) {
+          setMobilePostAuthDashboardDefault();
+        }
+        setUser(nextUser);
+        resolveAuthLoading();
+        if (nextUser && firestore) {
+          const profileRef = doc(firestore, 'users', nextUser.uid);
+          await setDoc(
+            profileRef,
+            {
+              uid: nextUser.uid,
+              displayName: nextUser.displayName || nextUser.email?.split('@')[0] || 'Player',
+              email: nextUser.email || '',
+              photoURL: nextUser.photoURL || '',
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true },
+          );
+        } else {
+          setProfile(null);
+          autoResumedGameIdRef.current = '';
+          setGameId('');
+          localStorage.removeItem(activeGameKey);
+          resetRoomLoadState();
+        }
+      } catch (error) {
+        resolveAuthLoading();
+        console.error('[KJK AUTH] Could not finish auth bootstrap.', error);
       }
     });
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      window.clearTimeout(authFallbackTimer);
+      unsubscribe();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setDeferredLobbyDataReady(false);
+      return undefined;
+    }
+    if (!firestore || hasOpenRoomSession || deferredLobbyDataReady) return undefined;
+    let cancelled = false;
+    let frameId = 0;
+    let timeoutId = 0;
+    let idleId = null;
+    const markReady = () => {
+      if (cancelled) return;
+      setDeferredLobbyDataReady(true);
+    };
+    const handleFirstInteraction = () => {
+      markReady();
+    };
+    window.addEventListener('pointerdown', handleFirstInteraction, { once: true, passive: true });
+    window.addEventListener('keydown', handleFirstInteraction, { once: true });
+    frameId = window.requestAnimationFrame(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(markReady, { timeout: 900 });
+        return;
+      }
+      timeoutId = window.setTimeout(markReady, 600);
+    });
+    return () => {
+      cancelled = true;
+      window.removeEventListener('pointerdown', handleFirstInteraction);
+      window.removeEventListener('keydown', handleFirstInteraction);
+      if (frameId) window.cancelAnimationFrame(frameId);
+      if (idleId !== null && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleId);
+      }
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
+  }, [deferredLobbyDataReady, firestore, hasOpenRoomSession, user]);
 
   useEffect(() => {
     if (!user || !firestore) return undefined;
@@ -7742,6 +13758,15 @@ function ProductionApp() {
         leavePendingGameRef.current = '';
       }
       if (isLocalTestGameId(gameId)) return;
+      if (activeGameFromProfile && hiddenGameIdSet.has(activeGameFromProfile)) {
+        clearPersistedActiveGame(activeGameFromProfile);
+        setGameId('');
+        setGame(null);
+        setRounds([]);
+        setChatMessages([]);
+        resetRoomLoadState();
+        return;
+      }
       if (activeGameFromProfile && activeGameFromProfile !== gameId) {
         void (async () => {
           const snap = await getDoc(doc(firestore, 'games', activeGameFromProfile)).catch(() => null);
@@ -7764,12 +13789,6 @@ function ProductionApp() {
             setNotice('The saved active game was no longer available, so the app returned to the lobby.');
             return;
           }
-          if (isMobileDashboard) {
-            autoResumedGameIdRef.current = activeGameFromProfile;
-            clearPersistedActiveGame(activeGameFromProfile);
-            resetRoomLoadState();
-            return;
-          }
           autoResumedGameIdRef.current = activeGameFromProfile;
           setGameId(activeGameFromProfile);
           safeLocalStorageSet(activeGameKey, activeGameFromProfile);
@@ -7777,68 +13796,108 @@ function ProductionApp() {
         return;
       }
     }, (error) => {
+      if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('profile-listener');
+      }
       failRoomLoad(gameId, `Could not read your profile: ${error?.message || error}`, 'profile-listener');
     });
     return unsubscribe;
-  }, [user, gameId, isMobileDashboard, firestore, listenerRefreshKey]);
+  }, [user, gameId, firestore, listenerRefreshKey, enterFirestoreCooldown, hiddenGameIdSet]);
 
   useEffect(() => {
+    gameLibrarySnapshotRequestRef.current += 1;
     if (!user || !firestore) {
       setGameLibrary([]);
       return undefined;
     }
-    if (hasOpenRoomSession) return undefined;
+    if (hasOpenRoomSession || shouldPauseBackgroundFirestore) return undefined;
     const gamesRef = query(collection(firestore, 'games'), where('playerUids', 'array-contains', user.uid));
     let isListenerActive = true;
-    const unsubscribe = onSnapshot(gamesRef, async (snapshot) => {
-      const visibleGameIds = new Set(snapshot.docs.map((entry) => entry.id));
-      [...gameLibraryRoundsCacheRef.current.keys()].forEach((cacheKey) => {
-        const cachedGameId = cacheKey.split(':')[0] || '';
-        if (!visibleGameIds.has(cachedGameId)) gameLibraryRoundsCacheRef.current.delete(cacheKey);
-      });
-      const summaries = await Promise.all(
-        snapshot.docs.map(async (entry) => {
-          const data = entry.data();
-          const status = data.status || 'active';
-          const shouldLoadRounds = COMPLETED_GAME_STATUSES.includes(status);
-          let roundsData = [];
-          if (shouldLoadRounds) {
-            const cacheKey = [
-              entry.id,
-              Number(data.roundsPlayed || 0),
-              getRecordTime(data.endedAt || data.updatedAt || data.createdAt || 0),
-            ].join(':');
-            const cachedRounds = gameLibraryRoundsCacheRef.current.get(cacheKey);
-            if (cachedRounds) {
-              roundsData = cachedRounds;
-            } else {
-              const roundsSnap = await getDocs(query(collection(doc(firestore, 'games', entry.id), 'rounds'), orderBy('number', 'asc')));
-              roundsData = normalizeStoredRounds(roundsSnap.docs.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() })));
-              gameLibraryRoundsCacheRef.current.set(cacheKey, roundsData);
+    const unsubscribe = onSnapshot(gamesRef, (snapshot) => {
+      const requestId = gameLibrarySnapshotRequestRef.current + 1;
+      gameLibrarySnapshotRequestRef.current = requestId;
+      const isStaleRequest = () =>
+        !isListenerActive || gameLibrarySnapshotRequestRef.current !== requestId;
+
+      void (async () => {
+        const visibleGameIds = new Set(snapshot.docs.map((entry) => entry.id));
+        if (isStaleRequest()) return;
+
+        [...gameLibraryRoundsCacheRef.current.keys()].forEach((cacheKey) => {
+          const cachedGameId = cacheKey.split(':')[0] || '';
+          if (!visibleGameIds.has(cachedGameId)) gameLibraryRoundsCacheRef.current.delete(cacheKey);
+        });
+
+        const summaries = await Promise.all(
+          snapshot.docs.map(async (entry) => {
+            const data = entry.data();
+            const status = data.status || 'active';
+            const shouldLoadRounds = COMPLETED_GAME_STATUSES.includes(status) && (
+              shouldLoadAllCompletedGameRounds
+              || (
+                shouldLoadSelectedCompletedGameRoundHistory
+                && (entry.id === selectedGameId || entry.id === localEndedGameSummary?.id)
+              )
+            );
+            let roundsData = [];
+            if (shouldLoadRounds) {
+              const cacheKey = [
+                entry.id,
+                Number(data.roundsPlayed || 0),
+                getRecordTime(data.endedAt || data.updatedAt || data.createdAt || 0),
+              ].join(':');
+              const cachedRounds = gameLibraryRoundsCacheRef.current.get(cacheKey);
+              if (cachedRounds) {
+                roundsData = cachedRounds;
+              } else {
+                const roundsSnap = await getDocs(query(collection(doc(firestore, 'games', entry.id), 'rounds'), orderBy('number', 'asc')));
+                roundsData = normalizeStoredRounds(roundsSnap.docs.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() })));
+                if (!isStaleRequest()) gameLibraryRoundsCacheRef.current.set(cacheKey, roundsData);
+              }
             }
-          }
-          return buildGameLibraryEntry(entry.id, data, roundsData);
-        }),
-      );
-      if (!snapshot.empty) {
-        summaries.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      }
-      if (!isListenerActive) return;
-      setGameLibrary(summaries.filter(Boolean));
+            return buildGameLibraryEntry(entry.id, data, roundsData);
+          }),
+        );
+
+        if (isStaleRequest()) return;
+        if (!snapshot.empty) summaries.sort(sortByNewestGameSession);
+        if (isStaleRequest()) return;
+        setGameLibrary(summaries.filter((entry) => entry?.id && !hiddenGameIdSet.has(entry.id)));
+      })().catch((error) => {
+        if (!isStaleRequest()) return;
+        if (isFirestoreRateLimitedError(error)) {
+          enterFirestoreCooldown('gameLibrarySnapshotLoadError');
+        }
+        debugRoom('gameLibrarySnapshotLoadError', { message: error?.message || String(error) });
+      });
     }, (error) => {
-      debugRoom('gameLibrarySnapshotError', { message: error?.message || String(error) });
+      reportFirestoreListenerError('gameLibrarySnapshotError', error);
     });
     return () => {
       isListenerActive = false;
+      gameLibrarySnapshotRequestRef.current += 1;
       unsubscribe();
     };
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [
+    user,
+    firestore,
+    hasOpenRoomSession,
+    shouldPauseBackgroundFirestore,
+    selectedGameId,
+    localEndedGameSummary?.id,
+    shouldLoadAllCompletedGameRounds,
+    shouldLoadSelectedCompletedGameRoundHistory,
+    enterFirestoreCooldown,
+    hiddenGameIdSet,
+    reportFirestoreListenerError,
+  ]);
 
   useEffect(() => {
     if (!firestore || !user) {
       setPairHistory({ playedQuestionIds: [], completedGameIds: [] });
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const pairRef = doc(firestore, 'playerPairs', buildPairKey());
     const unsubscribe = onSnapshot(
       pairRef,
@@ -7850,13 +13909,14 @@ function ProductionApp() {
           completedGameIds: Array.isArray(data.completedGameIds) ? data.completedGameIds.filter(Boolean) : [],
         });
       },
-      (error) => debugRoom('pairHistorySnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('pairHistorySnapshotError', error),
     );
     return unsubscribe;
-  }, [user, firestore]);
+  }, [user, firestore, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!firestore || !user) return undefined;
+    if (shouldPauseBackgroundFirestore) return undefined;
     const playerRefs = {
       jay: doc(firestore, 'users', fixedPlayerUids.jay),
       kim: doc(firestore, 'users', fixedPlayerUids.kim),
@@ -7873,141 +13933,248 @@ function ProductionApp() {
             updatedAt: data.updatedAt || null,
           },
         }));
-      }, (error) => debugRoom('playerAccountSnapshotError', { seat, message: error?.message || String(error) })),
+      }, (error) => reportFirestoreListenerError(`playerAccountSnapshotError:${seat}`, error)),
     );
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe && unsubscribe());
-  }, [user, firestore]);
+  }, [user, firestore, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!shouldLoadStoreCollections) {
       setRedemptionItems([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const itemsRef = query(collection(firestore, 'redemptionItems'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(itemsRef, (snapshot) => {
       setRedemptionItems(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('redemptionItemsSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('redemptionItemsSnapshotError', error));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadStoreCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!shouldLoadStoreCollections) {
       setRedemptionHistory([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const historyRef = query(collection(firestore, 'redemptionHistory'), orderBy('redeemedAt', 'desc'), limit(40));
     const unsubscribe = onSnapshot(historyRef, (snapshot) => {
       setRedemptionHistory(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('redemptionHistorySnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('redemptionHistorySnapshotError', error));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadStoreCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!shouldLoadStoreCollections) {
       setForfeitPriceRequests([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const requestRef = query(collection(firestore, 'forfeitPriceRequests'), orderBy('requestedAt', 'desc'), limit(80));
     const unsubscribe = onSnapshot(requestRef, (snapshot) => {
       setForfeitPriceRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('forfeitRequestsSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('forfeitRequestsSnapshotError', error));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadStoreCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
       setGameInvites([]);
       return undefined;
     }
-    const inviteRef = query(collection(firestore, 'gameInvites'), orderBy('updatedAt', 'desc'), limit(80));
+    if (shouldPauseBackgroundFirestore) return undefined;
+    const inferredInviteSeat = preferredSeatForUser(user, profile) || 'jay';
+    const inviteTargetIds = mergeUniqueIds(
+      user.uid,
+      canonicalPlayerIdForRef(user.uid, inferredInviteSeat),
+      canonicalPlayerIdForRef(profile?.displayName || user?.displayName || user?.email?.split('@')[0], inferredInviteSeat),
+    ).filter(Boolean).slice(0, 10);
+    if (!inviteTargetIds.length) {
+      setGameInvites([]);
+      return undefined;
+    }
+    const inviteRef = inviteTargetIds.length === 1
+      ? query(collection(firestore, 'gameInvites'), where('invitedForUserId', '==', inviteTargetIds[0]))
+      : query(collection(firestore, 'gameInvites'), where('invitedForUserId', 'in', inviteTargetIds));
     const unsubscribe = onSnapshot(inviteRef, (snapshot) => {
-      setGameInvites(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('gameInvitesSnapshotError', { message: error?.message || String(error) }));
+      setGameInvites(snapshot.docs.map((entry) => ({
+        id: entry.id,
+        source: 'collection',
+        collectionInviteId: entry.id,
+        roomInviteId: '',
+        ...entry.data(),
+      })).filter((entry) => !hiddenGameIdSet.has(entry.gameId || '')).sort(sortByNewest));
+    }, (error) => reportFirestoreListenerError('gameInvitesSnapshotError', error));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, hiddenGameIdSet, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!firestore || !user || hasOpenRoomSession || !deferredLobbyDataReady) {
+      setRoomGameInvites([]);
+      return undefined;
+    }
+    if (shouldPauseBackgroundFirestore) return undefined;
+    const inferredInviteSeat = preferredSeatForUser(user, profile) || 'jay';
+    const roomInviteLookupTokens = mergeUniqueIds(
+      user.uid,
+      playerIdForSeat(inferredInviteSeat),
+      inferredInviteSeat,
+      PLAYER_LABEL[inferredInviteSeat] || '',
+    ).filter(Boolean).slice(0, 10);
+    if (!roomInviteLookupTokens.length) {
+      setRoomGameInvites([]);
+      return undefined;
+    }
+    const roomInviteRef = roomInviteLookupTokens.length === 1
+      ? query(collection(firestore, 'games'), where('pendingInviteTargets', 'array-contains', roomInviteLookupTokens[0]))
+      : query(collection(firestore, 'games'), where('pendingInviteTargets', 'array-contains-any', roomInviteLookupTokens));
+    const unsubscribe = onSnapshot(roomInviteRef, (snapshot) => {
+      const roomInvites = snapshot.docs.map((entry) => {
+        const data = entry.data() || {};
+        const inviteSeat = data.pendingInviteForSeat || inferredInviteSeat || 'jay';
+        const inviteUserId = data.pendingInviteForUserId || playerIdForSeat(inviteSeat);
+        const roomInviteId = `room-invite:${buildGameRoomInviteKey(entry.id, inviteUserId, inviteSeat)}`;
+        return {
+          id: roomInviteId,
+          source: 'room',
+          roomInviteId,
+          collectionInviteId: '',
+          gameId: entry.id,
+          roomCode: gameRoomCodeForLookup(data) || normalizeJoinCode(data?.joinCode || data?.code || ''),
+          joinCode: gameRoomCodeForLookup(data) || normalizeJoinCode(data?.joinCode || data?.code || ''),
+          gameName: data.gameName || data.name || `Game ${gameRoomCodeForLookup(data) || entry.id}`,
+          invitedByUserId: data.pendingInviteByUserId || data.hostUid || '',
+          invitedByDisplayName: data.pendingInviteByDisplayName || data.hostDisplayName || '',
+          invitedBySeat: data.pendingInviteBySeat || '',
+          invitedForUserId: inviteUserId,
+          invitedForSeat: inviteSeat,
+          requestedQuestionCount: Number(data.requestedQuestionCount || 0),
+          actualQuestionCount: Number(data.actualQuestionCount || getGameQuestionGoal(data) || 0),
+          status: data.pendingInviteStatus || 'pending',
+          gameStatus: data.status || data.pendingInviteGameStatus || 'active',
+          createdAt: data.pendingInviteCreatedAt || data.createdAt || null,
+          updatedAt: data.pendingInviteUpdatedAt || data.updatedAt || null,
+        };
+      });
+      setRoomGameInvites(roomInvites.filter((entry) => !hiddenGameIdSet.has(entry.gameId || '')).sort(sortByNewest));
+    }, (error) => reportFirestoreListenerError('roomInviteSnapshotError', error));
+    return unsubscribe;
+  }, [deferredLobbyDataReady, user, profile, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, hiddenGameIdSet, reportFirestoreListenerError]);
+
+  useEffect(() => {
+    if (!shouldLoadStoreCollections) {
       setAmaRequests([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const amaRef = query(collection(firestore, 'amaRequests'), orderBy('updatedAt', 'desc'), limit(120));
     const unsubscribe = onSnapshot(amaRef, (snapshot) => {
       setAmaRequests(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('amaRequestsSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('amaRequestsSnapshotError', error));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadStoreCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!shouldLoadDiaryCollections) {
       setDiaryEntries([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const diaryRef = query(collection(firestore, 'diaryEntries'), orderBy('updatedAt', 'desc'), limit(120));
     const unsubscribe = onSnapshot(diaryRef, (snapshot) => {
       setDiaryEntries(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('diaryEntriesSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('diaryEntriesSnapshotError', error));
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadDiaryCollections, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user?.uid || hasOpenRoomSession) {
+    if (!firestore || !user?.uid || hasOpenRoomSession || !deferredLobbyDataReady) {
       setQuestionNotes([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const notesRef = query(collection(firestore, 'users', user.uid, 'questionNotes'), orderBy('updatedAt', 'desc'), limit(200));
     const unsubscribe = onSnapshot(
       notesRef,
       (snapshot) => setQuestionNotes(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
-      (error) => debugRoom('questionNotesSnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('questionNotesSnapshotError', error),
     );
     return unsubscribe;
-  }, [user?.uid, firestore, hasOpenRoomSession]);
+  }, [deferredLobbyDataReady, user?.uid, firestore, hasOpenRoomSession, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!shouldLoadAiChatHistory) {
+      setAiChatMessages([]);
+      setOptimisticAiChatMessages([]);
+      return undefined;
+    }
+    if (shouldPauseBackgroundFirestore) return undefined;
+    const aiChatRef = query(
+      collection(firestore, 'users', user.uid, 'aiChatMessages'),
+      orderBy('createdAtMs', 'asc'),
+      limit(AI_CHAT_MESSAGE_LIMIT),
+    );
+    const unsubscribe = onSnapshot(
+      aiChatRef,
+      (snapshot) => setAiChatMessages(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
+      (error) => {
+        reportFirestoreListenerError('aiChatSnapshotError', error);
+        if (String(error?.code || '').includes('permission-denied') || String(error?.message || '').toLowerCase().includes('insufficient permissions')) {
+          setNotice((current) => current || 'AI chat is showing local replies, but private AI history cannot sync until Firestore permissions are updated.');
+        }
+      },
+    );
+    return unsubscribe;
+  }, [firestore, shouldLoadAiChatHistory, user?.uid, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
+
+  useEffect(() => {
+    if (!shouldLoadQuestionFeedback) {
       setQuestionFeedback([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const feedbackRef = query(collection(firestore, 'questionFeedback'), where('pairId', '==', buildPairKey()), limit(2000));
     const unsubscribe = onSnapshot(
       feedbackRef,
       (snapshot) => setQuestionFeedback(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
-      (error) => debugRoom('questionFeedbackSnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('questionFeedbackSnapshotError', error),
     );
     return unsubscribe;
-  }, [user, firestore]);
+  }, [firestore, shouldLoadQuestionFeedback, user, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user) {
+    if (!shouldLoadQuestionReplays) {
       setQuestionReplays([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const replayRef = query(collection(firestore, 'questionReplays'), where('pairId', '==', buildPairKey()), limit(3000));
     const unsubscribe = onSnapshot(
       replayRef,
       (snapshot) => setQuestionReplays(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
-      (error) => debugRoom('questionReplaysSnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('questionReplaysSnapshotError', error),
     );
     return unsubscribe;
-  }, [user, firestore]);
+  }, [firestore, shouldLoadQuestionReplays, user, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!firestore || !user || hasOpenRoomSession) {
+    if (!shouldLoadQuizAnswerHistory) {
       setQuizAnswers([]);
       return undefined;
     }
+    if (shouldPauseBackgroundFirestore) return undefined;
     const answersRef = query(collection(firestore, 'quizAnswers'), where('pairId', '==', buildPairKey()), limit(4000));
     const unsubscribe = onSnapshot(
       answersRef,
       (snapshot) => setQuizAnswers(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
-      (error) => debugRoom('quizAnswersSnapshotError', { message: error?.message || String(error) }),
+      (error) => reportFirestoreListenerError('quizAnswersSnapshotError', error),
     );
     return unsubscribe;
-  }, [user, firestore, hasOpenRoomSession]);
+  }, [firestore, shouldLoadQuizAnswerHistory, user, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!user || !firestore) return undefined;
+    if (!shouldLoadQuestionBankData) return undefined;
+    if (shouldPauseBackgroundFirestore) return undefined;
     const bankRef = collection(firestore, 'questionBank');
     const unsubscribe = onSnapshot(query(bankRef, orderBy('question', 'asc')), async (snapshot) => {
       if (snapshot.empty) {
@@ -8015,9 +14182,9 @@ function ProductionApp() {
         return;
       }
       setBankQuestions(snapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id)));
-    }, (error) => debugRoom('bankSnapshotError', { message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('bankSnapshotError', error));
     return unsubscribe;
-  }, [user, firestore, gameId, game?.id]);
+  }, [firestore, gameId, game?.id, shouldLoadQuestionBankData, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (isLocalTestGameId(gameId)) {
@@ -8032,9 +14199,18 @@ function ProductionApp() {
     }
     const gameRef = doc(firestore, 'games', gameId);
     const roundsRef = query(collection(gameRef, 'rounds'), orderBy('number', 'asc'));
-    const chatRef = query(collection(gameRef, 'chatMessages'), orderBy('createdAt', 'asc'), limit(60));
-    const unsubscribeGame = onSnapshot(gameRef, (snapshot) => {
-      debugRoom('gameSnapshot', { gameId, exists: snapshot.exists(), status: snapshot.exists() ? snapshot.data()?.status : 'missing' });
+    const chatRef = query(collection(gameRef, 'chatMessages'), orderBy('createdAt', 'asc'));
+    let unsubscribeGame = () => {};
+    let unsubscribeRounds = () => {};
+    let unsubscribeChat = () => {};
+    unsubscribeGame = onSnapshot(gameRef, (snapshot) => {
+      const snapshotData = snapshot.exists() ? snapshot.data() || {} : null;
+      debugRoom('gameSnapshot', {
+        gameId,
+        exists: snapshot.exists(),
+        status: snapshotData?.status || 'missing',
+        quizWagerAgreement: snapshotData?.quizWagerAgreement || null,
+      });
       setConnectionState((current) => ({ ...current, lastGameSnapshotAt: Date.now(), lastError: '' }));
       setGame((current) => {
         if (snapshot.exists()) {
@@ -8046,20 +14222,47 @@ function ProductionApp() {
       });
     }, (error) => {
       setConnectionState((current) => ({ ...current, lastError: error?.message || String(error) }));
+      if (isFirestoreRateLimitedError(error)) {
+        const previousRetry = gameListenerRetryRef.current || { timer: null, gameId: '', attempts: 0 };
+        const attempts = previousRetry.gameId === gameId ? Number(previousRetry.attempts || 0) + 1 : 1;
+        const delayMs = Math.min(15000, 2000 * attempts);
+        if (previousRetry.timer) window.clearTimeout(previousRetry.timer);
+        gameListenerRetryRef.current = {
+          gameId,
+          attempts,
+          timer: window.setTimeout(() => {
+            if (gameListenerRetryRef.current.gameId !== gameId) return;
+            gameListenerRetryRef.current = {
+              ...gameListenerRetryRef.current,
+              timer: null,
+            };
+            setListenerRefreshKey((current) => current + 1);
+          }, delayMs),
+        };
+        unsubscribeGame();
+        unsubscribeRounds();
+        unsubscribeChat();
+        failRoomLoad(
+          gameId,
+          `Firestore is rate-limiting this room right now. Retrying in ${Math.ceil(delayMs / 1000)}s.`,
+          'game-listener-rate-limited',
+        );
+        return;
+      }
       failRoomLoad(gameId, `Could not load the game board: ${error?.message || error}`, 'game-listener');
     });
-    const unsubscribeRounds = onSnapshot(roundsRef, (snapshot) => {
+    unsubscribeRounds = onSnapshot(roundsRef, (snapshot) => {
       setRounds(normalizeStoredRounds(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))));
-    }, (error) => debugRoom('roundsSnapshotError', { gameId, message: error?.message || String(error) }));
-    const unsubscribeChat = onSnapshot(chatRef, (snapshot) => {
+    }, (error) => reportFirestoreListenerError('roundsSnapshotError', error));
+    unsubscribeChat = onSnapshot(chatRef, (snapshot) => {
       setChatMessages(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
-    }, (error) => debugRoom('chatSnapshotError', { gameId, message: error?.message || String(error) }));
+    }, (error) => reportFirestoreListenerError('chatSnapshotError', error));
     return () => {
       unsubscribeGame();
       unsubscribeRounds();
       unsubscribeChat();
     };
-  }, [gameId, listenerRefreshKey]);
+  }, [gameId, listenerRefreshKey, enterFirestoreCooldown, reportFirestoreListenerError]);
 
   useEffect(() => {
     if (!game?.id || !COMPLETED_GAME_STATUSES.includes(game.status) || autoResumedGameIdRef.current !== game.id) return undefined;
@@ -8076,17 +14279,41 @@ function ProductionApp() {
   }, [game, gameId]);
 
   useEffect(() => {
-    if (!isMobileDashboard || !autoResumedGameIdRef.current) return undefined;
-    const resumedGameId = autoResumedGameIdRef.current;
-    autoResumedGameIdRef.current = '';
-    clearPersistedActiveGame(resumedGameId);
-    setGameId((current) => (current === resumedGameId ? '' : current));
-    setGame((current) => (current?.id === resumedGameId ? null : current));
-    setRounds((current) => ((gameId === resumedGameId || game?.id === resumedGameId) ? [] : current));
-    setChatMessages((current) => ((gameId === resumedGameId || game?.id === resumedGameId) ? [] : current));
+    if (!game?.id || !COMPLETED_GAME_STATUSES.includes(game.status) || isLocalTestGame(game)) return undefined;
+    if (completedLiveRoomHandledRef.current.has(game.id)) return undefined;
+    completedLiveRoomHandledRef.current.add(game.id);
+    const targetGameId = game.id;
+    const summary = buildGameLibraryEntry(
+      targetGameId,
+      {
+        ...game,
+        status: game.status,
+        roundsPlayed: Math.max(Number(game.roundsPlayed || 0), Array.isArray(rounds) ? rounds.length : 0),
+      },
+      normalizeStoredRounds(rounds),
+    );
+    promoteEndedGameToCompleted(summary);
+    autoResumedGameIdRef.current = autoResumedGameIdRef.current === targetGameId ? '' : autoResumedGameIdRef.current;
+    leavePendingGameRef.current = leavePendingGameRef.current === targetGameId ? '' : leavePendingGameRef.current;
+    clearPersistedActiveGame(targetGameId);
+    try {
+      safeLocalStorageSet('kjk-dashboard-tab', 'activity');
+      safeLocalStorageSet('kjk-activity-tab', 'previousGames');
+    } catch {
+      // Ignore storage failures while returning to the lobby.
+    }
+    setGameId((current) => (current === targetGameId ? '' : current));
+    setGame((current) => (current?.id === targetGameId ? null : current));
+    setRounds((current) => (game?.id === targetGameId ? [] : current));
+    setChatMessages((current) => (game?.id === targetGameId ? [] : current));
     resetRoomLoadState();
+    setProfile((current) => (current?.activeGameId === targetGameId ? { ...current, activeGameId: '' } : current));
+    void clearCompletedGameProfiles(targetGameId, game.playerUids || []).catch((error) => {
+      console.warn('Could not clear completed game profiles during live room cleanup.', error);
+    });
+    setNotice('Game ended and closed. Summary moved to Previous Games.');
     return undefined;
-  }, [isMobileDashboard, gameId, game?.id]);
+  }, [game, rounds]);
 
   useEffect(() => {
     if (!gameId || isLocalTestGameId(gameId)) {
@@ -8138,7 +14365,7 @@ function ProductionApp() {
     || null;
   const inferredRole = currentUserRole || game?.playerProfiles?.[user?.uid]?.role || null;
   const inferredSeat = currentSeat;
-  const shouldBypassMobileAutoResumeRoom = Boolean(isMobileDashboard && autoResumedGameIdRef.current);
+  const shouldBypassMobileAutoResumeRoom = false;
   const dashboardSeat = inferSeatFromUser(user, profile);
   const currentPlayerStoreId = dashboardSeat ? playerIdForSeat(dashboardSeat) : user?.uid || '';
   const currentPlayerIdentityTokens = useMemo(
@@ -8172,19 +14399,47 @@ function ProductionApp() {
     ? `${PLAYER_LABEL[dashboardSeat] || dashboardSeat}: ${formatScore(Number(playerAccounts?.[dashboardSeat]?.lifetimePenaltyPoints || 0))} penalty points`
     : '';
   const incomingGameInvites = useMemo(
-    () =>
-      gameInvites
-        .filter((invite) => matchesCurrentPlayerIdentity(invite.invitedForUserId) && invite.invitedByUserId !== user?.uid)
+    () => {
+      const mergedInvites = new Map();
+      roomGameInvites.forEach((invite) => {
+        const key = invite.gameId || invite.id || '';
+        if (!key) return;
+        mergedInvites.set(key, {
+          ...invite,
+          id: invite.roomInviteId || invite.id || '',
+          source: 'room',
+          roomInviteId: invite.roomInviteId || invite.id || '',
+          collectionInviteId: invite.collectionInviteId || '',
+        });
+      });
+      gameInvites.forEach((invite) => {
+        const key = invite.gameId || invite.id || '';
+        if (!key) return;
+        const existing = mergedInvites.get(key) || {};
+        mergedInvites.set(key, {
+          ...existing,
+          ...invite,
+          id: invite.collectionInviteId || invite.id || existing.id || '',
+          source: 'collection',
+          roomInviteId: existing.roomInviteId || invite.roomInviteId || '',
+          collectionInviteId: invite.collectionInviteId || invite.id || existing.collectionInviteId || '',
+        });
+      });
+      return [...mergedInvites.values()]
+        .filter(
+          (invite) => (
+            matchesCurrentPlayerIdentity(invite.invitedForUserId)
+            || (dashboardSeat && invite.invitedForSeat === dashboardSeat)
+          ) && invite.invitedByUserId !== user?.uid,
+        )
+        .filter((invite) => !hiddenGameIdSet.has(invite.gameId || ''))
         .filter((invite) => (invite.status || 'pending') !== 'dismissed')
         .map((invite) => {
           const linkedGame =
             (game?.id === invite.gameId ? game : null)
             || gameLibrary.find((entry) => entry.id === invite.gameId)
             || null;
-          let displayStatus = invite.status || 'pending';
-          if (displayStatus === 'pending' && linkedGame && !isGameSessionJoinable(linkedGame)) {
-            displayStatus = 'expired';
-          }
+          const displayStatus = getInviteDisplayStatus(invite, linkedGame);
           return {
             ...invite,
             roomCode: invite.roomCode || invite.joinCode || '',
@@ -8192,8 +14447,9 @@ function ProductionApp() {
           };
         })
         .filter((invite) => ['pending', 'expired'].includes(invite.displayStatus))
-        .sort(sortByNewest),
-    [gameInvites, matchesCurrentPlayerIdentity, user?.uid, game?.id, game, gameLibrary],
+        .sort(sortByNewest);
+    },
+    [dashboardSeat, gameInvites, roomGameInvites, hiddenGameIdSet, matchesCurrentPlayerIdentity, user?.uid, game?.id, game, gameLibrary],
   );
   const pendingIncomingGameInvites = useMemo(
     () => incomingGameInvites.filter((invite) => invite.displayStatus === 'pending'),
@@ -8256,32 +14512,55 @@ function ProductionApp() {
     [amaRequests, matchesCurrentPlayerIdentity],
   );
   const currentRound = game?.currentRound || null;
+  const metadataSeedQuestions = useMemo(
+    () => dedupeQuestionsById([
+      ...bankQuestions,
+      ...STARTER_QUESTIONS.map((question) => createQuestionTemplate(question)),
+    ]),
+    [bankQuestions],
+  );
+  const questionMetadataLookup = useMemo(
+    () => buildQuestionMetadataLookup(metadataSeedQuestions),
+    [metadataSeedQuestions],
+  );
+  const enrichedGameLibrary = useMemo(
+    () => gameLibrary.map((entry) => enrichGameQuestionMetadata(entry, questionMetadataLookup)),
+    [gameLibrary, questionMetadataLookup],
+  );
+  const enrichedLocalArchivedGames = useMemo(
+    () => localArchivedGames.map((entry) => enrichGameQuestionMetadata(entry, questionMetadataLookup)),
+    [localArchivedGames, questionMetadataLookup],
+  );
+  const enrichedLocalEndedGameSummary = useMemo(
+    () => enrichGameQuestionMetadata(localEndedGameSummary, questionMetadataLookup),
+    [localEndedGameSummary, questionMetadataLookup],
+  );
   const activeGames = useMemo(
-    () => gameLibrary.filter((entry) => ['opening', 'active', 'paused'].includes(entry.status)),
-    [gameLibrary],
+    () => enrichedGameLibrary.filter((entry) => ['opening', 'active', 'paused'].includes(entry.status)),
+    [enrichedGameLibrary],
   );
   const persistedPreviousGames = useMemo(
-    () => gameLibrary.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
-    [gameLibrary],
+    () => enrichedGameLibrary.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
+    [enrichedGameLibrary],
   );
   const previousGames = useMemo(() => {
     const mergedById = new Map();
-    [...localArchivedGames, ...persistedPreviousGames].forEach((entry) => {
+    [...enrichedLocalArchivedGames, ...persistedPreviousGames].forEach((entry) => {
       if (entry?.id && !mergedById.has(entry.id)) mergedById.set(entry.id, entry);
     });
     return [...mergedById.values()].sort(
       (left, right) => getRecordTime(right?.endedAt || right?.createdAt || 0) - getRecordTime(left?.endedAt || left?.createdAt || 0),
     );
-  }, [localArchivedGames, persistedPreviousGames]);
+  }, [enrichedLocalArchivedGames, persistedPreviousGames]);
   const knownQuizSessionIds = useMemo(
     () =>
       new Set(
-        gameLibrary
+        enrichedGameLibrary
           .filter((entry) => (entry?.gameMode || 'standard') === 'quiz')
           .map((entry) => entry?.id)
           .filter(Boolean),
       ),
-    [gameLibrary],
+    [enrichedGameLibrary],
   );
   const visibleQuizAnswers = useMemo(
     () =>
@@ -8291,18 +14570,125 @@ function ProductionApp() {
       }),
     [quizAnswers, knownQuizSessionIds],
   );
-  const completedGameAuditRef = useRef(new Set());
-  const selectedGameSummary = gameLibrary.find((entry) => entry.id === selectedGameId) || null;
-  const selectedLocalGameSummary = localArchivedGames.find((entry) => entry.id === selectedGameId) || null;
-  const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || localEndedGameSummary;
-  const lobbyRounds = useMemo(() => gameLibrary.flatMap((entry) => entry.rounds || []), [gameLibrary]);
+  const visibleAiChatMessages = useMemo(() => {
+    const merged = new Map();
+    [...(optimisticAiChatMessages || []), ...(aiChatMessages || [])].forEach((entry) => {
+      if (!entry?.id) return;
+      merged.set(entry.id, entry);
+    });
+    return [...merged.values()].sort(
+      (left, right) =>
+        Number(left?.createdAtMs || 0) - Number(right?.createdAtMs || 0)
+        || String(left?.createdAt || '').localeCompare(String(right?.createdAt || '')),
+    );
+  }, [aiChatMessages, optimisticAiChatMessages]);
+  useEffect(() => {
+    if (!aiChatMessages.length) return;
+    const syncedIds = new Set(aiChatMessages.map((entry) => entry?.id).filter(Boolean));
+    if (!syncedIds.size) return;
+    setOptimisticAiChatMessages((current) => current.filter((entry) => !syncedIds.has(entry?.id)));
+  }, [aiChatMessages]);
+  const aiEvidenceSnapshot = useMemo(
+    () =>
+      buildAiEvidenceSnapshot({
+        previousGames,
+        questionFeedback,
+        quizAnswers: visibleQuizAnswers,
+        diaryEntries,
+        questionNotes,
+        viewerSeat: dashboardSeat || 'jay',
+      }),
+    [dashboardSeat, diaryEntries, previousGames, questionFeedback, questionNotes, visibleQuizAnswers],
+  );
+  const [gameDiaryBackfillState, setGameDiaryBackfillState] = useState({
+    status: 'idle',
+    processed: 0,
+    created: 0,
+    skipped: 0,
+    error: '',
+  });
+  const diaryGameEntries = useMemo(
+    () => diaryEntries.filter((entry) => isGameDiaryEntry(entry)),
+    [diaryEntries],
+  );
+  const previousGamesById = useMemo(
+    () =>
+      new Map(
+        previousGames
+          .map((entry) => [normalizeText(entry?.id || ''), entry])
+          .filter(([key]) => Boolean(key)),
+      ),
+    [previousGames],
+  );
+  const diaryEligibleGames = useMemo(
+    () =>
+      previousGames.filter(
+        (entry) =>
+          Boolean(entry?.id)
+          && !isLocalTestGame(entry)
+          && !isHoldemGameMode(entry?.gameMode || 'standard'),
+      ),
+    [previousGames],
+  );
+  const diaryBackfillGameIds = useMemo(
+    () =>
+      mergeUniqueIds(
+        pairHistory?.completedGameIds || [],
+        diaryEligibleGames.map((entry) => entry?.id).filter(Boolean),
+      ),
+    [diaryEligibleGames, pairHistory?.completedGameIds],
+  );
+  const diaryGameEntriesBySourceId = useMemo(
+    () =>
+      new Map(
+        diaryGameEntries
+          .map((entry) => [normalizeText(entry?.sourceId || entry?.gameId || ''), entry])
+          .filter(([key]) => Boolean(key)),
+      ),
+    [diaryGameEntries],
+  );
+  const missingGameDiaryCount = useMemo(
+    () =>
+      diaryBackfillGameIds.filter((gameId) => {
+        const normalizedGameId = normalizeText(gameId || '');
+        const loadedGame = previousGamesById.get(normalizedGameId) || null;
+        if (loadedGame && (isLocalTestGame(loadedGame) || isHoldemGameMode(loadedGame?.gameMode || 'standard'))) {
+          return false;
+        }
+        const existing = diaryGameEntriesBySourceId.get(normalizedGameId) || null;
+        return !existing || !Boolean(existing?.aiGenerated) || normalizeIdentity(existing?.aiDiaryStatus || '') === 'error';
+      }).length,
+    [diaryBackfillGameIds, diaryGameEntriesBySourceId, previousGamesById],
+  );
+  const selectedGameSummary = enrichedGameLibrary.find((entry) => entry.id === selectedGameId) || null;
+  const selectedLocalGameSummary = enrichedLocalArchivedGames.find((entry) => entry.id === selectedGameId) || null;
+  const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || enrichedLocalEndedGameSummary;
+  const lobbyRounds = useMemo(
+    () =>
+      enrichedGameLibrary
+        .filter((entry) => !isTrueFalseGameMode(entry?.gameMode || 'standard'))
+        .flatMap((entry) => entry.rounds || []),
+    [enrichedGameLibrary],
+  );
   const gameBankQuestions = useMemo(
-    () => bankQuestions.filter((question) => (question?.bankType || 'game') !== 'quiz'),
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'game'),
     [bankQuestions],
   );
   const quizBankQuestions = useMemo(
-    () => bankQuestions.filter((question) => question?.bankType === 'quiz'),
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'quiz'),
     [bankQuestions],
+  );
+  const thisOrThatBankQuestions = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'thisOrThatGame'),
+    [bankQuestions],
+  );
+  const trueFalseBankQuestions = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
+    [bankQuestions],
+  );
+  const standardSelectableQuestions = useMemo(
+    () => (gameBankQuestions.length ? gameBankQuestions : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))),
+    [gameBankQuestions],
   );
   const lobbyCategoryOptions = useMemo(
     () => deriveCategories(gameBankQuestions, lobbyRounds, DEFAULT_CATEGORIES).map((category) => category.name).filter(Boolean),
@@ -8337,8 +14723,10 @@ function ProductionApp() {
   );
   const bankCount = gameBankQuestions.length;
   const quizBankCount = quizBankQuestions.length;
+  const thisOrThatBankCount = thisOrThatBankQuestions.length;
+  const trueFalseBankCount = trueFalseBankQuestions.length;
   const trackedGameEntries = useMemo(() => {
-    if (!game?.id || isLocalTestGame(game)) return gameLibrary;
+    if (!game?.id || isLocalTestGame(game)) return enrichedGameLibrary;
     const currentGameSummary = {
       ...game,
       rounds: rounds.length ? rounds : game.rounds || [],
@@ -8347,19 +14735,31 @@ function ProductionApp() {
         (rounds || []).map((round) => round.questionId),
       ),
     };
-    const nextEntries = [...gameLibrary];
+    const nextEntries = [...enrichedGameLibrary];
     const existingIndex = nextEntries.findIndex((entry) => entry.id === game.id);
     if (existingIndex >= 0) nextEntries[existingIndex] = { ...nextEntries[existingIndex], ...currentGameSummary };
     else nextEntries.push(currentGameSummary);
     return nextEntries;
-  }, [gameLibrary, game, rounds]);
+  }, [enrichedGameLibrary, game, rounds]);
   const bankQuestionIds = useMemo(
-    () => new Set(gameBankQuestions.map((question) => question.id).filter(Boolean)),
-    [gameBankQuestions],
+    () => new Set(standardSelectableQuestions.map((question) => question.id).filter(Boolean)),
+    [standardSelectableQuestions],
   );
   const quizQuestionIds = useMemo(
     () => new Set(quizBankQuestions.map((question) => question.id).filter(Boolean)),
     [quizBankQuestions],
+  );
+  const thisOrThatQuestionIds = useMemo(
+    () => new Set(thisOrThatBankQuestions.map((question) => question.id).filter(Boolean)),
+    [thisOrThatBankQuestions],
+  );
+  const trueFalseQuestionIds = useMemo(
+    () => new Set(trueFalseBankQuestions.map((question) => question.id).filter(Boolean)),
+    [trueFalseBankQuestions],
+  );
+  const pairPlayedQuestionIds = useMemo(
+    () => mergeUniqueIds(pairHistory?.playedQuestionIds || []),
+    [pairHistory?.playedQuestionIds],
   );
   const reservedQuestionIds = useMemo(
     () =>
@@ -8373,17 +14773,20 @@ function ProductionApp() {
                 entry?.questionQueueIds || [],
               ),
             ),
-        ).filter((questionId) => bankQuestionIds.has(questionId)),
+        ).filter(Boolean),
       ),
-    [trackedGameEntries, bankQuestionIds],
+    [trackedGameEntries],
   );
   const trackedUsedQuestionIds = useMemo(
     () => {
-      const trackedIds = mergeUniqueIds(...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)));
+      const trackedIds = mergeUniqueIds(
+        pairPlayedQuestionIds,
+        ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+      );
       if (!bankQuestionIds.size) return new Set(trackedIds);
       return new Set(trackedIds.filter((questionId) => bankQuestionIds.has(questionId)));
     },
-    [trackedGameEntries, bankQuestionIds],
+    [pairPlayedQuestionIds, trackedGameEntries, bankQuestionIds],
   );
   const replayEligibleQuestionIds = useMemo(
     () =>
@@ -8400,51 +14803,127 @@ function ProductionApp() {
     replayEligibleQuestionIds.forEach((questionId) => next.delete(questionId));
     return next;
   }, [trackedUsedQuestionIds, replayEligibleQuestionIds]);
-  const usedQuestionCount = effectiveRetiredQuestionIds.size;
+  const playedStandardQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'game')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!bankQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => bankQuestionIds.has(questionId)));
+  }, [trackedGameEntries, bankQuestionIds]);
+  const displayUsedStandardQuestionIds = useMemo(() => {
+    const next = new Set(playedStandardQuestionIds);
+    replayEligibleQuestionIds.forEach((questionId) => next.delete(questionId));
+    return next;
+  }, [playedStandardQuestionIds, replayEligibleQuestionIds]);
+  const usedQuestionCount = displayUsedStandardQuestionIds.size;
   const remainingQuestionCount = Math.max(0, bankCount - usedQuestionCount);
   const trackedUsedQuizQuestionIds = useMemo(() => {
-    const trackedIds = mergeUniqueIds(...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)));
+    const trackedIds = mergeUniqueIds(
+      pairPlayedQuestionIds,
+      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
     if (!quizQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => quizQuestionIds.has(questionId)));
+  }, [pairPlayedQuestionIds, trackedGameEntries, quizQuestionIds]);
+  const playedQuizQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'quiz')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!quizQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => quizQuestionIds.has(questionId)));
   }, [trackedGameEntries, quizQuestionIds]);
-  const usedQuizQuestionCount = trackedUsedQuizQuestionIds.size;
+  const usedQuizQuestionCount = playedQuizQuestionIds.size;
   const remainingQuizQuestionCount = Math.max(0, quizBankCount - usedQuizQuestionCount);
+  const trackedUsedTrueFalseQuestionIds = useMemo(() => {
+    const trackedIds = mergeUniqueIds(
+      pairPlayedQuestionIds,
+      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!trueFalseQuestionIds.size) return new Set(trackedIds);
+    return new Set(trackedIds.filter((questionId) => trueFalseQuestionIds.has(questionId)));
+  }, [pairPlayedQuestionIds, trackedGameEntries, trueFalseQuestionIds]);
+  const trackedUsedThisOrThatQuestionIds = useMemo(() => {
+    const trackedIds = mergeUniqueIds(
+      pairPlayedQuestionIds,
+      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!thisOrThatQuestionIds.size) return new Set(trackedIds);
+    return new Set(trackedIds.filter((questionId) => thisOrThatQuestionIds.has(questionId)));
+  }, [pairPlayedQuestionIds, trackedGameEntries, thisOrThatQuestionIds]);
+  const playedThisOrThatQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'thisOrThatGame')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!thisOrThatQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => thisOrThatQuestionIds.has(questionId)));
+  }, [trackedGameEntries, thisOrThatQuestionIds]);
+  const usedThisOrThatQuestionCount = playedThisOrThatQuestionIds.size;
+  const remainingThisOrThatQuestionCount = Math.max(0, thisOrThatBankCount - usedThisOrThatQuestionCount);
+  const playedTrueFalseQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'trueFalseGame')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!trueFalseQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => trueFalseQuestionIds.has(questionId)));
+  }, [trackedGameEntries, trueFalseQuestionIds]);
+  const usedTrueFalseQuestionCount = playedTrueFalseQuestionIds.size;
+  const remainingTrueFalseQuestionCount = Math.max(0, trueFalseBankCount - usedTrueFalseQuestionCount);
   const usedQuestionIds = useMemo(() => new Set(rounds.map((round) => round.questionId).filter(Boolean)), [rounds]);
   const availableQuestions = useMemo(() => {
-    const bank = gameBankQuestions.filter(
+    const bank = standardSelectableQuestions.filter(
       (question) =>
         !effectiveRetiredQuestionIds.has(question.id)
         && !usedQuestionIds.has(question.id)
         && !reservedQuestionIds.has(question.id),
     );
-    return bank.length ? bank : gameBankQuestions.length ? [] : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question));
-  }, [gameBankQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
+    return bank;
+  }, [standardSelectableQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
-  const globalUsedQuestionIds = useMemo(
-    () => new Set(effectiveRetiredQuestionIds),
-    [effectiveRetiredQuestionIds],
+  const allPlayedQuestionIds = useMemo(
+    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedTrueFalseQuestionIds]),
+    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedTrueFalseQuestionIds],
   );
-  const unusedQuestionCount = Math.max(0, bankCount - globalUsedQuestionIds.size);
+  const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
-    () => persistedPreviousGames.filter((entry) => entry.status === 'completed' || entry.status === 'ended'),
+    () =>
+      persistedPreviousGames.filter(
+        (entry) =>
+          (entry.status === 'completed' || entry.status === 'ended')
+          && !isHoldemGameMode(entry?.gameMode || 'standard')
+          && !isTrueFalseGameMode(entry?.gameMode || 'standard'),
+      ),
     [persistedPreviousGames],
   );
-  useEffect(() => {
-    if (hasOpenRoomSession) return;
-    previousGames.forEach((entry) => {
-      if (!entry?.id || completedGameAuditRef.current.has(entry.id)) return;
-      console.log('completed game question audit', {
-        gameId: entry.id,
-        selectedQuestionsLength: Number(entry.selectedQuestionsLength || 0),
-        answeredRoundsLength: Number(entry.answeredRoundsLength || 0),
-        roundHistoryLength: Number(entry.roundHistoryLength || 0),
-        usedQuestionIdsLength: Array.isArray(entry.usedQuestionIds) ? mergeUniqueIds(entry.usedQuestionIds).length : 0,
-        currentQuestionIndex: entry.currentQuestionIndex ?? null,
-        displayedQuestionCount: getCompletedGameDisplayCount(entry),
-      });
-      completedGameAuditRef.current.add(entry.id);
+  const analyticsActiveGames = useMemo(
+    () => activeGames.filter((entry) => !isHoldemGameMode(entry?.gameMode || 'standard') && !isTrueFalseGameMode(entry?.gameMode || 'standard')),
+    [activeGames],
+  );
+  const holdemAnalytics = useMemo(() => {
+    const mergedById = new Map();
+    [...enrichedLocalArchivedGames, ...enrichedGameLibrary].forEach((entry) => {
+      if (!entry?.id || !isHoldemGameMode(entry?.gameMode || 'standard')) return;
+      mergedById.set(entry.id, entry);
     });
-  }, [hasOpenRoomSession, previousGames]);
+    const sessions = [...mergedById.values()];
+    const aggregate = sessions.reduce(
+      (stats, entry) => mergeHoldemStats(stats, entry?.holdemStats || defaultHoldemStats()),
+      defaultHoldemStats(),
+    );
+    return {
+      ...aggregate,
+      sessionsTracked: sessions.length,
+      activeSessions: sessions.filter((entry) => ACTIVE_GAME_STATUSES.includes(entry?.status)).length,
+      completedSessions: sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status)).length,
+    };
+  }, [enrichedGameLibrary, enrichedLocalArchivedGames]);
   const pendingActivityCount = useMemo(() => {
     const pendingGameTasks = activeGames.filter((game) => {
       const seat = game?.seats?.jay === user?.uid ? 'jay' : game?.seats?.kim === user?.uid ? 'kim' : null;
@@ -8483,19 +14962,57 @@ function ProductionApp() {
     [amaDiaryEntries],
   );
 
+  const getLocalQuestionPoolForBankType = (targetBankType = 'game') => {
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    if (normalizedTargetBankType === 'quiz') return quizBankQuestions;
+    if (normalizedTargetBankType === 'thisOrThatGame') return thisOrThatBankQuestions;
+    if (normalizedTargetBankType === 'trueFalseGame') return trueFalseBankQuestions;
+    return gameBankQuestions;
+  };
+
+  const ensureQuestionBankReadyForQueue = async (targetBankType = 'game') => {
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    if (normalizedTargetBankType === 'game' && standardSelectableQuestions.length) return;
+    if (getLocalQuestionPoolForBankType(normalizedTargetBankType).length) return;
+    const seedTimeoutMarker = { timedOut: true };
+    let timeoutId = 0;
+    try {
+      const result = await Promise.race([
+        seedBankIfNeeded(normalizedTargetBankType),
+        new Promise((resolve) => {
+          timeoutId = window.setTimeout(() => resolve(seedTimeoutMarker), 2500);
+        }),
+      ]);
+      if (result === seedTimeoutMarker) {
+        console.warn('Question bank seed timed out while creating a room; continuing with the latest synced questions.', {
+          targetBankType: normalizedTargetBankType,
+        });
+      }
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+    }
+  };
+
   const buildQuestionQueue = async (requestedCount = 10, filters = {}) => {
-    const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
-    const requestedBankType = filters.bankType === 'quiz' ? 'quiz' : 'game';
-    const allQuestions = bankSnapshot.empty
-      ? STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))
-      : bankSnapshot.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
-    const questionBankPool = allQuestions.filter((question) => ((question?.bankType || 'game') === requestedBankType));
-    const retiredQuestionIds = requestedBankType === 'quiz' ? trackedUsedQuizQuestionIds : effectiveRetiredQuestionIds;
+    const requestedBankType = normalizeQuestionBankType(filters.bankType);
+    const requestedGameMode = resolveGameMode(filters.gameMode || 'standard');
+    const isThisOrThatQueue = isThisOrThatGameMode(requestedGameMode);
+    const questionBankPool = requestedBankType === 'game'
+      ? standardSelectableQuestions
+      : getLocalQuestionPoolForBankType(requestedBankType);
+    const retiredQuestionIds = requestedBankType === 'quiz'
+      ? trackedUsedQuizQuestionIds
+      : requestedBankType === 'thisOrThatGame'
+        ? trackedUsedThisOrThatQuestionIds
+      : requestedBankType === 'trueFalseGame'
+        ? trackedUsedTrueFalseQuestionIds
+        : effectiveRetiredQuestionIds;
     const unavailableQuestionIds = new Set(mergeUniqueIds([...retiredQuestionIds], [...reservedQuestionIds], [lastQuestionId]));
     const typeSet = new Set((filters.roundTypes || []).filter(Boolean));
     const categorySet = new Set((filters.categories || []).map((category) => normalizeText(category)).filter(Boolean));
     const eligible = dedupeQuestionsById(questionBankPool).filter((question) => {
       if (unavailableQuestionIds.has(question.id)) return false;
+      if (isThisOrThatQueue && !isThisOrThatQuestionCompatible(question)) return false;
       if (typeSet.size && !typeSet.has(question.roundType)) return false;
       if (categorySet.size && !categorySet.has(normalizeText(question.category))) return false;
       return true;
@@ -8523,8 +15040,16 @@ function ProductionApp() {
       warning:
         queue.length < safeRequestedCount
           ? queue.length
-            ? `Only ${queue.length} unique questions are available for this player pair.`
-            : 'No unused questions remain for this player pair.'
+            ? requestedBankType === 'trueFalseGame'
+              ? `Only ${queue.length} unrepeated True or False questions are available for this player pair. This mode does not repeat questions.`
+              : isThisOrThatQueue
+                ? `Only ${queue.length} This or That questions with clear either/or options are available right now.`
+              : `Only ${queue.length} unique questions are available for this player pair.`
+            : requestedBankType === 'trueFalseGame'
+              ? 'No unused True or False questions remain for this player pair. This mode does not repeat questions.'
+              : isThisOrThatQueue
+                ? 'No This or That questions with clear either/or options are available right now.'
+              : 'No unused questions remain for this player pair.'
           : '',
     };
   };
@@ -8570,12 +15095,18 @@ function ProductionApp() {
       return normalizedSeed;
     }
 
+    const localActiveCodes = new Set(
+      gameLibrary
+        .filter((entry) => isGameSessionJoinable(entry))
+        .map((entry) => gameRoomCodeForLookup(entry))
+        .filter(Boolean),
+    );
     for (let attempt = 0; attempt < 12; attempt += 1) {
       const candidate = makeJoinCode();
-      if (!(await isJoinCodeTaken(candidate))) return candidate;
+      if (!localActiveCodes.has(candidate)) return candidate;
     }
 
-    throw new Error('Could not generate an available room code.');
+    return makeJoinCode();
   };
 
   const setGameInviteStatus = async (inviteId, patch = {}) => {
@@ -8610,16 +15141,45 @@ function ProductionApp() {
     if (hasWrites) await batch.commit();
   };
 
-  const sendGameInviteForSession = async ({ targetGameId, targetUserId, targetSeat = '', sourceGame = null }) => {
+  const buildGameRoomInviteFields = ({ targetUserId, targetSeat = '', sourceGame = null }) => {
+    if (!user || !targetUserId) throw new Error('Could not prepare the room invite.');
+    const baseGame = sourceGame || game || null;
+    const hostSeat = seatForUid(baseGame, user.uid) || preferredSeatForUser(user, profile);
+    const inviteSeat = targetSeat || oppositeSeatOf(hostSeat);
+    return {
+      pendingInviteForUserId: targetUserId,
+      pendingInviteForSeat: inviteSeat,
+      pendingInviteTargets: mergeUniqueIds(
+        targetUserId,
+        canonicalPlayerIdForRef(targetUserId, inviteSeat),
+        inviteSeat,
+        PLAYER_LABEL[inviteSeat] || '',
+      ).filter(Boolean),
+      pendingInviteStatus: 'pending',
+      pendingInviteByUserId: user.uid,
+      pendingInviteByDisplayName: profile?.displayName || user.displayName || user.email?.split('@')[0] || gameSeatDisplayName(baseGame, hostSeat),
+      pendingInviteBySeat: hostSeat,
+      pendingInviteCreatedAt: serverTimestamp(),
+      pendingInviteUpdatedAt: serverTimestamp(),
+      pendingInviteAcceptedAt: null,
+      pendingInviteDismissedAt: null,
+      pendingInviteDismissedByUserId: '',
+      pendingInviteJoinedByUserId: '',
+      pendingInviteGameStatus: baseGame?.status || 'active',
+    };
+  };
+
+  const buildGameInviteRecord = ({ targetGameId, targetUserId, targetSeat = '', sourceGame = null }) => {
     if (!firestore || !user || !targetGameId || !targetUserId) throw new Error('Could not send the game invite.');
     if (targetUserId === user.uid) throw new Error('Choose the other player for the invite.');
     const baseGame = sourceGame || (game?.id === targetGameId ? game : null) || gameLibrary.find((entry) => entry.id === targetGameId) || null;
     const hostSeat = seatForUid(baseGame, user.uid) || preferredSeatForUser(user, profile);
     const inviteSeat = targetSeat || oppositeSeatOf(hostSeat);
     const inviteRef = doc(firestore, 'gameInvites', buildGameInviteId(targetGameId, targetUserId));
-    await setDoc(
+    return {
       inviteRef,
-      {
+      inviteId: inviteRef.id,
+      inviteDoc: {
         inviteId: inviteRef.id,
         gameId: targetGameId,
         roomCode: gameRoomCodeForLookup(baseGame) || normalizeJoinCode(baseGame?.joinCode || baseGame?.code || ''),
@@ -8640,18 +15200,44 @@ function ProductionApp() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
+    };
+  };
+
+  const sendGameInviteForSession = async ({ targetGameId, targetUserId, targetSeat = '', sourceGame = null }) => {
+    const inviteRecord = buildGameInviteRecord({ targetGameId, targetUserId, targetSeat, sourceGame });
+    await setDoc(
+      inviteRecord.inviteRef,
+      inviteRecord.inviteDoc,
       { merge: true },
     );
-    return inviteRef.id;
+    return inviteRecord.inviteId;
   };
 
   const lobbyAnalytics = useMemo(() => {
     const completed = previousCompletedGames;
+    const gameModeScoreMap = new Map(
+      ANALYTICS_GAME_SCORE_MODES.map((mode) => [
+        mode.id,
+        {
+          id: mode.id,
+          label: mode.label,
+          jayWins: 0,
+          kimWins: 0,
+          ties: 0,
+        },
+      ]),
+    );
     const wins = completed.reduce(
       (acc, gameEntry) => {
+        const scoreRow = gameModeScoreMap.get(getAnalyticsGameScoreModeId(gameEntry?.gameMode || 'standard'));
         if (gameEntry.winner === 'jay') acc.jay += 1;
         else if (gameEntry.winner === 'kim') acc.kim += 1;
         else acc.draws += 1;
+        if (scoreRow) {
+          if (gameEntry.winner === 'jay') scoreRow.jayWins += 1;
+          else if (gameEntry.winner === 'kim') scoreRow.kimWins += 1;
+          else scoreRow.ties += 1;
+        }
         return acc;
       },
       { jay: 0, kim: 0, draws: 0 },
@@ -8715,10 +15301,10 @@ function ProductionApp() {
     });
     return {
       totalGamesPlayed: completed.length,
-      activeGames: activeGames.length,
-      previousGames: previousGames.length,
+      activeGames: analyticsActiveGames.length,
+      previousGames: previousCompletedGames.length,
       totalRoundsPlayed: lobbyRounds.length,
-      totalQuestionsUsed: globalUsedQuestionIds.size,
+      totalQuestionsUsed: allPlayedQuestionIds.size,
       jayGameWins: wins.jay,
       kimGameWins: wins.kim,
       draws: wins.draws,
@@ -8754,18 +15340,383 @@ function ProductionApp() {
         ? `${completed.slice().sort((a, b) => Math.abs((b.finalScores?.jay || 0) - (b.finalScores?.kim || 0)) - Math.abs((a.finalScores?.jay || 0) - (a.finalScores?.kim || 0)))[0]?.gameName || completed[0]?.joinCode || 'N/A'}`
         : 'N/A',
       longestStreakLabel: longestStreak.count ? `${PLAYER_LABEL[longestStreak.winner] || longestStreak.winner} x${longestStreak.count}` : 'No streak',
+      gameModeScoreRows: ANALYTICS_GAME_SCORE_MODES.map((mode) => gameModeScoreMap.get(mode.id)),
     };
   }, [
-    gameLibrary,
-    activeGames,
+    analyticsActiveGames.length,
     previousGames,
     lobbyRounds,
     lobbyRoundAnalytics,
-    globalUsedQuestionIds,
+    allPlayedQuestionIds,
     previousCompletedGames,
     redemptionHistory,
     playerAccounts,
   ]);
+
+  const loadGameDiarySignalsFromFirestore = useCallback(async (gameId = '') => {
+    if (!firestore || !gameId) {
+      return { feedbackRows: [], replayRows: [], quizRows: [] };
+    }
+    const [feedbackSnap, replaySnap, quizSnap] = await Promise.all([
+      getDocs(query(collection(firestore, 'questionFeedback'), where('gameId', '==', gameId), limit(400))),
+      getDocs(query(collection(firestore, 'questionReplays'), where('gameId', '==', gameId), limit(400))),
+      getDocs(query(collection(firestore, 'quizAnswers'), where('gameId', '==', gameId), limit(400))),
+    ]);
+    return {
+      feedbackRows: feedbackSnap.docs.map((entry) => ({ id: entry.id, ...entry.data() })),
+      replayRows: replaySnap.docs.map((entry) => ({ id: entry.id, ...entry.data() })),
+      quizRows: quizSnap.docs.map((entry) => ({ id: entry.id, ...entry.data() })),
+    };
+  }, [firestore]);
+
+  const buildAiDiaryDraft = useCallback(async ({ sourceType = 'game', facts = {} } = {}) => {
+    const fallbackDraft = sourceType === 'ama'
+      ? buildLocalAmaDiaryWriteup(facts)
+      : buildLocalGameDiaryWriteup(facts);
+
+    if (!geminiIsConfigured) return fallbackDraft;
+
+    try {
+      const geminiDraft = await generateGeminiDiaryWriteup({
+        sourceType,
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        facts,
+        systemInstruction: buildAiDiarySystemInstruction(sourceType),
+      });
+      return {
+        ...geminiDraft,
+        model: geminiDraft.model || geminiConfig.model || 'gemini',
+      };
+    } catch (error) {
+      console.warn(`Gemini ${sourceType} diary generation failed. Falling back to local diary prose.`, error);
+      return fallbackDraft;
+    }
+  }, []);
+
+  const ensureGameDiaryEntryGenerated = useCallback(async ({
+    gameSummary = null,
+    questionFeedbackOverride = null,
+    questionReplaysOverride = null,
+    quizAnswersOverride = null,
+  } = {}) => {
+    if (!firestore || !gameSummary?.id || isLocalTestGame(gameSummary) || isHoldemGameMode(gameSummary?.gameMode || 'standard')) {
+      return { status: 'skipped' };
+    }
+
+    const entryId = buildGameDiaryEntryId(gameSummary.id);
+    const entryRef = doc(firestore, 'diaryEntries', entryId);
+    const existingSnapshot = await getDoc(entryRef).catch(() => null);
+    const existingEntry = existingSnapshot?.exists?.()
+      ? { id: existingSnapshot.id, ...existingSnapshot.data() }
+      : (diaryGameEntriesBySourceId.get(normalizeText(gameSummary.id || '')) || null);
+    const canonicalCreatedAt = gameSummary?.endedAt || existingEntry?.endedAt || existingEntry?.createdAt || gameSummary?.createdAt || serverTimestamp();
+    const canonicalEndedAt = gameSummary?.endedAt || existingEntry?.endedAt || null;
+    const existingStatus = normalizeIdentity(existingEntry?.aiDiaryStatus || (existingEntry?.aiGenerated ? 'ready' : ''));
+    if (existingEntry?.aiGenerated && existingStatus === 'ready') {
+      const createdAtChanged = getRecordTime(existingEntry?.createdAt || 0) !== getRecordTime(canonicalCreatedAt || 0);
+      const endedAtChanged = getRecordTime(existingEntry?.endedAt || 0) !== getRecordTime(canonicalEndedAt || 0);
+      if (createdAtChanged || endedAtChanged) {
+        await setDoc(entryRef, {
+          createdAt: canonicalCreatedAt,
+          endedAt: canonicalEndedAt,
+          updatedAt: serverTimestamp(),
+        }, { merge: true }).catch(() => null);
+        return { status: 'updated', entryId };
+      }
+      return { status: 'skipped', entryId };
+    }
+    if (existingStatus === 'generating') {
+      return { status: 'skipped', entryId };
+    }
+
+    const scoreContext = buildGameDiaryScoreContext(gameSummary);
+    const fetchedSignals = (
+      Array.isArray(questionFeedbackOverride)
+      && Array.isArray(questionReplaysOverride)
+      && Array.isArray(quizAnswersOverride)
+    )
+      ? null
+      : await loadGameDiarySignalsFromFirestore(gameSummary.id);
+    const facts = buildAiGameDiaryFacts({
+      gameSummary,
+      questionFeedback: Array.isArray(questionFeedbackOverride) ? questionFeedbackOverride : (fetchedSignals?.feedbackRows || []),
+      questionReplays: Array.isArray(questionReplaysOverride) ? questionReplaysOverride : (fetchedSignals?.replayRows || []),
+      quizAnswers: Array.isArray(quizAnswersOverride) ? quizAnswersOverride : (fetchedSignals?.quizRows || []),
+    });
+    const analyticsSnapshot = facts?.game?.gameMode === 'quiz'
+      ? null
+      : buildDiaryAnalyticsSnapshot(calculateAnalytics(normalizeStoredRounds(gameSummary?.rounds || [])), []);
+    const relatedCategories = (facts?.categories || []).map((entry) => entry?.label).filter(Boolean);
+    const basePayload = {
+      id: entryId,
+      ownerPlayerId: '',
+      requestedByPlayerId: '',
+      sourceType: 'game',
+      sourceId: gameSummary.id,
+      gameId: gameSummary.id,
+      gameMode: facts?.game?.gameMode || resolveGameMode(gameSummary?.gameMode || 'standard'),
+      gameModeLabel: facts?.game?.gameModeLabel || getDiaryGameModeLabel(gameSummary?.gameMode || 'standard'),
+      gameName: facts?.game?.name || normalizeText(gameSummary?.name || gameSummary?.gameName || '') || `Game ${normalizeText(gameSummary?.joinCode || gameSummary?.id || '')}`,
+      joinCode: facts?.game?.joinCode || normalizeText(gameSummary?.joinCode || ''),
+      title: facts?.game?.name || normalizeText(gameSummary?.name || gameSummary?.gameName || '') || 'Game diary',
+      chapterTitle: existingEntry?.chapterTitle || buildGameDiaryChapterTitleFallback(gameSummary, scoreContext),
+      chapterState: 'completed',
+      status: 'completed',
+      question: '',
+      answer: '',
+      story: '',
+      resultSummary: facts?.game?.scoreSummary || scoreContext?.summary || '',
+      scoreLabel: facts?.game?.scoreLabel || scoreContext?.scoreLabel || '',
+      scoreStyle: facts?.game?.scoreStyle || scoreContext?.scoreStyle || '',
+      scoreDisplay: facts?.game?.scoreDisplay || scoreContext?.scoreDisplay || '',
+      winner: scoreContext?.winnerSeat || gameSummary?.winner || 'tie',
+      roundsPlayed: Number(facts?.game?.roundsPlayed || gameSummary?.roundsPlayed || 0),
+      finalScores: facts?.game?.finalScores || scoreContext?.finalScores || null,
+      quizTotals: facts?.game?.quizTotals || scoreContext?.quizTotals || null,
+      wagerSettlement: facts?.game?.wagerSettlement || gameSummary?.wagerSettlement || null,
+      relatedCategories,
+      analyticsSnapshot,
+      questionHighlights: facts?.questionHighlights || [],
+      feedbackHighlights: {
+        sharedLiked: facts?.feedback?.sharedLiked || [],
+        bothDisliked: facts?.feedback?.bothDisliked || [],
+        splitOpinions: facts?.feedback?.splitOpinions || [],
+        bySeat: facts?.feedback?.bySeat || { jay: { liked: 0, disliked: 0 }, kim: { liked: 0, disliked: 0 } },
+      },
+      replayHighlights: facts?.replayRequests || [],
+      quizSummary: facts?.quiz || null,
+      privateNotesIncluded: false,
+      createdAt: canonicalCreatedAt,
+      endedAt: canonicalEndedAt,
+    };
+
+    try {
+      await setDoc(entryRef, {
+        ...basePayload,
+        aiDiaryStatus: 'generating',
+        aiDiaryError: '',
+        aiDiarySummary: existingEntry?.aiDiarySummary || '',
+        aiDiaryWriteup: existingEntry?.aiDiaryWriteup || '',
+        aiGenerated: false,
+        generatedAt: null,
+        model: '',
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      const draft = await buildAiDiaryDraft({
+        sourceType: 'game',
+        facts,
+      });
+
+      await setDoc(entryRef, {
+        ...basePayload,
+        chapterTitle: draft?.headline || basePayload.chapterTitle,
+        aiDiaryStatus: 'ready',
+        aiDiaryError: '',
+        aiDiarySummary: draft?.summary || basePayload.resultSummary,
+        aiDiaryWriteup: draft?.writeup || '',
+        aiGenerated: true,
+        generatedAt: serverTimestamp(),
+        model: draft?.model || 'local-fallback',
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      return {
+        status: existingEntry ? 'updated' : 'created',
+        entryId,
+      };
+    } catch (error) {
+      const message = String(error?.message || 'Could not generate the game diary entry.');
+      await setDoc(entryRef, {
+        ...basePayload,
+        aiDiaryStatus: 'error',
+        aiDiaryError: message,
+        aiGenerated: false,
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true }).catch(() => null);
+      return {
+        status: 'error',
+        entryId,
+        error: message,
+      };
+    }
+  }, [buildAiDiaryDraft, diaryGameEntriesBySourceId, firestore, loadGameDiarySignalsFromFirestore]);
+
+  const ensureAmaDiaryWriteup = useCallback(async ({
+    requestData = null,
+    answer = '',
+    story = '',
+    relatedCategories = [],
+    analyticsSnapshot = null,
+    attachments = [],
+  } = {}) => {
+    if (!firestore || !requestData?.id) return { status: 'skipped' };
+
+    const diaryEntryId = requestData?.diaryEntryId || requestData?.id;
+    const entryRef = doc(firestore, 'diaryEntries', diaryEntryId);
+    const entrySnapshot = await getDoc(entryRef).catch(() => null);
+    const existingEntry = entrySnapshot?.exists?.()
+      ? { id: entrySnapshot.id, ...entrySnapshot.data() }
+      : null;
+    if (existingEntry?.aiGenerated && normalizeIdentity(existingEntry?.aiDiaryStatus || 'ready') === 'ready') {
+      return { status: 'skipped', entryId: diaryEntryId };
+    }
+    if (normalizeIdentity(existingEntry?.aiDiaryStatus || '') === 'generating') {
+      return { status: 'skipped', entryId: diaryEntryId };
+    }
+
+    const facts = buildAiAmaDiaryFacts({
+      requestData,
+      answer,
+      story,
+      relatedCategories,
+      analyticsSnapshot,
+      attachments,
+    });
+
+    try {
+      await setDoc(entryRef, {
+        id: diaryEntryId,
+        sourceType: 'ama',
+        sourceId: requestData.id,
+        chapterTitle: existingEntry?.chapterTitle || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
+        aiDiaryStatus: 'generating',
+        aiDiaryError: '',
+        aiGenerated: false,
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      const draft = await buildAiDiaryDraft({
+        sourceType: 'ama',
+        facts,
+      });
+
+      await setDoc(entryRef, {
+        id: diaryEntryId,
+        sourceType: 'ama',
+        sourceId: requestData.id,
+        chapterTitle: existingEntry?.chapterTitle || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
+        aiDiaryStatus: 'ready',
+        aiDiaryError: '',
+        aiDiarySummary: draft?.summary || '',
+        aiDiaryWriteup: draft?.writeup || '',
+        aiGenerated: true,
+        generatedAt: serverTimestamp(),
+        model: draft?.model || 'local-fallback',
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        privateNotesIncluded: false,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      return {
+        status: existingEntry ? 'updated' : 'created',
+        entryId: diaryEntryId,
+      };
+    } catch (error) {
+      const message = String(error?.message || 'Could not generate the AMA diary chapter.');
+      await setDoc(entryRef, {
+        id: diaryEntryId,
+        sourceType: 'ama',
+        sourceId: requestData.id,
+        aiDiaryStatus: 'error',
+        aiDiaryError: message,
+        aiGenerated: false,
+        promptVersion: AI_DIARY_PROMPT_VERSION,
+        updatedAt: serverTimestamp(),
+      }, { merge: true }).catch(() => null);
+      return {
+        status: 'error',
+        entryId: diaryEntryId,
+        error: message,
+      };
+    }
+  }, [buildAiDiaryDraft, firestore]);
+
+  const backfillMissingGameDiaryEntries = useCallback(async () => {
+    if (!diaryBackfillGameIds.length) {
+      setGameDiaryBackfillState({
+        status: 'done',
+        processed: 0,
+        created: 0,
+        skipped: 0,
+        error: '',
+      });
+      setNotice('No completed games are available for diary backfill.');
+      return;
+    }
+
+    setGameDiaryBackfillState({
+      status: 'running',
+      processed: 0,
+      created: 0,
+      skipped: 0,
+      error: '',
+    });
+
+    let created = 0;
+    let skipped = 0;
+    let processed = 0;
+    let firstError = '';
+
+    for (const gameId of diaryBackfillGameIds) {
+      const normalizedGameId = normalizeText(gameId || '');
+      let gameSummary = previousGamesById.get(normalizedGameId) || null;
+      if (!gameSummary && normalizedGameId) {
+        gameSummary = await loadGameSummaryById(normalizedGameId).catch(() => null);
+      }
+      if (!gameSummary || isLocalTestGame(gameSummary) || isHoldemGameMode(gameSummary?.gameMode || 'standard')) {
+        processed += 1;
+        skipped += 1;
+        setGameDiaryBackfillState({
+          status: 'running',
+          processed,
+          created,
+          skipped,
+          error: firstError,
+        });
+        continue;
+      }
+      const localFeedback = (questionFeedback || []).filter((entry) => normalizeText(entry?.gameId || '') === normalizedGameId);
+      const localReplays = (questionReplays || []).filter((entry) => normalizeText(entry?.gameId || '') === normalizedGameId);
+      const localQuiz = (visibleQuizAnswers || []).filter(
+        (entry) => normalizeText(entry?.quizSessionId || entry?.gameId || '') === normalizedGameId,
+      );
+      const result = await ensureGameDiaryEntryGenerated({
+        gameSummary,
+        questionFeedbackOverride: localFeedback,
+        questionReplaysOverride: localReplays,
+        quizAnswersOverride: localQuiz,
+      });
+      processed += 1;
+      if (result?.status === 'created' || result?.status === 'updated') created += 1;
+      else skipped += 1;
+      if (!firstError && result?.status === 'error') firstError = result.error || 'One or more diary chapters could not be generated.';
+      setGameDiaryBackfillState({
+        status: 'running',
+        processed,
+        created,
+        skipped,
+        error: firstError,
+      });
+    }
+
+    setGameDiaryBackfillState({
+      status: firstError ? 'done-with-errors' : 'done',
+      processed,
+      created,
+      skipped,
+      error: firstError,
+    });
+    if (firstError) {
+      setNotice(`Backfill finished with a partial result: ${created} chapters created or refreshed, ${skipped} skipped.`);
+      return;
+    }
+    setNotice(`Backfill finished: ${created} game diary chapters created or refreshed, ${skipped} skipped.`);
+  }, [diaryBackfillGameIds, ensureGameDiaryEntryGenerated, loadGameSummaryById, previousGamesById, questionFeedback, questionReplays, setNotice, visibleQuizAnswers]);
 
   const archivePairHistory = async (gameDoc, endedGameId = gameDoc?.id) => {
     if (!firestore || !gameDoc) return;
@@ -8773,7 +15724,9 @@ function ProductionApp() {
     const playedQuestionIds = getPlayedQuestionIdsForGame(gameDoc);
     const roundsPlayed = Number(gameDoc.roundsPlayed || gameDoc.rounds?.length || 0);
     const finalScores = gameDoc.finalScores || gameDoc.totals || { jay: 0, kim: 0 };
-    const winner = gameDoc.winner || (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim');
+    const winner = isHoldemGameMode(gameDoc?.gameMode || 'standard')
+      ? getHoldemSessionWinner(gameDoc?.holdemStats || defaultHoldemStats(), finalScores)
+      : (gameDoc.winner || (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim'));
     await setDoc(
       pairRef,
       {
@@ -8793,7 +15746,7 @@ function ProductionApp() {
     );
   };
 
-  const loadGameSummaryById = async (targetGameId, fallbackData = null) => {
+  async function loadGameSummaryById(targetGameId, fallbackData = null) {
     if (!firestore || !targetGameId) return null;
     const gameRef = doc(firestore, 'games', targetGameId);
     const sourceData = fallbackData || (await getDoc(gameRef)).data();
@@ -8801,7 +15754,7 @@ function ProductionApp() {
     const roundsSnap = await getDocs(query(collection(gameRef, 'rounds'), orderBy('number', 'asc')));
     const roundsData = normalizeStoredRounds(roundsSnap.docs.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() })));
     return buildGameLibraryEntry(targetGameId, sourceData, roundsData);
-  };
+  }
 
   const promoteEndedGameToCompleted = (gameSummary) => {
     if (!gameSummary?.id) return;
@@ -8821,11 +15774,96 @@ function ProductionApp() {
     const gameDoc = { id: snapshot.id, ...snapshot.data() };
     const loadedSummary = gameLibrary.find((entry) => entry.id === targetGameId) || null;
     const isQuizGame = (gameDoc?.gameMode || 'standard') === 'quiz';
+    const isHoldemGame = isHoldemGameMode(gameDoc?.gameMode || 'standard');
+    if (isHoldemGame) {
+      const holdemState = gameDoc?.holdemState || null;
+      const holdemStats = gameDoc?.holdemStats || defaultHoldemStats();
+      const fallbackBalances = buildHoldemBankrollsFromAccounts(playerAccounts);
+      const finalHoldemScores = holdemState?.lastSettledBalances || gameDoc?.finalScores || fallbackBalances;
+      const holdemWinner = getHoldemSessionWinner(holdemStats, finalHoldemScores);
+      const finalizedHoldemState = holdemState
+        ? {
+            ...holdemState,
+            sessionStatus: 'ended',
+            actionSeat: '',
+            pendingSeats: [],
+            statusMessage: 'Texas Hold’em session ended.',
+            updatedAt: new Date().toISOString(),
+          }
+        : null;
+      const batch = writeBatch(firestore);
+      batch.set(gameRef, {
+        status: finalStatus,
+        currentRound: null,
+        endedAt: serverTimestamp(),
+        endedBy: endedByUid,
+        totals: finalHoldemScores,
+        finalScores: finalHoldemScores,
+        winner: holdemWinner,
+        roundsPlayed: Number(holdemStats?.handsPlayed || 0),
+        actualQuestionCount: Number(holdemStats?.handsPlayed || 0),
+        questionQueueIds: [],
+        holdemState: finalizedHoldemState,
+        holdemStats,
+        lifetimePointsApplied: true,
+        lifetimePointsAppliedAt: gameDoc.lifetimePointsAppliedAt || serverTimestamp(),
+        lifetimePointsAppliedBy: gameDoc.lifetimePointsAppliedBy || endedByUid || '',
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      await batch.commit();
+      const finalizedHoldemGameFallback = {
+        ...gameDoc,
+        status: finalStatus,
+        currentRound: null,
+        endedAt: new Date().toISOString(),
+        endedBy: endedByUid,
+        totals: finalHoldemScores,
+        finalScores: finalHoldemScores,
+        winner: holdemWinner,
+        roundsPlayed: Number(holdemStats?.handsPlayed || 0),
+        actualQuestionCount: Number(holdemStats?.handsPlayed || 0),
+        questionQueueIds: [],
+        holdemState: finalizedHoldemState,
+        holdemStats,
+        lifetimePointsApplied: true,
+        lifetimePointsAppliedAt: gameDoc.lifetimePointsAppliedAt || new Date().toISOString(),
+        lifetimePointsAppliedBy: gameDoc.lifetimePointsAppliedBy || endedByUid || '',
+        updatedAt: new Date().toISOString(),
+      };
+      const finalSnapshot = await getDoc(gameRef).catch(() => null);
+      const finalizedGameDoc = finalSnapshot?.exists?.()
+        ? { id: finalSnapshot.id, ...finalSnapshot.data() }
+        : finalizedHoldemGameFallback;
+      try {
+        await archivePairHistory(finalizedGameDoc, targetGameId);
+      } catch (error) {
+        console.warn('Pair history archive failed after Hold’em finalization.', error);
+      }
+      try {
+        await clearCompletedGameProfiles(targetGameId, finalizedGameDoc.playerUids || gameDoc.playerUids || []);
+      } catch (error) {
+        console.warn('Completed game profile cleanup failed after Hold’em finalization.', error);
+      }
+      try {
+        await expirePendingGameInvitesForGame(targetGameId, finalStatus);
+      } catch (error) {
+        console.warn('Pending game invite cleanup failed after Hold’em finalization.', error);
+      }
+      clearPersistedActiveGame(targetGameId);
+      autoResumedGameIdRef.current = autoResumedGameIdRef.current === targetGameId ? '' : autoResumedGameIdRef.current;
+      setProfile((current) => (current?.activeGameId === targetGameId ? { ...current, activeGameId: '' } : current));
+      const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc).catch(() =>
+        buildGameLibraryEntry(targetGameId, finalizedGameDoc, loadedSummary?.rounds || []),
+      );
+      return { appliedLifetimePoints: false, finalScores: finalHoldemScores, winner: holdemWinner, gameSummary };
+    }
     let nextFinalScores = gameDoc.totals || gameDoc.finalScores || { jay: 0, kim: 0 };
     let nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
     let nextQuizTotals = gameDoc.quizTotals || { jay: 0, kim: 0 };
     let nextQuizWinner = Number(nextQuizTotals.jay || 0) === Number(nextQuizTotals.kim || 0) ? 'tie' : Number(nextQuizTotals.jay || 0) > Number(nextQuizTotals.kim || 0) ? 'jay' : 'kim';
     let appliedLifetimePoints = false;
+    let nextJayLifetime = Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0);
+    let nextKimLifetime = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
     const pendingRound = gameDoc.currentRound || null;
     const effectivePendingRound = pendingRound
       ? {
@@ -8898,20 +15936,18 @@ function ProductionApp() {
     const quizWagers = gameDoc.quizWagers || { jay: 0, kim: 0 };
     const rawJayWager = Math.max(0, Number(quizWagers.jay || 0));
     const rawKimWager = Math.max(0, Number(quizWagers.kim || 0));
-    const settlementWagerCap = !gameDoc.lifetimePointsApplied
-      ? Math.min(Math.max(0, Math.floor(Number(jayCurrent || 0))), Math.max(0, Math.floor(Number(kimCurrent || 0))))
-      : Math.max(rawJayWager, rawKimWager);
-    const jayWager = isQuizGame ? capQuizWagerAmount(rawJayWager, settlementWagerCap) : rawJayWager;
-    const kimWager = isQuizGame ? capQuizWagerAmount(rawKimWager, settlementWagerCap) : rawKimWager;
+    const jayWager = isQuizGame ? Math.max(0, Math.floor(rawJayWager)) : rawJayWager;
+    const kimWager = isQuizGame ? Math.max(0, Math.floor(rawKimWager)) : rawKimWager;
+    const sharedQuizWager = isQuizGame ? Math.max(jayWager, kimWager) : 0;
     let wagerPenaltyShiftJay = 0;
     let wagerPenaltyShiftKim = 0;
     if (isQuizGame && nextQuizWinner !== 'tie') {
       if (nextQuizWinner === 'jay') {
-        wagerPenaltyShiftJay = -jayWager;
-        wagerPenaltyShiftKim = kimWager;
+        wagerPenaltyShiftJay = 0;
+        wagerPenaltyShiftKim = sharedQuizWager;
       } else {
-        wagerPenaltyShiftJay = jayWager;
-        wagerPenaltyShiftKim = -kimWager;
+        wagerPenaltyShiftJay = sharedQuizWager;
+        wagerPenaltyShiftKim = 0;
       }
     }
 
@@ -8920,10 +15956,10 @@ function ProductionApp() {
       batch.set(archivedRoundRef, archivedRoundResult);
     }
     if (!gameDoc.lifetimePointsApplied) {
-      const nextJayLifetime = isQuizGame
+      nextJayLifetime = isQuizGame
         ? Math.max(0, Number(jayCurrent || 0) + wagerPenaltyShiftJay)
         : addScores(jayCurrent, Number(nextFinalScores.jay || 0));
-      const nextKimLifetime = isQuizGame
+      nextKimLifetime = isQuizGame
         ? Math.max(0, Number(kimCurrent || 0) + wagerPenaltyShiftKim)
         : addScores(kimCurrent, Number(nextFinalScores.kim || 0));
       batch.set(
@@ -8953,12 +15989,14 @@ function ProductionApp() {
       currentRound: null,
       endedAt: serverTimestamp(),
       endedBy: endedByUid,
+      totals: nextFinalScores,
       finalScores: nextFinalScores,
       winner: isQuizGame ? nextQuizWinner : nextWinner,
       quizTotals: nextQuizTotals,
       quizWinner: nextQuizWinner,
       wagerSettlement: isQuizGame
         ? {
+            sharedWager: Math.max(jayWager, kimWager),
             jayWager,
             kimWager,
             jayShift: wagerPenaltyShiftJay,
@@ -8977,8 +16015,64 @@ function ProductionApp() {
     }, { merge: true });
     await batch.commit();
 
-    const finalSnapshot = await getDoc(gameRef);
-    const finalizedGameDoc = finalSnapshot.exists() ? { id: finalSnapshot.id, ...finalSnapshot.data() } : gameDoc;
+    if (appliedLifetimePoints) {
+      setPlayerAccounts((current) => ({
+        ...current,
+        jay: {
+          ...(current?.jay || {}),
+          uid: fixedPlayerUids.jay,
+          displayName: current?.jay?.displayName || 'Jay',
+          lifetimePenaltyPoints: nextJayLifetime,
+          updatedAt: new Date().toISOString(),
+        },
+        kim: {
+          ...(current?.kim || {}),
+          uid: fixedPlayerUids.kim,
+          displayName: current?.kim?.displayName || 'Kim',
+          lifetimePenaltyPoints: nextKimLifetime,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+    }
+
+    const finalizedRoundsData =
+      archivedRoundResult && !alreadyArchivedCurrentRound
+        ? normalizeStoredRounds([...(loadedSummary?.rounds || []), archivedRoundResult])
+        : normalizeStoredRounds(loadedSummary?.rounds || []);
+    const finalizedGameFallback = {
+      ...gameDoc,
+      status: finalStatus,
+      currentRound: null,
+      endedAt: new Date().toISOString(),
+      endedBy: endedByUid,
+      totals: nextFinalScores,
+      finalScores: nextFinalScores,
+      winner: isQuizGame ? nextQuizWinner : nextWinner,
+      quizTotals: nextQuizTotals,
+      quizWinner: nextQuizWinner,
+      wagerSettlement: isQuizGame
+        ? {
+            sharedWager: Math.max(jayWager, kimWager),
+            jayWager,
+            kimWager,
+            jayShift: wagerPenaltyShiftJay,
+            kimShift: wagerPenaltyShiftKim,
+            settledAt: new Date().toISOString(),
+          }
+        : {},
+      roundsPlayed: finalizedRoundsPlayed,
+      actualQuestionCount: finalizedRoundsPlayed,
+      questionQueueIds: [],
+      usedQuestionIds: finalizedUsedQuestionIds,
+      lifetimePointsApplied: true,
+      lifetimePointsAppliedAt: gameDoc.lifetimePointsAppliedAt || new Date().toISOString(),
+      lifetimePointsAppliedBy: gameDoc.lifetimePointsAppliedBy || endedByUid || '',
+      updatedAt: new Date().toISOString(),
+    };
+    const finalSnapshot = await getDoc(gameRef).catch(() => null);
+    const finalizedGameDoc = finalSnapshot?.exists?.()
+      ? { id: finalSnapshot.id, ...finalSnapshot.data() }
+      : finalizedGameFallback;
     try {
       await archivePairHistory(finalizedGameDoc, targetGameId);
     } catch (error) {
@@ -8997,7 +16091,14 @@ function ProductionApp() {
     clearPersistedActiveGame(targetGameId);
     autoResumedGameIdRef.current = autoResumedGameIdRef.current === targetGameId ? '' : autoResumedGameIdRef.current;
     setProfile((current) => (current?.activeGameId === targetGameId ? { ...current, activeGameId: '' } : current));
-    const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc);
+    const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc).catch(() =>
+      buildGameLibraryEntry(targetGameId, finalizedGameDoc, finalizedRoundsData),
+    );
+    if (gameSummary) {
+      void ensureGameDiaryEntryGenerated({ gameSummary }).catch((error) => {
+        console.warn('Background game diary generation failed after game finalization.', error);
+      });
+    }
     return { appliedLifetimePoints, finalScores: nextFinalScores, winner: nextWinner, gameSummary };
   };
 
@@ -9128,14 +16229,168 @@ function ProductionApp() {
   const deleteGameById = async (targetGameId) => {
     if (!firestore || !targetGameId) return;
     const gameRef = doc(firestore, 'games', targetGameId);
-    const roundDocs = await getDocs(collection(gameRef, 'rounds'));
-    const chatDocs = await getDocs(collection(gameRef, 'chatMessages'));
-    const batch = writeBatch(firestore);
-    roundDocs.forEach((entry) => batch.delete(entry.ref));
-    chatDocs.forEach((entry) => batch.delete(entry.ref));
-    batch.delete(gameRef);
-    await batch.commit();
+    const cachedGameDoc =
+      (game?.id === targetGameId ? game : null)
+      || gameLibrary.find((entry) => entry?.id === targetGameId)
+      || localArchivedGames.find((entry) => entry?.id === targetGameId)
+      || null;
+    const snapshot = cachedGameDoc ? null : await getDoc(gameRef);
+    if (!cachedGameDoc && !snapshot?.exists()) return;
+    const gameDoc = cachedGameDoc || { id: snapshot.id, ...snapshot.data() };
+    const pairId = gameDoc.pairId || buildPairKey();
+    const rollback = getLifetimeRollbackForGame(gameDoc);
+    const shouldRollbackLifetimePoints = Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0;
+    const deletedPlayedQuestionIds = getPlayedQuestionIdsForGame(gameDoc);
+    const cachedPairGames = gameLibrary
+      .filter((entry) => entry?.id && !isLocalTestGameId(entry.id))
+      .map((entry) => ({ ...entry }));
+    if (!cachedPairGames.some((entry) => entry.id === targetGameId)) {
+      cachedPairGames.push(gameDoc);
+    }
+    const pairGames = cachedPairGames;
+    const remainingGames = pairGames
+      .filter((entry) => entry.id !== targetGameId);
+    const remainingPairPlayedQuestionIds = mergeUniqueIds(
+      ...remainingGames.map((entry) => getTrueFalseRetiredQuestionIdsForGame(entry)),
+    );
+    const remainingCompletedGames = remainingGames
+      .filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || '') || Boolean(entry?.endedAt))
+      .sort(sortByNewestGameSession);
+    const latestCompletedGame = remainingCompletedGames[0] || null;
+    const remainingCompletedGameIds = remainingCompletedGames.map((entry) => entry.id).filter(Boolean);
+    const deletedQuestionRestoreIds = deletedPlayedQuestionIds.filter(
+      (questionId) => questionId && !remainingPairPlayedQuestionIds.includes(questionId),
+    );
+    const questionsToRestore = bankQuestions.filter((question) => deletedQuestionRestoreIds.includes(question.id));
+    const currentJayBalance = Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0);
+    const currentKimBalance = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
+    const nextJayBalance = Math.max(0, currentJayBalance + Number(rollback.jay || 0));
+    const nextKimBalance = Math.max(0, currentKimBalance + Number(rollback.kim || 0));
+    await deleteDoc(gameRef);
+
+    const cleanupBatch = writeBatch(firestore);
+    if (questionsToRestore.length) {
+      questionsToRestore.forEach((question) => {
+        cleanupBatch.set(doc(firestore, 'questionBank', question.id), setQuestionUsed(question, false), { merge: true });
+      });
+    }
+    if (shouldRollbackLifetimePoints) {
+      cleanupBatch.set(doc(firestore, 'users', fixedPlayerUids.jay), {
+        uid: fixedPlayerUids.jay,
+        displayName: 'Jay',
+        lifetimePenaltyPoints: nextJayBalance,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      cleanupBatch.set(doc(firestore, 'users', fixedPlayerUids.kim), {
+        uid: fixedPlayerUids.kim,
+        displayName: 'Kim',
+        lifetimePenaltyPoints: nextKimBalance,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    }
+    cleanupBatch.set(doc(firestore, 'playerPairs', pairId), {
+      pairId,
+      playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
+      playedQuestionIds: remainingPairPlayedQuestionIds,
+      completedGameIds: remainingCompletedGameIds,
+      updatedAt: serverTimestamp(),
+      stats: {
+        completedGames: remainingCompletedGameIds.length,
+        lastWinner: latestCompletedGame?.winner || 'tie',
+        lastFinalScores: latestCompletedGame?.finalScores || latestCompletedGame?.totals || { jay: 0, kim: 0 },
+        roundsPlayed: Number(latestCompletedGame?.roundsPlayed || latestCompletedGame?.rounds?.length || 0),
+      },
+    }, { merge: true });
+    [fixedPlayerUids.jay, fixedPlayerUids.kim]
+      .map((uid) => buildGameInviteId(targetGameId, uid))
+      .filter(Boolean)
+      .forEach((inviteId) => {
+        cleanupBatch.delete(doc(firestore, 'gameInvites', inviteId));
+      });
+    await cleanupBatch.commit().catch((error) => {
+      if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('deleteGameByIdCleanup');
+      }
+      console.warn('Deleted the game doc, but some follow-up cleanup did not finish.', error);
+    });
+    if (Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0) {
+      setPlayerAccounts((current) => ({
+        ...current,
+        jay: {
+          ...(current?.jay || {}),
+          uid: fixedPlayerUids.jay,
+          displayName: current?.jay?.displayName || 'Jay',
+          lifetimePenaltyPoints: nextJayBalance,
+          updatedAt: new Date().toISOString(),
+        },
+        kim: {
+          ...(current?.kim || {}),
+          uid: fixedPlayerUids.kim,
+          displayName: current?.kim?.displayName || 'Kim',
+          lifetimePenaltyPoints: nextKimBalance,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+    }
+
+    void Promise.allSettled([
+      getDocs(collection(gameRef, 'rounds')),
+      getDocs(collection(gameRef, 'chatMessages')),
+      getDocs(collection(gameRef, 'players')),
+    ]).then(async ([roundsResult, chatResult, playersResult]) => {
+      const docsToDelete = [
+        ...(roundsResult.status === 'fulfilled' ? roundsResult.value.docs : []),
+        ...(chatResult.status === 'fulfilled' ? chatResult.value.docs : []),
+        ...(playersResult.status === 'fulfilled' ? playersResult.value.docs : []),
+      ];
+      for (const chunk of chunkArray(docsToDelete, 400)) {
+        const batch = writeBatch(firestore);
+        chunk.forEach((entry) => batch.delete(entry.ref));
+        await batch.commit();
+      }
+    }).catch((error) => {
+      if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('deleteGameByIdArtifactCleanup');
+      }
+      console.warn('Background cleanup for deleted game artifacts did not finish.', error);
+    });
   };
+
+  useEffect(() => {
+    if (!firestore || !user || hasOpenRoomSession || isFirestoreCoolingDown || !pendingDeletedGameIds.length) return undefined;
+    if (pendingDeleteRetryInFlightRef.current) return undefined;
+    let cancelled = false;
+    pendingDeleteRetryInFlightRef.current = true;
+    void (async () => {
+      for (const targetGameId of pendingDeletedGameIds) {
+        if (cancelled || !targetGameId) break;
+        try {
+          await deleteGameById(targetGameId);
+          if (cancelled) break;
+          removePendingDeletedGameId(targetGameId);
+        } catch (error) {
+          if (isFirestoreRateLimitedError(error)) {
+            enterFirestoreCooldown('pendingDeleteRetry');
+          }
+          console.warn('Pending deleted game retry failed.', targetGameId, error);
+          break;
+        }
+      }
+    })().finally(() => {
+      pendingDeleteRetryInFlightRef.current = false;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    firestore,
+    hasOpenRoomSession,
+    isFirestoreCoolingDown,
+    pendingDeletedGameIds,
+    removePendingDeletedGameId,
+    user,
+    enterFirestoreCooldown,
+  ]);
 
   const saveRedemptionItem = async ({ itemId = '', ownerPlayerId, title, description, cost, active = true, keepOnRedeemed = false, itemType = 'forfeit' }) => {
     if (!firestore || !user) throw new Error('Firebase is not configured.');
@@ -9581,6 +16836,7 @@ function ProductionApp() {
     if (!cleanAnswer) throw new Error('Enter an answer before saving.');
     const requestRef = doc(firestore, 'amaRequests', requestId);
     const attachments = await uploadAmaMediaFiles(requestId, mediaFiles);
+    let answeredAmaContext = null;
 
     await runTransaction(firestore, async (transaction) => {
       const freshRequest = await transaction.get(requestRef);
@@ -9640,7 +16896,28 @@ function ProductionApp() {
           updatedAt: serverTimestamp(),
         });
       }
+      answeredAmaContext = {
+        requestData: {
+          id: requestId,
+          ...requestData,
+          diaryEntryId: requestData.diaryEntryId || nextDiaryRef.id,
+          question: requestData.question || '',
+        },
+        answer: cleanAnswer,
+        story: cleanStory,
+        relatedCategories: Array.isArray(relatedCategories) ? relatedCategories.filter(Boolean) : [],
+        analyticsSnapshot: analyticsSnapshot || null,
+        attachments,
+      };
     });
+
+    if (answeredAmaContext) {
+      void ensureAmaDiaryWriteup(answeredAmaContext).catch((error) => {
+        console.warn('Background AMA diary generation failed after AMA answer save.', error);
+      });
+    }
+
+    return answeredAmaContext;
   };
 
   const markAmaQuestionSeen = async (requestId) => {
@@ -9773,6 +17050,8 @@ function ProductionApp() {
         liveGameId: game?.id || '',
         profileActiveGameId: profile?.activeGameId || '',
       });
+      setConfirmAction(null);
+      setNotice('Could not find that game.');
       return;
     }
 
@@ -9801,6 +17080,7 @@ function ProductionApp() {
 
     const preserveBusyState = isBusy;
     if (!preserveBusyState) setIsBusy(true);
+    setConfirmAction(null);
     try {
       if (isLocalTestGameTarget(actionToConfirm.gameId)) {
         const endingCurrentRoom = isCurrentGameSession(actionToConfirm.gameId);
@@ -9823,7 +17103,6 @@ function ProductionApp() {
           localStorage.removeItem(activeGameKey);
           setNotice('Test game cleared locally.');
         }
-        setConfirmAction(null);
         console.info('[KJK ROOM] Confirm game action completed for local test game', actionToConfirm);
         return;
       }
@@ -9865,13 +17144,27 @@ function ProductionApp() {
           setNotice('Game ended. It has moved to Previous Games.');
         }
       } else if (actionToConfirm.type === 'delete') {
-        const target = gameLibrary.find((entry) => entry.id === actionToConfirm.gameId);
-        if (target?.status === 'active' || target?.status === 'paused') {
-          await endGameById(actionToConfirm.gameId, user?.uid || '');
-        }
-        await deleteGameById(actionToConfirm.gameId);
+        addPendingDeletedGameId(actionToConfirm.gameId);
+        void deleteGameById(actionToConfirm.gameId)
+          .then(() => {
+            removePendingDeletedGameId(actionToConfirm.gameId);
+          })
+          .catch((error) => {
+            if (isFirestoreRateLimitedError(error)) {
+              enterFirestoreCooldown('deleteGameQueued');
+              setNotice('Firebase is quota-limited right now. The game is hidden here and the app will keep retrying the delete.');
+              return;
+            }
+            console.warn('Queued game delete failed.', actionToConfirm.gameId, error);
+            setNotice(error?.message || 'The game is hidden here, but the cloud delete still needs another try.');
+          });
         setGameLibrary((current) => current.filter((entry) => entry?.id !== actionToConfirm.gameId));
+        setLocalArchivedGames((current) => current.filter((entry) => entry?.id !== actionToConfirm.gameId));
+        setGameInvites((current) => current.filter((entry) => entry?.gameId !== actionToConfirm.gameId));
+        setRoomGameInvites((current) => current.filter((entry) => entry?.gameId !== actionToConfirm.gameId));
         if (isCurrentGameSession(actionToConfirm.gameId)) {
+          autoResumedGameIdRef.current = '';
+          leavePendingGameRef.current = '';
           setGameId('');
           localStorage.removeItem(activeGameKey);
           setGame(null);
@@ -9879,17 +17172,35 @@ function ProductionApp() {
           setChatMessages([]);
           resetRoomLoadState();
           setProfile((current) => (current ? { ...current, activeGameId: '' } : current));
+          if (firestore && user?.uid && profile?.activeGameId === actionToConfirm.gameId) {
+            void setDoc(
+              doc(firestore, 'users', user.uid),
+              { uid: user.uid, activeGameId: '', updatedAt: serverTimestamp() },
+              { merge: true },
+            ).catch((error) => {
+              console.warn('Could not clear active game profile after deleting room.', error);
+            });
+          }
         }
         if (actionToConfirm.gameId === selectedGameId) setSelectedGameId('');
-        setNotice('Game deleted permanently.');
+        if (localEndedGameSummary?.id === actionToConfirm.gameId) setLocalEndedGameSummary(null);
+        setNotice('Game removed from this device. Firebase will finish the delete as soon as it allows writes again.');
       }
 
-      setConfirmAction(null);
       console.info('[KJK ROOM] Confirm game action completed successfully', actionToConfirm);
     } catch (error) {
       console.error('END GAME FAILED', error);
       console.error('[KJK ROOM] Confirm game action failed', error, actionToConfirm);
-      setNotice(error?.message || 'Could not update game.');
+      if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('confirmGameAction');
+        setNotice(
+          actionToConfirm?.type === 'delete'
+            ? 'Firebase is rate-limiting the app right now. Wait a moment, then try deleting the game again.'
+            : 'Firebase is rate-limiting the app right now. Please wait a moment and try again.',
+        );
+      } else {
+        setNotice(error?.message || 'Could not update game.');
+      }
     } finally {
       if (!preserveBusyState) setIsBusy(false);
     }
@@ -9904,7 +17215,7 @@ function ProductionApp() {
     }, 'Could not save redemption item.');
 
   useEffect(() => {
-    if (!user || !firestore) return;
+    if (!shouldLoadStoreCollections) return;
     seats.forEach((seat) => {
       const ownerPlayerId = playerIdForSeat(seat);
       const existingAmaItem = redemptionItems.find((item) => {
@@ -9946,7 +17257,7 @@ function ProductionApp() {
         amaStoreSeededRef.current[seat] = false;
       });
     });
-  }, [firestore, redemptionItems, user]);
+  }, [firestore, redemptionItems, shouldLoadStoreCollections, user]);
 
   const deleteRedemptionItemAction = async (itemId) =>
     withBusy(async () => {
@@ -10096,13 +17407,13 @@ function ProductionApp() {
       return await work();
     } catch (error) {
       const message = String(error?.message || fallback || '');
-      const normalizedMessage = normalizeText(message);
-      if (
-        normalizedMessage.includes('quota exceeded')
-        || normalizedMessage.includes('quotaexceeded')
-        || (normalizedMessage.includes('storage') && normalizedMessage.includes('quota'))
-      ) {
+      if (isLocalStorageQuotaError(error)) {
         console.warn('Suppressed storage quota warning from gameplay UI.', error);
+        return null;
+      }
+      if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('withBusy');
+        setNotice('Firebase is rate-limiting the app right now. Please wait a moment and try again.');
         return null;
       }
       setNotice(message || fallback);
@@ -10138,14 +17449,21 @@ function ProductionApp() {
   }) => {
     const reference = parseGoogleSheetReference(sheetValue);
     if (!reference) throw new Error('Enter a valid Google Sheet URL or ID.');
-    const sheetName = targetBankType === 'quiz' ? 'Quiz' : 'Questions';
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    const sheetName = normalizedTargetBankType === 'quiz'
+      ? 'Quiz'
+      : normalizedTargetBankType === 'thisOrThatGame'
+        ? 'This or That'
+      : normalizedTargetBankType === 'trueFalseGame'
+        ? 'True or False'
+        : 'Questions';
     const targets = [{
       gid: '',
       csvUrl: `https://docs.google.com/spreadsheets/d/${reference.id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`,
       sheetName,
     }];
     const nextExistingQuestions = [...existingQuestions].filter(
-      (question) => ((question?.bankType || 'game') === (targetBankType === 'quiz' ? 'quiz' : 'game')),
+      (question) => normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType,
     );
     const importedQuestions = [];
     const updatedQuestions = [];
@@ -10159,22 +17477,37 @@ function ProductionApp() {
       const response = await fetch(target.csvUrl);
       if (!response.ok) throw new Error(`Google Sheet tab fetch failed (${response.status}) for gid ${target.gid || 'default'}.`);
       const rawText = await response.text();
-      const result = parseGoogleSheetImport({
-        rawText,
-        existingQuestions: nextExistingQuestions,
-        overwriteExisting,
-        importedAt: new Date().toISOString(),
-        sourceLabel: `${reference.id}:${target.sheetName || target.gid || 'Questions'}`,
-      });
-      const parsedResult = targetBankType === 'quiz'
+      const parsedResult = normalizedTargetBankType === 'quiz'
         ? parseGoogleSheetQuizImport({
             rawText,
-            existingQuestions: nextExistingQuestions.filter((question) => (question?.bankType || 'game') === 'quiz'),
+            existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'quiz'),
             overwriteExisting,
             importedAt: new Date().toISOString(),
             sourceLabel: `${reference.id}:${target.sheetName || 'Quiz'}`,
           })
-        : result;
+        : normalizedTargetBankType === 'thisOrThatGame'
+          ? parseGoogleSheetThisOrThatImport({
+              rawText,
+              existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'thisOrThatGame'),
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'This or That'}`,
+            })
+        : normalizedTargetBankType === 'trueFalseGame'
+          ? parseGoogleSheetTrueFalseImport({
+              rawText,
+              existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'True or False'}`,
+            })
+          : parseGoogleSheetImport({
+              rawText,
+              existingQuestions: nextExistingQuestions,
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || target.gid || 'Questions'}`,
+            });
 
       importedQuestions.push(...parsedResult.imports);
       updatedQuestions.push(...parsedResult.updates);
@@ -10200,6 +17533,16 @@ function ProductionApp() {
     };
   };
 
+  const buildActiveGameProfilePatch = (nextGameId = '') => ({
+    uid: user?.uid || '',
+    displayName: profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player',
+    email: user?.email || '',
+    photoURL: user?.photoURL || '',
+    activeGameId: nextGameId,
+    activeGames: nextGameId ? arrayUnion(nextGameId) : [],
+    updatedAt: serverTimestamp(),
+  });
+
   const persistActiveGame = async (nextGameId) => {
     autoResumedGameIdRef.current = '';
     if (isLocalTestGameId(nextGameId)) {
@@ -10213,15 +17556,7 @@ function ProductionApp() {
     const profileRef = doc(firestore, 'users', user.uid);
     await setDoc(
       profileRef,
-      {
-        uid: user.uid,
-        displayName: profile?.displayName || user.displayName || user.email?.split('@')[0] || 'Player',
-        email: user.email || '',
-        photoURL: user.photoURL || '',
-        activeGameId: nextGameId,
-        activeGames: nextGameId ? arrayUnion(nextGameId) : [],
-        updatedAt: serverTimestamp(),
-      },
+      buildActiveGameProfilePatch(nextGameId),
       { merge: true },
     );
     if (nextGameId) safeLocalStorageSet(activeGameKey, nextGameId);
@@ -10229,10 +17564,52 @@ function ProductionApp() {
     setGameId(nextGameId);
   };
 
-  const seedBankIfNeeded = async () => {
+  const seedBankIfNeeded = async (targetBankType = 'game') => {
     if (!firestore || !user) return;
     const snap = await getDocs(collection(firestore, 'questionBank'));
     const existingQuestions = snap.docs.map((entry) => normalizeStoredQuestion(entry.data(), entry.id));
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    if (normalizedTargetBankType === 'trueFalseGame') {
+      const trueFalseQuestions = existingQuestions.filter(
+        (question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame',
+      );
+      if (trueFalseQuestions.length >= TRUE_FALSE_AUTO_SYNC_MIN_COUNT) return existingQuestions;
+      try {
+        const result = await syncGoogleSheetQuestions({
+          sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+          existingQuestions,
+          overwriteExisting: false,
+          targetBankType: 'trueFalseGame',
+        });
+        if (result.imports.length || result.updates.length) {
+          await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+        }
+      } catch (error) {
+        console.warn('True or False bank sync failed while topping up the dedicated sheet tab.', error);
+      }
+      return existingQuestions;
+    }
+    if (normalizedTargetBankType === 'thisOrThatGame') {
+      const thisOrThatQuestions = existingQuestions.filter(
+        (question) => normalizeQuestionBankType(question?.bankType) === 'thisOrThatGame',
+      );
+      if (thisOrThatQuestions.length >= THIS_OR_THAT_AUTO_SYNC_MIN_COUNT) return existingQuestions;
+      try {
+        const result = await syncGoogleSheetQuestions({
+          sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+          existingQuestions,
+          overwriteExisting: false,
+          targetBankType: 'thisOrThatGame',
+        });
+        if (result.imports.length || result.updates.length) {
+          await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+        }
+      } catch (error) {
+        console.warn('This or That bank sync failed while topping up the dedicated sheet tab.', error);
+      }
+      return existingQuestions;
+    }
+    if (normalizedTargetBankType !== 'game') return existingQuestions;
     const needsTopUp = snap.empty || isStarterOnlyQuestionBank(existingQuestions);
     if (!needsTopUp) return existingQuestions;
     try {
@@ -10255,9 +17632,54 @@ function ProductionApp() {
     );
   };
 
+  const topUpTrueFalseBankFromDedicatedSheet = useCallback(async () => {
+    if (!user || !firestore) return false;
+    if (autoTrueFalseSheetSyncInFlightRef.current) return false;
+    if (trueFalseBankQuestions.length >= TRUE_FALSE_AUTO_SYNC_MIN_COUNT) return false;
+    autoTrueFalseSheetSyncInFlightRef.current = true;
+    try {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'trueFalseGame',
+      });
+      if (!result.imports.length && !result.updates.length) return false;
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      return true;
+    } catch (error) {
+      console.warn('Automatic True or False sheet top-up failed.', error);
+      return false;
+    } finally {
+      autoTrueFalseSheetSyncInFlightRef.current = false;
+    }
+  }, [bankQuestions, firestore, sheetInput, trueFalseBankQuestions.length, user]);
+
+  const topUpThisOrThatBankFromDedicatedSheet = useCallback(async () => {
+    if (!user || !firestore) return false;
+    if (autoThisOrThatSheetSyncInFlightRef.current) return false;
+    if (thisOrThatBankQuestions.length >= THIS_OR_THAT_AUTO_SYNC_MIN_COUNT) return false;
+    autoThisOrThatSheetSyncInFlightRef.current = true;
+    try {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'thisOrThatGame',
+      });
+      if (!result.imports.length && !result.updates.length) return false;
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      return true;
+    } catch (error) {
+      console.warn('Automatic This or That sheet top-up failed.', error);
+      return false;
+    } finally {
+      autoThisOrThatSheetSyncInFlightRef.current = false;
+    }
+  }, [bankQuestions, firestore, sheetInput, thisOrThatBankQuestions.length, user]);
+
   useEffect(() => {
-    if (!user || !firestore || autoSheetImportAttemptedRef.current) return;
-    if (gameId || game?.id) return;
+    if (!shouldAutoTopUpQuestionBanks || autoSheetImportAttemptedRef.current) return;
     if (!bankQuestions.length || bankQuestions.length > STARTER_QUESTIONS.length) return;
     const looksStarterOnly = isStarterOnlyQuestionBank(bankQuestions);
     if (!looksStarterOnly) return;
@@ -10278,7 +17700,27 @@ function ProductionApp() {
       .catch((error) => {
         console.warn('Automatic Google Sheet top-up failed.', error);
       });
-  }, [user, firestore, bankQuestions, sheetInput, gameId, game?.id]);
+  }, [bankQuestions, firestore, sheetInput, shouldAutoTopUpQuestionBanks]);
+
+  useEffect(() => {
+    if (!shouldAutoTopUpQuestionBanks) return;
+    if (thisOrThatBankQuestions.length >= THIS_OR_THAT_AUTO_SYNC_MIN_COUNT) return;
+    void topUpThisOrThatBankFromDedicatedSheet();
+  }, [
+    shouldAutoTopUpQuestionBanks,
+    thisOrThatBankQuestions.length,
+    topUpThisOrThatBankFromDedicatedSheet,
+  ]);
+
+  useEffect(() => {
+    if (!shouldAutoTopUpQuestionBanks) return;
+    if (trueFalseBankQuestions.length >= TRUE_FALSE_AUTO_SYNC_MIN_COUNT) return;
+    void topUpTrueFalseBankFromDedicatedSheet();
+  }, [
+    shouldAutoTopUpQuestionBanks,
+    trueFalseBankQuestions.length,
+    topUpTrueFalseBankFromDedicatedSheet,
+  ]);
 
   const saveDisplayNameProfile = async (nextDisplayName) =>
     withBusy(async () => {
@@ -10470,33 +17912,57 @@ function ProductionApp() {
       const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
       if (!seat) throw new Error('Could not determine your player seat.');
       if (!game?.seats?.jay || !game?.seats?.kim) throw new Error('Both players must join before negotiating the quiz wager.');
-      if (isQuizWagerAgreementLocked(game)) throw new Error('The shared quiz wager is already agreed.');
       const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
       const wagerCapAmount = isCurrentLocalTestGame && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
-      const requestedWagerValue = sanitizeQuizWagerAmount(quizWagerDraft);
-      if (requestedWagerValue > wagerCapAmount) throw new Error(`Quiz wager cannot exceed ${formatScore(wagerCapAmount)}.`);
-      const wagerValue = capQuizWagerAmount(requestedWagerValue, wagerCapAmount);
-      const nextAgreement = {
-        ...defaultQuizWagerAgreement(),
-        ...(game.quizWagerAgreement || {}),
-        status: 'proposal_pending',
-        amount: null,
-        proposedAmount: wagerValue,
-        proposedBySeat: seat,
-        proposalStatus: 'pending',
-        rejectedBySeat: '',
-        acceptedBySeat: '',
-        wheelOptIn: { jay: false, kim: false },
-        wheelBaseAmount: 0,
-        wheelSlots: [],
-        wheelResultIndex: null,
-        wheelCountdownStartedAt: '',
-        wheelSpinStartedAt: '',
-        wheelSpinEndsAt: '',
-        lockedByWheel: false,
-        proposedAt: new Date().toISOString(),
+      const currentAgreement = normalizeQuizWagerAgreement(game);
+      const shouldCounter = currentAgreement.status === 'proposal_pending' && currentAgreement.proposedBySeat && currentAgreement.proposedBySeat !== seat;
+      const validationMessage = getQuizWagerValidationMessage(quizWagerDraft, wagerCapAmount, {
+        requireDifferentFrom: shouldCounter ? currentAgreement.proposedAmount : null,
+      });
+      if (validationMessage) throw new Error(validationMessage);
+      const wagerValue = Number(parseQuizWagerAmountInput(quizWagerDraft).amount || 0);
+      const buildNextAgreement = (source = {}) => {
+        const liveAgreement = normalizeQuizWagerAgreement({ quizWagerAgreement: source.quizWagerAgreement || game.quizWagerAgreement });
+        if (isQuizWagerAgreementLocked(source)) throw new Error('The shared quiz wager is already agreed.');
+        if (source.currentRound) throw new Error('The quiz has already started.');
+        if (liveAgreement.status === 'wheel_pending' || liveAgreement.status === 'wheel_countdown') {
+          throw new Error('Resolve the wheel request before proposing a manual wager.');
+        }
+        if (liveAgreement.status === 'proposal_pending') {
+          if (liveAgreement.proposedBySeat === seat && !isCurrentLocalTestGame) {
+            throw new Error('Waiting for the other player to respond to your proposal.');
+          }
+          if (liveAgreement.proposedBySeat !== seat) {
+            const counterError = getQuizWagerValidationMessage(wagerValue, wagerCapAmount, {
+              requireDifferentFrom: liveAgreement.proposedAmount,
+            });
+            if (counterError) throw new Error(counterError);
+          }
+        }
+        return {
+          ...defaultQuizWagerAgreement(),
+          status: 'proposal_pending',
+          requestKind: 'manual',
+          amount: null,
+          proposedAmount: wagerValue,
+          proposedBySeat: seat,
+          proposalStatus: liveAgreement.status === 'proposal_pending' && liveAgreement.proposedBySeat !== seat ? 'counter_pending' : 'pending',
+          rejectedBySeat: '',
+          acceptedBySeat: '',
+          wheelRequestedBySeat: '',
+          wheelOptIn: { jay: false, kim: false },
+          wheelBaseAmount: 0,
+          wheelSlots: [],
+          wheelResultIndex: null,
+          wheelCountdownStartedAt: '',
+          wheelSpinStartedAt: '',
+          wheelSpinEndsAt: '',
+          lockedByWheel: false,
+          proposedAt: new Date().toISOString(),
+        };
       };
       if (isCurrentLocalTestGame) {
+        const nextAgreement = buildNextAgreement(game);
         setGame((current) =>
           current
             ? {
@@ -10507,21 +17973,22 @@ function ProductionApp() {
               }
             : current,
         );
-        setNotice(`Shared wager proposed: ${formatScore(wagerValue)}.`);
+        setNotice(shouldCounter ? `Counter proposal sent: ${formatScore(wagerValue)}.` : `Shared wager proposed: ${formatScore(wagerValue)}.`);
         return true;
       }
       if (!firestore) throw new Error('Firebase is not configured.');
-      const gameRef = doc(firestore, 'games', game.id);
-      await setDoc(
-        gameRef,
-        {
+      await runTransaction(firestore, async (transaction) => {
+        const gameRef = doc(firestore, 'games', game.id);
+        const snap = await transaction.get(gameRef);
+        if (!snap.exists()) throw new Error('Room not found.');
+        const nextAgreement = buildNextAgreement(snap.data() || {});
+        transaction.update(gameRef, {
           quizWagerAgreement: nextAgreement,
           quizReadyState: defaultQuizReadyState('opening'),
           updatedAt: serverTimestamp(),
-        },
-        { merge: true },
-      );
-      setNotice(`Shared wager proposed: ${formatScore(wagerValue)}.`);
+        });
+      });
+      setNotice(shouldCounter ? `Counter proposal sent: ${formatScore(wagerValue)}.` : `Shared wager proposed: ${formatScore(wagerValue)}.`);
     }, 'Could not save quiz wager.');
 
   const acceptQuizWager = async () =>
@@ -10529,51 +17996,141 @@ function ProductionApp() {
       if (!user?.uid || !game?.id) throw new Error('Open a quiz game first.');
       if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('Wagers are for Quick Fire Quiz only.');
       const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+      debugRoom('wheelAcceptClick', {
+        gameId: game.id,
+        userId: user.uid,
+        seat,
+        currentAgreement: game?.quizWagerAgreement || null,
+      });
       if (!seat) throw new Error('Could not determine your player seat.');
-      const agreement = normalizeQuizWagerAgreement(game);
-      if (agreement.status !== 'proposal_pending' || !Number.isFinite(Number(agreement.proposedAmount))) throw new Error('No wager proposal is waiting for acceptance.');
-      if (agreement.proposedBySeat === seat && !isCurrentLocalTestGame) throw new Error('The other player must accept your wager proposal.');
-      const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
-      const wagerCapAmount = isCurrentLocalTestGame && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
-      const wagerValue = capQuizWagerAmount(agreement.proposedAmount, wagerCapAmount);
-      const nextAgreement = {
-        ...agreement,
-        status: 'agreed',
-        amount: wagerValue,
-        proposalStatus: 'accepted',
-        acceptedBySeat: agreement.proposedBySeat === seat && isCurrentLocalTestGame ? oppositeSeatOf(seat) : seat,
-        rejectedBySeat: '',
-        wheelOptIn: { jay: false, kim: false },
-        lockedByWheel: false,
-        acceptedAt: new Date().toISOString(),
+      const buildAcceptedState = (source = {}) => {
+        const agreement = normalizeQuizWagerAgreement({ quizWagerAgreement: source.quizWagerAgreement || game.quizWagerAgreement });
+        if (source.currentRound) throw new Error('The quiz has already started.');
+        if (agreement.status === 'proposal_pending') {
+          if (agreement.proposedAmount === null) throw new Error('No wager proposal is waiting for acceptance.');
+          if (agreement.proposedBySeat === seat && !isCurrentLocalTestGame) throw new Error('The other player must accept your wager proposal.');
+          const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
+          const wagerCapAmount = isCurrentLocalTestGame && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
+          const wagerValue = capQuizWagerAmount(agreement.proposedAmount, wagerCapAmount);
+          return {
+            notice: `Shared quiz wager agreed: ${formatScore(wagerValue)}. Both players can ready up.`,
+            patch: {
+              quizWagers: { jay: wagerValue, kim: wagerValue },
+              quizWagerAgreement: {
+                ...agreement,
+                status: 'agreed',
+                requestKind: 'manual',
+                amount: wagerValue,
+                proposalStatus: 'accepted',
+                acceptedBySeat: agreement.proposedBySeat === seat && isCurrentLocalTestGame ? oppositeSeatOf(seat) : seat,
+                rejectedBySeat: '',
+                wheelRequestedBySeat: '',
+                wheelOptIn: { jay: false, kim: false },
+                lockedByWheel: false,
+                acceptedAt: new Date().toISOString(),
+              },
+              quizReadyState: defaultQuizReadyState('ready'),
+            },
+          };
+        }
+        if (agreement.status === 'wheel_pending') {
+          if (!agreement.wheelRequestedBySeat) throw new Error('No wheel request is waiting for agreement.');
+          if (agreement.wheelRequestedBySeat === seat && !isCurrentLocalTestGame) throw new Error('The other player must agree to spin the wheel.');
+          const baseAmount = Math.max(1, Math.floor(Number(agreement.wheelBaseAmount || QUIZ_WHEEL_MAX_AMOUNT)) || QUIZ_WHEEL_MAX_AMOUNT);
+          const slots = agreement.wheelSlots.length ? agreement.wheelSlots : shuffleQuizWheelSlots(buildQuizWheelSlots(baseAmount));
+          const now = Date.now();
+          const wheelResultIndex = Math.floor(Math.random() * Math.max(1, slots.length));
+          const wheelResultAmount = capQuizWheelStake(baseAmount, slots[wheelResultIndex] || 0);
+          return {
+            notice: 'Wheel request accepted. Shared countdown started.',
+            patch: {
+              quizWagers: { jay: wheelResultAmount, kim: wheelResultAmount },
+              quizWagerAgreement: {
+                ...defaultQuizWagerAgreement(),
+                status: 'wheel_countdown',
+                requestKind: 'wheel',
+                amount: null,
+                proposalStatus: 'accepted',
+                acceptedBySeat: agreement.wheelRequestedBySeat === seat && isCurrentLocalTestGame ? oppositeSeatOf(seat) : seat,
+                wheelRequestedBySeat: agreement.wheelRequestedBySeat,
+                wheelRequestedByUserId: agreement.wheelRequestedByUserId || '',
+                wheelRequestedByName: agreement.wheelRequestedByName || '',
+                wheelOptIn: { jay: true, kim: true },
+                wheelBaseAmount: baseAmount,
+                wheelSlots: slots,
+                wheelResultIndex,
+                wheelResultAmount,
+                wheelCountdownStartedAt: new Date(now).toISOString(),
+                wheelSpinStartedAt: new Date(now + QUIZ_WHEEL_COUNTDOWN_MS).toISOString(),
+                wheelSpinEndsAt: new Date(now + QUIZ_WHEEL_COUNTDOWN_MS + QUIZ_WHEEL_SPIN_MS).toISOString(),
+                lockedByWheel: false,
+              },
+              quizReadyState: defaultQuizReadyState('opening'),
+            },
+          };
+        }
+        throw new Error('Nothing is waiting for agreement.');
       };
       if (isCurrentLocalTestGame) {
+        const { patch, notice } = buildAcceptedState(game);
         setGame((current) =>
           current
             ? {
                 ...current,
-                quizWagers: { jay: wagerValue, kim: wagerValue },
-                quizWagerAgreement: nextAgreement,
-                quizReadyState: defaultQuizReadyState('opening'),
+                ...patch,
                 updatedAt: new Date().toISOString(),
               }
             : current,
         );
-        setNotice(`Shared quiz wager agreed: ${formatScore(wagerValue)}.`);
+        setNotice(notice);
         return true;
       }
       if (!firestore) throw new Error('Firebase is not configured.');
-      await setDoc(
-        doc(firestore, 'games', game.id),
-        {
-          quizWagers: { jay: wagerValue, kim: wagerValue },
-          quizWagerAgreement: nextAgreement,
-          quizReadyState: defaultQuizReadyState('opening'),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true },
+      const previousAgreement = game?.quizWagerAgreement || defaultQuizWagerAgreement();
+      const previousReadyState = game?.quizReadyState || defaultQuizReadyState('opening');
+      const previousQuizWagers = game?.quizWagers || { jay: 0, kim: 0 };
+      const { patch, notice } = buildAcceptedState(game);
+      setGame((current) =>
+        current
+          ? {
+              ...current,
+              ...patch,
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
       );
-      setNotice(`Shared quiz wager agreed: ${formatScore(wagerValue)}.`);
+      const gameRef = doc(firestore, 'games', game.id);
+      try {
+        debugRoom('wheelAcceptWrite', {
+          gameId: game.id,
+          userId: user.uid,
+          seat,
+          patch,
+        });
+        await updateDoc(gameRef, {
+          ...patch,
+          updatedAt: serverTimestamp(),
+        });
+        debugRoom('wheelAcceptWriteComplete', {
+          gameId: game.id,
+          userId: user.uid,
+          seat,
+        });
+      } catch (error) {
+        setGame((current) =>
+          current
+            ? {
+                ...current,
+                quizWagerAgreement: previousAgreement,
+                quizReadyState: previousReadyState,
+                quizWagers: previousQuizWagers,
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        throw error;
+      }
+      setNotice(notice);
     }, 'Could not accept quiz wager.');
 
   const rejectQuizWager = async () =>
@@ -10581,44 +18138,106 @@ function ProductionApp() {
       if (!user?.uid || !game?.id) throw new Error('Open a quiz game first.');
       if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('Wagers are for Quick Fire Quiz only.');
       const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+      debugRoom('wheelRejectClick', {
+        gameId: game.id,
+        userId: user.uid,
+        seat,
+        currentAgreement: game?.quizWagerAgreement || null,
+      });
       if (!seat) throw new Error('Could not determine your player seat.');
-      const agreement = normalizeQuizWagerAgreement(game);
-      if (agreement.status !== 'proposal_pending') throw new Error('No wager proposal is waiting for a response.');
-      if (agreement.proposedBySeat === seat && !isCurrentLocalTestGame) throw new Error('The other player must reject your wager proposal.');
-      const nextAgreement = {
-        ...defaultQuizWagerAgreement(),
-        status: 'negotiating',
-        proposalStatus: 'rejected',
-        proposedAmount: agreement.proposedAmount,
-        proposedBySeat: agreement.proposedBySeat,
-        rejectedBySeat: agreement.proposedBySeat === seat && isCurrentLocalTestGame ? oppositeSeatOf(seat) : seat,
-        rejectedAt: new Date().toISOString(),
+      const buildRejectedState = (source = {}) => {
+        const agreement = normalizeQuizWagerAgreement({ quizWagerAgreement: source.quizWagerAgreement || game.quizWagerAgreement });
+        if (source.currentRound) throw new Error('The quiz has already started.');
+        if (agreement.status === 'proposal_pending') {
+          if (agreement.proposedBySeat === seat && !isCurrentLocalTestGame) throw new Error('The other player must reject your wager proposal.');
+          return {
+            notice: 'Quiz wager rejected. Make a counter proposal.',
+            patch: {
+              quizWagerAgreement: {
+                ...defaultQuizWagerAgreement(),
+                status: 'negotiating',
+                rejectedBySeat: agreement.proposedBySeat === seat && isCurrentLocalTestGame ? oppositeSeatOf(seat) : seat,
+                rejectedAt: new Date().toISOString(),
+              },
+              quizReadyState: defaultQuizReadyState('opening'),
+            },
+          };
+        }
+        if (agreement.status === 'wheel_pending') {
+          if (agreement.wheelRequestedBySeat === seat && !isCurrentLocalTestGame) throw new Error('The other player must reject your wheel request.');
+          return {
+            notice: 'Wheel request rejected.',
+            patch: {
+              quizWagerAgreement: {
+                ...defaultQuizWagerAgreement(),
+                status: 'negotiating',
+                rejectedBySeat: agreement.wheelRequestedBySeat === seat && isCurrentLocalTestGame ? oppositeSeatOf(seat) : seat,
+                rejectedAt: new Date().toISOString(),
+              },
+              quizReadyState: defaultQuizReadyState('opening'),
+            },
+          };
+        }
+        throw new Error('Nothing is waiting for a response.');
       };
       if (isCurrentLocalTestGame) {
+        const { patch, notice } = buildRejectedState(game);
         setGame((current) =>
           current
             ? {
                 ...current,
-                quizWagerAgreement: nextAgreement,
-                quizReadyState: defaultQuizReadyState('opening'),
+                ...patch,
                 updatedAt: new Date().toISOString(),
               }
             : current,
         );
-        setNotice('Quiz wager rejected. Make a counter proposal.');
+        setNotice(notice);
         return true;
       }
       if (!firestore) throw new Error('Firebase is not configured.');
-      await setDoc(
-        doc(firestore, 'games', game.id),
-        {
-          quizWagerAgreement: nextAgreement,
-          quizReadyState: defaultQuizReadyState('opening'),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true },
+      const previousAgreement = game?.quizWagerAgreement || defaultQuizWagerAgreement();
+      const previousReadyState = game?.quizReadyState || defaultQuizReadyState('opening');
+      const { patch, notice } = buildRejectedState(game);
+      setGame((current) =>
+        current
+          ? {
+              ...current,
+              ...patch,
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
       );
-      setNotice('Quiz wager rejected. Make a counter proposal.');
+      const gameRef = doc(firestore, 'games', game.id);
+      try {
+        debugRoom('wheelRejectWrite', {
+          gameId: game.id,
+          userId: user.uid,
+          seat,
+          patch,
+        });
+        await updateDoc(gameRef, {
+          ...patch,
+          updatedAt: serverTimestamp(),
+        });
+        debugRoom('wheelRejectWriteComplete', {
+          gameId: game.id,
+          userId: user.uid,
+          seat,
+        });
+      } catch (error) {
+        setGame((current) =>
+          current
+            ? {
+                ...current,
+                quizWagerAgreement: previousAgreement,
+                quizReadyState: previousReadyState,
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        throw error;
+      }
+      setNotice(notice);
     }, 'Could not reject quiz wager.');
 
   const setQuizWheelOptIn = async (optIn = true) =>
@@ -10626,55 +18245,52 @@ function ProductionApp() {
       if (!user?.uid || !game?.id) throw new Error('Open a quiz game first.');
       if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('The wager wheel is for Quick Fire Quiz only.');
       const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
+      debugRoom('wheelRequestClick', {
+        gameId: game.id,
+        optIn,
+        userId: user.uid,
+        seat,
+        viewerGameMode: game?.gameMode || 'standard',
+        currentAgreement: game?.quizWagerAgreement || null,
+      });
       if (!seat) throw new Error('Could not determine your player seat.');
       if (!game?.seats?.jay || !game?.seats?.kim) throw new Error('Both players must join before using the wager wheel.');
-      if (isQuizWagerAgreementLocked(game)) throw new Error('The shared quiz wager is already agreed.');
-      const accountWheelBaseAmount = getQuizWheelBaseAmount(playerAccounts);
-      const baseAmount = isCurrentLocalTestGame && accountWheelBaseAmount <= 0 ? 200 : accountWheelBaseAmount;
-      if (baseAmount <= 0) throw new Error('Both players need penalty points before the wheel can set a wager.');
+      const baseAmount = QUIZ_WHEEL_MAX_AMOUNT;
+      const previousAgreement = game?.quizWagerAgreement || defaultQuizWagerAgreement();
+      const previousReadyState = game?.quizReadyState || defaultQuizReadyState('opening');
       const buildAgreement = (source = {}) => {
         const currentAgreement = normalizeQuizWagerAgreement({ quizWagerAgreement: source.quizWagerAgreement || game.quizWagerAgreement });
+        if (isQuizWagerAgreementLocked(source)) throw new Error('The shared quiz wager is already agreed.');
+        if (source.currentRound) throw new Error('The quiz has already started.');
+        if (!optIn) return defaultQuizWagerAgreement();
+        if (currentAgreement.status === 'proposal_pending') throw new Error('Resolve the manual proposal before requesting the wheel.');
+        if (currentAgreement.status === 'wheel_pending') {
+          if (currentAgreement.wheelRequestedBySeat === seat && !isCurrentLocalTestGame) {
+            throw new Error('Waiting for the other player to respond to your wheel request.');
+          }
+          throw new Error('A wheel request is already pending.');
+        }
+        if (currentAgreement.status === 'wheel_countdown') throw new Error('The wheel countdown has already started.');
         const slots = currentAgreement.wheelSlots.length && Number(currentAgreement.wheelBaseAmount || 0) === baseAmount
           ? currentAgreement.wheelSlots
           : shuffleQuizWheelSlots(buildQuizWheelSlots(baseAmount));
-        const nextOptIn = {
-          jay: Boolean(currentAgreement.wheelOptIn?.jay),
-          kim: Boolean(currentAgreement.wheelOptIn?.kim),
-          [seat]: Boolean(optIn),
-        };
-        if (isCurrentLocalTestGame) {
-          nextOptIn.jay = Boolean(optIn);
-          nextOptIn.kim = Boolean(optIn);
-        }
-        const bothOptedIn = Boolean(nextOptIn.jay && nextOptIn.kim);
-        const now = Date.now();
-        if (!bothOptedIn) {
-          return {
-            ...defaultQuizWagerAgreement(),
-            status: 'negotiating',
-            wheelOptIn: nextOptIn,
-            wheelBaseAmount: baseAmount,
-            wheelSlots: slots,
-          };
-        }
-        const resultIndex = Math.floor(Math.random() * slots.length);
         return {
           ...defaultQuizWagerAgreement(),
-          status: 'wheel_countdown',
-          proposedAmount: null,
-          proposedBySeat: '',
-          wheelOptIn: nextOptIn,
+          status: 'wheel_pending',
+          requestKind: 'wheel',
+          proposalStatus: 'pending',
+          wheelRequestedBySeat: seat,
+          wheelRequestedByUserId: user.uid,
+          wheelRequestedByName: gameSeatDisplayName(game, seat, null) || profile?.displayName || user?.displayName || 'Player',
+          wheelOptIn: { jay: seat === 'jay', kim: seat === 'kim' },
           wheelBaseAmount: baseAmount,
           wheelSlots: slots,
-          wheelResultIndex: resultIndex,
-          wheelCountdownStartedAt: new Date(now).toISOString(),
-          wheelSpinStartedAt: new Date(now + QUIZ_WHEEL_COUNTDOWN_MS).toISOString(),
-          wheelSpinEndsAt: new Date(now + QUIZ_WHEEL_COUNTDOWN_MS + QUIZ_WHEEL_SPIN_MS).toISOString(),
           lockedByWheel: false,
+          proposedAt: new Date().toISOString(),
         };
       };
+      const nextAgreement = buildAgreement(game);
       if (isCurrentLocalTestGame) {
-        const nextAgreement = buildAgreement(game);
         setGame((current) =>
           current
             ? {
@@ -10685,85 +18301,53 @@ function ProductionApp() {
               }
             : current,
         );
-        setNotice(nextAgreement.status === 'wheel_countdown' ? 'Both players chose the wheel.' : 'Wheel choice updated.');
+        setNotice('Wheel request sent.');
         return true;
       }
       if (!firestore) throw new Error('Firebase is not configured.');
-      const gameRef = doc(firestore, 'games', game.id);
-      await runTransaction(firestore, async (transaction) => {
-        const snap = await transaction.get(gameRef);
-        if (!snap.exists()) throw new Error('Room not found.');
-        const data = snap.data() || {};
-        if (data.currentRound) throw new Error('The quiz has already started.');
-        if (isQuizWagerAgreementLocked(data)) throw new Error('The shared quiz wager is already agreed.');
-        const nextAgreement = buildAgreement(data);
-        transaction.update(gameRef, {
-          quizWagerAgreement: nextAgreement,
-          quizReadyState: defaultQuizReadyState('opening'),
-          updatedAt: serverTimestamp(),
-        });
-      });
-      setNotice(optIn ? 'Wheel choice saved.' : 'Wheel choice cleared.');
-    }, 'Could not update wager wheel choice.');
-
-  const finalizeQuizWheelWager = async () => {
-    if (!game?.id || (game?.gameMode || 'standard') !== 'quiz') return;
-    const agreement = normalizeQuizWagerAgreement(game);
-    const slots = agreement.wheelSlots.length ? agreement.wheelSlots : buildQuizWheelSlots(agreement.wheelBaseAmount);
-    const resultIndex = Math.max(0, Math.min(Math.max(0, slots.length - 1), Number(agreement.wheelResultIndex || 0)));
-    const wagerValue = capQuizWagerAmount(slots[resultIndex] || 0, agreement.wheelBaseAmount);
-    if (agreement.status === 'wheel_locked' || !Number.isFinite(Date.parse(agreement.wheelSpinEndsAt || ''))) return;
-    if (Date.now() < Date.parse(agreement.wheelSpinEndsAt || '')) return;
-    const nextAgreement = {
-      ...agreement,
-      status: 'wheel_locked',
-      amount: wagerValue,
-      proposalStatus: 'accepted',
-      lockedByWheel: true,
-      lockedAt: new Date().toISOString(),
-    };
-    if (isCurrentLocalTestGame) {
       setGame((current) =>
         current
           ? {
               ...current,
-              quizWagers: { jay: wagerValue, kim: wagerValue },
               quizWagerAgreement: nextAgreement,
               quizReadyState: defaultQuizReadyState('opening'),
               updatedAt: new Date().toISOString(),
             }
           : current,
       );
-      setNotice(`Wager wheel landed on ${formatScore(wagerValue)}.`);
-      return;
-    }
-    if (!firestore) return;
-    const gameRef = doc(firestore, 'games', game.id);
-    await runTransaction(firestore, async (transaction) => {
-      const snap = await transaction.get(gameRef);
-      if (!snap.exists()) return;
-      const data = snap.data() || {};
-      const liveAgreement = normalizeQuizWagerAgreement(data);
-      if (liveAgreement.status === 'wheel_locked' || liveAgreement.status === 'agreed') return;
-      const liveSlots = liveAgreement.wheelSlots.length ? liveAgreement.wheelSlots : buildQuizWheelSlots(liveAgreement.wheelBaseAmount);
-      const liveIndex = Math.max(0, Math.min(Math.max(0, liveSlots.length - 1), Number(liveAgreement.wheelResultIndex || 0)));
-      const liveWagerValue = capQuizWagerAmount(liveSlots[liveIndex] || 0, liveAgreement.wheelBaseAmount);
-      transaction.update(gameRef, {
-        quizWagers: { jay: liveWagerValue, kim: liveWagerValue },
-        quizWagerAgreement: {
-          ...liveAgreement,
-          status: 'wheel_locked',
-          amount: liveWagerValue,
-          proposalStatus: 'accepted',
-          lockedByWheel: true,
-          lockedAt: new Date().toISOString(),
-        },
-        quizReadyState: defaultQuizReadyState('opening'),
-        updatedAt: serverTimestamp(),
-      });
-    });
-    setNotice(`Wager wheel landed on ${formatScore(wagerValue)}.`);
-  };
+      const gameRef = doc(firestore, 'games', game.id);
+      try {
+        debugRoom('wheelRequestWrite', {
+          gameId: game.id,
+          userId: user.uid,
+          seat,
+          nextAgreement,
+        });
+        await updateDoc(gameRef, {
+          quizWagerAgreement: nextAgreement,
+          quizReadyState: defaultQuizReadyState('opening'),
+          updatedAt: serverTimestamp(),
+        });
+        debugRoom('wheelRequestWriteComplete', {
+          gameId: game.id,
+          userId: user.uid,
+          seat,
+        });
+      } catch (error) {
+        setGame((current) =>
+          current
+            ? {
+                ...current,
+                quizWagerAgreement: previousAgreement,
+                quizReadyState: previousReadyState,
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        throw error;
+      }
+      setNotice(optIn ? 'Wheel request sent.' : 'Wheel choice cleared.');
+    }, 'Could not update wager wheel choice.');
 
   const requestQuizOverride = async (requestedFinalResult = '') =>
     withBusy(async () => {
@@ -10857,21 +18441,34 @@ function ProductionApp() {
     withBusy(async () => {
       setLocalEndedGameSummary(null);
       if (!firestore || !user) throw new Error('Firebase is not configured.');
-      const gameMode = options.gameMode === 'quiz' ? 'quiz' : 'standard';
-      const trimmedGameName = normalizeText(lobbyGameName);
-      const effectiveGameName = trimmedGameName || (gameMode === 'quiz' ? 'Quick Fire Quiz' : '');
+      const gameMode = resolveGameMode(options.gameMode || 'standard');
+      const isHoldemGame = isHoldemGameMode(gameMode);
+      const isTrueFalseGame = isTrueFalseGameMode(gameMode);
+      const isThisOrThatGame = isThisOrThatGameMode(gameMode);
+      const requestedCreateCode = normalizeJoinCode(options.createCode ?? lobbyCode);
+      const trimmedGameName = normalizeText(options.gameName ?? lobbyGameName);
+      const effectiveGameName = trimmedGameName || (
+        gameMode === 'quiz'
+          ? 'Quick Fire Quiz'
+          : isHoldemGame
+            ? 'Texas Hold’em'
+            : isTrueFalseGame
+              ? 'True or False'
+              : isThisOrThatGame
+                ? 'This or That'
+              : 'Jay vs Kim'
+      );
       console.debug('Create New Game clicked', {
         gameName: effectiveGameName || lobbyGameName,
         requestedQuestionCount: options.requestedQuestionCount ?? lobbyQuestionCount,
-        createCode: lobbyCode,
+        createCode: requestedCreateCode,
         mode: options.mode || 'random',
         gameMode,
         roundTypes: options.roundTypes || [],
         categories: options.categories || [],
       });
-      if (!effectiveGameName) throw new Error('Enter a game name.');
-      const requestedQuestionCount = Number.parseInt(String(options.requestedQuestionCount ?? lobbyQuestionCount), 10);
-      if (!Number.isFinite(requestedQuestionCount) || requestedQuestionCount <= 0) {
+      const requestedQuestionCount = isHoldemGame ? 0 : Number.parseInt(String(options.requestedQuestionCount ?? lobbyQuestionCount), 10);
+      if (!isHoldemGame && (!Number.isFinite(requestedQuestionCount) || requestedQuestionCount <= 0)) {
         throw new Error('Enter a valid number of questions.');
       }
       const previousGame = game;
@@ -10879,9 +18476,9 @@ function ProductionApp() {
       const previousRounds = rounds;
       const previousChatMessages = chatMessages;
       const selectionMode = options.mode === 'custom' ? 'custom' : 'random';
-      const targetBankType = gameMode === 'quiz' ? 'quiz' : 'game';
-      const selectedRoundTypes = selectionMode === 'custom' ? options.roundTypes || [] : [];
-      const selectedCategories = selectionMode === 'custom' ? options.categories || [] : [];
+      const targetBankType = isHoldemGame ? 'holdem' : getQuestionBankTypeForGameMode(gameMode);
+      const selectedRoundTypes = !isHoldemGame && selectionMode === 'custom' ? options.roundTypes || [] : [];
+      const selectedCategories = !isHoldemGame && selectionMode === 'custom' ? options.categories || [] : [];
       const creatorSeat = preferredSeatForUser(user, profile);
       const guestSeat = oppositeSeatOf(creatorSeat);
       const inviteTargetSeat = guestSeat;
@@ -10892,30 +18489,47 @@ function ProductionApp() {
       );
 
       if (shouldCreateLocalTestGame) {
-        await seedBankIfNeeded();
-        const queueResult = await buildQuestionQueue(requestedQuestionCount, {
-          roundTypes: selectedRoundTypes,
-          categories: selectedCategories,
-          bankType: targetBankType,
-        });
-        const queue = queueResult.queue;
-        const warning = queueResult.warning;
-        const actualCount = queueResult.actualCount;
-        if (!queue.length) {
-          throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
-        }
-        if (actualCount < requestedQuestionCount) {
-          const shouldContinue = window.confirm(`${warning} Create test game with ${actualCount}?`);
-          if (!shouldContinue) {
-            setNotice('Editing Mode game creation cancelled before the local queue was finalized.');
-            return;
-          }
-        }
         const localGameId = `${TEST_GAME_PREFIX}${makeId('local')}`;
-        const localJoinCode = `TEST${makeJoinCode().slice(0, 2)}`;
+        const localJoinCode = requestedCreateCode || `TEST${makeJoinCode().slice(0, 2)}`;
         const hostName = profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player';
         const localOtherPlayerName = inviteTargetSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)';
         const createdAt = new Date().toISOString();
+        let queue = [];
+        let warning = '';
+        let actualCount = 0;
+        if (!isHoldemGame) {
+          await ensureQuestionBankReadyForQueue(targetBankType);
+          const queueResult = await buildQuestionQueue(requestedQuestionCount, {
+            roundTypes: selectedRoundTypes,
+            categories: selectedCategories,
+            bankType: targetBankType,
+            gameMode,
+          });
+          queue = queueResult.queue;
+          warning = queueResult.warning;
+          actualCount = queueResult.actualCount;
+          if (!queue.length) {
+            throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
+          }
+            if (actualCount < requestedQuestionCount) {
+              if (isThisOrThatGame) {
+                console.debug('This or That local game auto-accepting shorter compatible queue', {
+                  requestedQuestionCount,
+                  actualCount,
+                });
+              } else {
+                const shouldContinue = window.confirm(`${warning} Create test game with ${actualCount}?`);
+                if (!shouldContinue) {
+                  setNotice('Editing Mode game creation cancelled before the local queue was finalized.');
+                  return;
+                }
+              }
+            }
+        }
+        const initialHoldemState = isHoldemGame
+          ? initializeHoldemSessionState(creatorSeat, true)
+          : null;
+        const initialHoldemStats = isHoldemGame ? defaultHoldemStats() : null;
 	        const localGameState = {
           id: localGameId,
           joinCode: localJoinCode,
@@ -10945,11 +18559,13 @@ function ProductionApp() {
               photoURL: '',
             },
           },
-	          totals: { jay: 0, kim: 0 },
+	          totals: isHoldemGame ? (initialHoldemState?.lastSettledBalances || { jay: 0, kim: 0 }) : { jay: 0, kim: 0 },
 	          quizTotals: { jay: 0, kim: 0 },
 	          quizWagers: { jay: 0, kim: 0 },
           quizWagerAgreement: gameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
           quizReadyState: gameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
+          holdemState: initialHoldemState,
+          holdemStats: initialHoldemStats,
 	          currentRound: null,
           pairId: buildPairKey(),
           gameMode,
@@ -10975,6 +18591,7 @@ function ProductionApp() {
           updatedAt: createdAt,
           isEditingMode: true,
           isLocalOnly: true,
+          ...(isHoldemGame ? buildHoldemSummaryFields(initialHoldemState, initialHoldemStats) : {}),
         };
         autoResumedGameIdRef.current = '';
         resetRoomLoadState();
@@ -10985,19 +18602,27 @@ function ProductionApp() {
         localStorage.removeItem(activeGameKey);
         setLobbyGameName('');
         setLobbyQuestionCount('10');
-        setNotice(`Editing Mode room opened locally with ${actualCount} questions.${warning ? ` ${warning}` : ''}${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`);
+        setNotice(
+          isHoldemGame
+            ? `Editing Mode Texas Hold’em room opened locally.${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`
+            : `Editing Mode room opened locally with ${actualCount} questions.${warning ? ` ${warning}` : ''}${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`,
+        );
         return;
       }
 
       const gameRef = doc(firestore, 'games', makeId('game'));
-      const joinCode = await makeUniqueJoinCode(lobbyCode);
-      const openingGameState = {
+      const initialHoldemState = isHoldemGame
+        ? initializeHoldemSessionState(creatorSeat, false)
+        : null;
+      const initialHoldemStats = isHoldemGame ? defaultHoldemStats() : null;
+      const optimisticJoinCode = requestedCreateCode || '';
+      const optimisticOpeningGameState = {
         id: gameRef.id,
-        joinCode,
-        code: joinCode,
-        roomCode: joinCode,
-        gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
-        status: 'opening',
+        joinCode: optimisticJoinCode,
+        code: optimisticJoinCode,
+        roomCode: optimisticJoinCode,
+        gameName: effectiveGameName || `Jay vs Kim ${optimisticJoinCode || 'opening'}`,
+        status: isHoldemGame ? 'active' : 'opening',
         hostUid: user.uid,
         hostDisplayName: profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player',
         hostPhotoURL: user.photoURL || '',
@@ -11014,11 +18639,13 @@ function ProductionApp() {
             photoURL: user.photoURL || '',
           },
         },
-        totals: { jay: 0, kim: 0 },
+        totals: isHoldemGame ? (initialHoldemState?.lastSettledBalances || { jay: 0, kim: 0 }) : { jay: 0, kim: 0 },
         quizTotals: { jay: 0, kim: 0 },
         quizWagers: { jay: 0, kim: 0 },
         quizWagerAgreement: gameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
         quizReadyState: gameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
+        holdemState: initialHoldemState,
+        holdemStats: initialHoldemStats,
         currentRound: null,
         pairId: buildPairKey(),
         gameMode,
@@ -11042,36 +18669,28 @@ function ProductionApp() {
         endedBy: '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        ...(isHoldemGame ? buildHoldemSummaryFields(initialHoldemState, initialHoldemStats) : {}),
       };
-      const openingGameDoc = {
-        ...openingGameState,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
+      autoResumedGameIdRef.current = '';
+      leavePendingGameRef.current = '';
+      resetRoomLoadState();
+      setGame(optimisticOpeningGameState);
+      setRounds([]);
+      setChatMessages([]);
+      setNotice(`Opening ${effectiveGameName || 'new game'}…`);
       let roomCreated = false;
 
       try {
-        autoResumedGameIdRef.current = '';
-        armRoomLoadTimeout(gameRef.id, 'opening game');
-        await setDoc(gameRef, openingGameDoc);
-        roomCreated = true;
-        setGame(openingGameState);
-        setRounds([]);
-        setGameId(gameRef.id);
-        safeLocalStorageSet(activeGameKey, gameRef.id);
-        setNotice(`Opening ${effectiveGameName || 'new game'}…`);
-
         let queue = [];
         let warning = '';
         let actualCount = 0;
-        try {
-          await seedBankIfNeeded();
-          const bankSnapshot = await getDocs(collection(firestore, 'questionBank'));
-          if (!bankSnapshot.size) throw new Error('Question bank is not loaded.');
+        if (!isHoldemGame) {
+          await ensureQuestionBankReadyForQueue(targetBankType);
           const queueResult = await buildQuestionQueue(requestedQuestionCount, {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
             bankType: targetBankType,
+            gameMode,
           });
           queue = queueResult.queue;
           warning = queueResult.warning;
@@ -11080,25 +18699,46 @@ function ProductionApp() {
             throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
           if (actualCount < requestedQuestionCount) {
-            const shouldContinue = window.confirm(`${warning} Create game with ${actualCount}?`);
-            if (!shouldContinue) {
-              setNotice('Game creation cancelled before question queue was finalized.');
-              return;
+            if (isThisOrThatGame) {
+              console.debug('This or That live game auto-accepting shorter compatible queue', {
+                requestedQuestionCount,
+                actualCount,
+              });
+            } else {
+              const shouldContinue = window.confirm(`${warning} Create game with ${actualCount}?`);
+              if (!shouldContinue) {
+                setNotice('Game creation cancelled before question queue was finalized.');
+                return;
+              }
             }
           }
-          await updateQuestionBankUsage(queue, true);
-          const createdGameState = {
-            ...openingGameState,
-            joinCode,
-            status: 'active',
-            questionSelectionMode: selectionMode,
-            questionSelectionFilters: {
-              roundTypes: selectedRoundTypes,
-              categories: selectedCategories,
-            },
-            questionQueueIds: queue.map((question) => question.id),
-            actualQuestionCount: actualCount,
-          };
+        }
+        const joinCode = await makeUniqueJoinCode(requestedCreateCode);
+        const createdGameState = isHoldemGame
+          ? {
+              ...optimisticOpeningGameState,
+              joinCode,
+              code: joinCode,
+              roomCode: joinCode,
+              gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
+              status: 'active',
+            }
+          : {
+              ...optimisticOpeningGameState,
+              joinCode,
+              code: joinCode,
+              roomCode: joinCode,
+              gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
+              status: 'active',
+              questionSelectionMode: selectionMode,
+              questionSelectionFilters: {
+                roundTypes: selectedRoundTypes,
+                categories: selectedCategories,
+              },
+              questionQueueIds: queue.map((question) => question.id),
+              actualQuestionCount: actualCount,
+            };
+        if (!isHoldemGame) {
           console.debug('Create New Game queue selected', {
             joinCode,
             requestedQuestionCount,
@@ -11106,67 +18746,95 @@ function ProductionApp() {
             queueCount: queue.length,
             queueIds: queue.map((question) => question.id),
           });
-          const createdGameDoc = {
-            ...createdGameState,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          };
-          setGame(createdGameState);
-          setGameId(gameRef.id);
-          safeLocalStorageSet(activeGameKey, gameRef.id);
-          await setDoc(gameRef, createdGameDoc, { merge: true });
-          setNotice(`Game ${joinCode} created with ${actualCount} questions.${warning ? ` ${warning}` : ''}`);
-          console.debug('Create New Game queue committed', { gameId: gameRef.id, joinCode, actualCount });
-        } catch (queueError) {
-          console.warn('Create New Game queue setup failed, keeping the room open.', queueError);
-          setNotice(`Game ${joinCode} created, but the question queue could not be finalized yet. ${queueError?.message || ''}`.trim());
         }
-
-        try {
-          await setDoc(
-            doc(firestore, 'games', gameRef.id, 'players', user.uid),
-            {
-              uid: user.uid,
-              displayName: profile?.displayName || user.displayName || PLAYER_LABEL[creatorSeat] || 'Player',
-              seat: creatorSeat,
-              role: 'host',
-              photoURL: user.photoURL || '',
-              joinedAt: serverTimestamp(),
-            },
-            { merge: true },
-          );
-        } catch (playerError) {
-          console.warn('Create New Game player profile write failed.', playerError);
-        }
-
-        try {
-          await persistActiveGame(gameRef.id);
-        } catch (persistError) {
-          console.warn('Create New Game active game persist failed, room kept open.', persistError);
-        }
-
-        if (options.sendInvite) {
-          try {
-            await sendGameInviteForSession({
+        const createdGameDoc = {
+          ...createdGameState,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          ...(options.sendInvite
+            ? buildGameRoomInviteFields({
+                targetUserId: inviteTargetUserId,
+                targetSeat: inviteTargetSeat,
+                sourceGame: createdGameState,
+              })
+            : {
+                pendingInviteForUserId: '',
+                pendingInviteForSeat: '',
+                pendingInviteTargets: [],
+                pendingInviteStatus: '',
+                pendingInviteByUserId: '',
+                pendingInviteByDisplayName: '',
+                pendingInviteBySeat: '',
+                pendingInviteCreatedAt: null,
+                pendingInviteUpdatedAt: null,
+                pendingInviteAcceptedAt: null,
+                pendingInviteDismissedAt: null,
+                pendingInviteDismissedByUserId: '',
+                pendingInviteJoinedByUserId: '',
+                pendingInviteGameStatus: '',
+              }),
+        };
+        const inviteRecord = options.sendInvite
+          ? buildGameInviteRecord({
               targetGameId: gameRef.id,
               targetUserId: inviteTargetUserId,
               targetSeat: inviteTargetSeat,
-              sourceGame: {
-                ...openingGameState,
-                status: 'active',
-                joinCode,
-                roomCode: joinCode,
-                code: joinCode,
-                actualQuestionCount: actualCount || openingGameState.actualQuestionCount,
-                requestedQuestionCount,
-              },
-            });
-            setNotice(`Game ${joinCode} created and invite sent to ${PLAYER_LABEL[inviteTargetSeat] || inviteTargetSeat}.`);
-          } catch (inviteError) {
-            console.warn('Create New Game invite send failed.', inviteError);
-            setNotice(`Game ${joinCode} created, but the invite could not be sent. ${inviteError?.message || ''}`.trim());
-          }
+              sourceGame: createdGameState,
+            })
+          : null;
+        const trueFalseQueueIds = isTrueFalseGame ? mergeUniqueIds(queue.map((question) => question.id)) : [];
+        const batch = writeBatch(firestore);
+        batch.set(gameRef, createdGameDoc, { merge: true });
+        if (inviteRecord) {
+          batch.set(inviteRecord.inviteRef, inviteRecord.inviteDoc, { merge: true });
         }
+        batch.set(
+          doc(firestore, 'games', gameRef.id, 'players', user.uid),
+          {
+            uid: user.uid,
+            displayName: profile?.displayName || user.displayName || PLAYER_LABEL[creatorSeat] || 'Player',
+            seat: creatorSeat,
+            role: 'host',
+            photoURL: user.photoURL || '',
+            joinedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+        batch.set(
+          doc(firestore, 'users', user.uid),
+          buildActiveGameProfilePatch(gameRef.id),
+          { merge: true },
+        );
+        if (isTrueFalseGame && trueFalseQueueIds.length) {
+          batch.set(
+            doc(firestore, 'playerPairs', buildPairKey()),
+            {
+              pairId: buildPairKey(),
+              playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
+              // True or False questions are retired as soon as they are queued
+              // into a live session so this mode never repeats statements later.
+              playedQuestionIds: arrayUnion(...trueFalseQueueIds),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true },
+          );
+        }
+        armRoomLoadTimeout(gameRef.id, 'opening game');
+        await batch.commit();
+        roomCreated = true;
+        setGame(createdGameState);
+        setRounds([]);
+        setChatMessages([]);
+        setGameId(gameRef.id);
+        safeLocalStorageSet(activeGameKey, gameRef.id);
+        setNotice(
+          options.sendInvite
+            ? `Game ${joinCode} created and invite sent to ${PLAYER_LABEL[inviteTargetSeat] || inviteTargetSeat}.`
+            : isHoldemGame
+              ? `Texas Hold’em game ${joinCode} created.`
+              : `Game ${joinCode} created with ${actualCount} questions.${warning ? ` ${warning}` : ''}`,
+        );
+        console.debug('Create New Game queue committed', { gameId: gameRef.id, joinCode, actualCount, inviteSent: Boolean(options.sendInvite) });
 
         setLobbyGameName('');
         setLobbyQuestionCount('10');
@@ -11251,6 +18919,32 @@ function ProductionApp() {
           photoURL: user.photoURL || '',
         },
       };
+      const shouldReadyHoldemSession =
+        isHoldemGameMode(data?.gameMode || 'standard')
+        && !alreadyJoined
+        && Boolean(nextSeats.jay && nextSeats.kim)
+        && !Boolean(seats.jay && seats.kim);
+      let nextHoldemState = null;
+      if (shouldReadyHoldemSession) {
+        const [jayBalanceSnap, kimBalanceSnap] = await Promise.all([
+          getDoc(doc(firestore, 'users', fixedPlayerUids.jay)).catch(() => null),
+          getDoc(doc(firestore, 'users', fixedPlayerUids.kim)).catch(() => null),
+        ]);
+        nextHoldemState = createHoldemSessionState({
+          balances: {
+            jay: Number(jayBalanceSnap?.exists() ? jayBalanceSnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.jay?.lifetimePenaltyPoints || 0),
+            kim: Number(kimBalanceSnap?.exists() ? kimBalanceSnap.data()?.lifetimePenaltyPoints || 0 : playerAccounts?.kim?.lifetimePenaltyPoints || 0),
+          },
+          nextDealerSeat: data?.holdemState?.nextDealerSeat || targetSeat || preferredSeat || 'jay',
+          bothPlayersJoined: true,
+        });
+      }
+      const hadPendingRoomInvite = Boolean(
+        (Array.isArray(data?.pendingInviteTargets) && data.pendingInviteTargets.length)
+        || data?.pendingInviteForUserId
+        || data?.pendingInviteForSeat,
+      );
+      const shouldClearPendingRoomInvite = hadPendingRoomInvite && !alreadyJoined && Boolean(nextSeats.jay && nextSeats.kim);
 
       const batch = writeBatch(firestore);
       batch.set(roomRef, {
@@ -11262,6 +18956,17 @@ function ProductionApp() {
         playerUids: nextPlayerUids,
         playerProfiles: nextPlayerProfiles,
         status: 'active',
+        ...(shouldClearPendingRoomInvite
+          ? {
+              pendingInviteTargets: [],
+              pendingInviteStatus: 'accepted',
+              pendingInviteAcceptedAt: serverTimestamp(),
+              pendingInviteJoinedByUserId: user.uid,
+              pendingInviteUpdatedAt: serverTimestamp(),
+              pendingInviteGameStatus: 'active',
+            }
+          : {}),
+        ...(nextHoldemState ? { holdemState: nextHoldemState } : {}),
         updatedAt: serverTimestamp(),
       }, { merge: true });
       batch.set(
@@ -11291,7 +18996,7 @@ function ProductionApp() {
       }
       await batch.commit();
 
-      if (!inviteId) {
+      if (!inviteId && !shouldClearPendingRoomInvite) {
         const linkedInviteId = buildGameInviteId(targetGameId, user.uid);
         if (linkedInviteId) {
           const linkedInviteSnap = await getDoc(doc(firestore, 'gameInvites', linkedInviteId)).catch(() => null);
@@ -11343,7 +19048,7 @@ function ProductionApp() {
       if (!invite?.gameId) throw new Error('This invite is missing a live game session.');
       await joinGameSessionById(invite.gameId, {
         fallbackCode: invite.roomCode || invite.joinCode || '',
-        inviteId: invite.id || '',
+        inviteId: invite.collectionInviteId || (invite.source === 'collection' ? invite.id || '' : ''),
       });
     }, 'Could not join invited game.');
 
@@ -11352,13 +19057,37 @@ function ProductionApp() {
       if (!invite?.id) throw new Error('This invite could not be dismissed.');
       const inviteStatus = invite.displayStatus || invite.status || 'pending';
       if (inviteStatus === 'pending') throw new Error('Active invites can only be joined, not dismissed.');
-      await setGameInviteStatus(invite.id, {
-        status: 'dismissed',
-        gameStatus: invite.gameStatus || 'unavailable',
-        dismissedAt: serverTimestamp(),
-        dismissedByUserId: user?.uid || '',
-      });
+      const collectionInviteId = invite.collectionInviteId || (invite.source === 'collection' ? invite.id || '' : '');
+      const shouldClearRoomInvite = Boolean(invite.gameId && (invite.roomInviteId || invite.source === 'room'));
+      const updates = [];
+      if (shouldClearRoomInvite) {
+        updates.push(setDoc(
+          doc(firestore, 'games', invite.gameId),
+          {
+            pendingInviteTargets: [],
+            pendingInviteStatus: 'dismissed',
+            pendingInviteDismissedAt: serverTimestamp(),
+            pendingInviteDismissedByUserId: user?.uid || '',
+            pendingInviteUpdatedAt: serverTimestamp(),
+            pendingInviteGameStatus: invite.gameStatus || 'unavailable',
+          },
+          { merge: true },
+        ));
+      }
+      if (collectionInviteId) {
+        updates.push(setGameInviteStatus(collectionInviteId, {
+          status: 'dismissed',
+          gameStatus: invite.gameStatus || 'unavailable',
+          dismissedAt: serverTimestamp(),
+          dismissedByUserId: user?.uid || '',
+        }));
+      }
+      if (!updates.length) throw new Error('This invite could not be dismissed.');
+      await Promise.all(updates);
       setGameInvites((current) => current.filter((entry) => entry.id !== invite.id));
+      if (shouldClearRoomInvite) {
+        setRoomGameInvites((current) => current.filter((entry) => entry.id !== (invite.roomInviteId || invite.id)));
+      }
       setNotice('Invite dismissed.');
     }, 'Could not dismiss invite.');
 
@@ -11501,6 +19230,393 @@ function ProductionApp() {
     }, { merge: true });
   };
 
+  const buildHoldemSummaryFields = useCallback((holdemState = null, holdemStats = null) => {
+    const normalizedStats = holdemStats || defaultHoldemStats();
+    const finalScores = holdemState?.lastSettledBalances || buildHoldemBankrollsFromAccounts(playerAccounts);
+    const winner = getHoldemSessionWinner(normalizedStats, finalScores);
+    return {
+      totals: finalScores,
+      finalScores,
+      winner,
+      roundsPlayed: Number(normalizedStats?.handsPlayed || 0),
+      actualQuestionCount: Number(normalizedStats?.handsPlayed || 0),
+    };
+  }, [playerAccounts]);
+
+  const initializeHoldemSessionState = useCallback((seatToDeal = 'jay', bothPlayersJoined = false) =>
+    createHoldemSessionState({
+      balances: buildHoldemBankrollsFromAccounts(playerAccounts),
+      nextDealerSeat: seatToDeal,
+      bothPlayersJoined,
+    }), [playerAccounts]);
+
+  const buildHoldemDealReadyStatusMessage = useCallback(
+    (readyBySeat = {}, currentReadySeat = '') => buildHoldemDealReadyStatusCopy(readyBySeat, currentReadySeat),
+    [],
+  );
+
+  const applyLocalHoldemState = useCallback((nextHoldemState, holdemStatsOverride = null, nextNotice = '') => {
+    if (!nextHoldemState || !game?.id) return;
+    const committedAtIso = new Date().toISOString();
+    setGame((current) => {
+      if (!current || current.id !== game.id) return current;
+      return {
+        ...current,
+        holdemState: {
+          ...nextHoldemState,
+          updatedAt: committedAtIso,
+        },
+        ...buildHoldemSummaryFields(nextHoldemState, holdemStatsOverride || current.holdemStats || defaultHoldemStats()),
+        updatedAt: committedAtIso,
+      };
+    });
+    if (nextNotice) setNotice(nextNotice);
+  }, [buildHoldemSummaryFields, game?.id]);
+
+  const startHoldemHand = async () => {
+    if (isHoldemStartBusy) return null;
+    setIsHoldemStartBusy(true);
+    try {
+      if (!game?.id) throw new Error('Open a Hold’em room first.');
+      if (!isHoldemGameMode(game?.gameMode || 'standard')) throw new Error('Texas Hold’em actions only work in Texas Hold’em rooms.');
+      const bothPlayersJoined = Boolean(game?.seats?.jay && game?.seats?.kim);
+      if (!bothPlayersJoined) throw new Error('Both players need to join before the first Hold’em hand can start.');
+
+      if (isCurrentLocalTestGame) {
+        setGame((current) => {
+          if (!current || !isHoldemGameMode(current?.gameMode || 'standard')) return current;
+          const nextHoldemState = buildNextHoldemHandState(
+            current.holdemState || initializeHoldemSessionState(currentSeat || 'jay', true),
+            current.holdemState?.lastSettledBalances || buildHoldemBankrollsFromAccounts(playerAccounts),
+            true,
+          );
+          return {
+            ...current,
+            holdemState: {
+              ...nextHoldemState,
+              updatedAt: new Date().toISOString(),
+            },
+            ...buildHoldemSummaryFields(nextHoldemState, current.holdemStats || defaultHoldemStats()),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        setNotice('Texas Hold’em hand dealt.');
+        return true;
+      }
+
+      if (!firestore) throw new Error('Firebase is not configured.');
+      if (!currentSeat) throw new Error('Could not determine your Hold’em seat.');
+      const gameRef = doc(firestore, 'games', game.id);
+      const localSourceState = game?.holdemState || initializeHoldemSessionState(currentSeat, true);
+      const localReadyBySeat = {
+        jay: Boolean(localSourceState?.dealReadyBySeat?.jay),
+        kim: Boolean(localSourceState?.dealReadyBySeat?.kim),
+      };
+      const localNextReadyBySeat = {
+        ...localReadyBySeat,
+        [currentSeat]: true,
+      };
+      const localSessionStatus = String(localSourceState?.sessionStatus || '');
+      const shouldOptimisticallyReadySeat = !localReadyBySeat[currentSeat]
+        && localSessionStatus !== 'hand_live'
+        && localSessionStatus !== 'waiting_for_players'
+        && localSessionStatus !== 'bankroll_blocked';
+      const otherSeat = currentSeat === 'jay' ? 'kim' : 'jay';
+      const previousLocalHoldemState = shouldOptimisticallyReadySeat ? localSourceState : null;
+      if (shouldOptimisticallyReadySeat) {
+        const optimisticUpdatedAt = new Date().toISOString();
+        const optimisticState = {
+          ...localSourceState,
+          dealReadyBySeat: localNextReadyBySeat,
+          statusMessage: buildHoldemDealReadyStatusMessage(localNextReadyBySeat, currentSeat),
+          updatedAt: optimisticUpdatedAt,
+        };
+        setGame((current) =>
+          current?.id === game.id
+            ? {
+                ...current,
+                holdemState: optimisticState,
+                updatedAt: optimisticUpdatedAt,
+              }
+            : current,
+        );
+        try {
+          await updateDoc(gameRef, {
+            [`holdemState.dealReadyBySeat.${currentSeat}`]: true,
+            'holdemState.statusMessage': optimisticState.statusMessage,
+            'holdemState.updatedAt': serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          setNotice(
+            localNextReadyBySeat.jay && localNextReadyBySeat.kim
+              ? 'Both Hold’em players are ready. Dealing the cards next.'
+              : 'Hold’em deal ready updated.',
+          );
+          return true;
+        } catch (error) {
+          if (!isFirestoreRateLimitedError(error)) {
+            setGame((current) =>
+              current?.id === game.id
+                ? {
+                    ...current,
+                    holdemState: previousLocalHoldemState,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : current,
+            );
+          }
+          throw error;
+        }
+      }
+      const syncedReadyBySeat = shouldOptimisticallyReadySeat ? localNextReadyBySeat : localReadyBySeat;
+      if (syncedReadyBySeat[currentSeat] && !syncedReadyBySeat[otherSeat]) {
+        setNotice('You are already ready. Waiting for the other player.');
+        return true;
+      }
+      if (
+        syncedReadyBySeat.jay
+        && syncedReadyBySeat.kim
+        && localSessionStatus !== 'hand_live'
+        && localSessionStatus !== 'waiting_for_players'
+        && localSessionStatus !== 'bankroll_blocked'
+      ) {
+        const localBalances = hasHoldemBankrollSnapshot(localSourceState?.lastSettledBalances)
+          ? localSourceState.lastSettledBalances
+          : buildHoldemBankrollsFromAccounts(playerAccounts);
+        const holdemState = buildNextHoldemHandState(
+          localSourceState,
+          localBalances,
+          true,
+          {
+            // Deterministic seeding keeps concurrent client deal writes idempotent.
+            seedKey: buildHoldemDealSeedKey(game.id, localSourceState, localBalances),
+          },
+        );
+        await setDoc(gameRef, {
+          holdemState,
+          ...buildHoldemSummaryFields(holdemState, game?.holdemStats || defaultHoldemStats()),
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+        applyLocalHoldemState(holdemState, game?.holdemStats || defaultHoldemStats(), 'Texas Hold’em hand dealt.');
+        return true;
+      }
+      const dealResult = await runTransaction(firestore, async (transaction) => {
+        const gameSnap = await transaction.get(gameRef);
+        if (!gameSnap.exists()) throw new Error('The Hold’em game no longer exists.');
+        const gameData = { id: gameSnap.id, ...gameSnap.data() };
+        if (!isHoldemGameMode(gameData?.gameMode || 'standard')) throw new Error('This room is not a Texas Hold’em game.');
+        const joined = Boolean(gameData?.seats?.jay && gameData?.seats?.kim);
+        if (!joined) throw new Error('Both players need to join before the first Hold’em hand can start.');
+        const actingSeat = seatForUid(gameData, user?.uid) || currentSeat;
+        if (!actingSeat) throw new Error('Could not determine your Hold’em seat.');
+        if ((gameData?.holdemState?.sessionStatus || '') === 'hand_live') {
+          return {
+            status: 'already-live',
+            holdemState: gameData?.holdemState || null,
+            holdemStats: gameData?.holdemStats || defaultHoldemStats(),
+          };
+        }
+        let baseBalances = gameData?.holdemState?.lastSettledBalances || null;
+        if (!hasHoldemBankrollSnapshot(baseBalances)) {
+          const jayRef = doc(firestore, 'users', fixedPlayerUids.jay);
+          const kimRef = doc(firestore, 'users', fixedPlayerUids.kim);
+          const [jaySnap, kimSnap] = await Promise.all([
+            transaction.get(jayRef),
+            transaction.get(kimRef),
+          ]);
+          baseBalances = {
+            jay: Number(jaySnap.exists() ? jaySnap.data()?.lifetimePenaltyPoints || 0 : 0),
+            kim: Number(kimSnap.exists() ? kimSnap.data()?.lifetimePenaltyPoints || 0 : 0),
+          };
+        }
+        const sourceState = gameData?.holdemState || initializeHoldemSessionState(actingSeat, true);
+        const currentReadyBySeat = {
+          jay: Boolean(sourceState?.dealReadyBySeat?.jay),
+          kim: Boolean(sourceState?.dealReadyBySeat?.kim),
+        };
+        if (currentReadyBySeat[actingSeat] && !(currentReadyBySeat.jay && currentReadyBySeat.kim)) {
+          return {
+            status: 'already-ready',
+            holdemState: {
+              ...sourceState,
+              dealReadyBySeat: currentReadyBySeat,
+              statusMessage: buildHoldemDealReadyStatusMessage(currentReadyBySeat, actingSeat),
+            },
+            holdemStats: gameData?.holdemStats || defaultHoldemStats(),
+          };
+        }
+        const nextReadyBySeat = {
+          ...currentReadyBySeat,
+          [actingSeat]: true,
+        };
+        if (nextReadyBySeat.jay && nextReadyBySeat.kim) {
+          const holdemState = buildNextHoldemHandState(sourceState, baseBalances, true);
+          transaction.set(gameRef, {
+            holdemState,
+            ...buildHoldemSummaryFields(holdemState, gameData?.holdemStats || defaultHoldemStats()),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+          return {
+            status: 'dealt',
+            holdemState,
+            holdemStats: gameData?.holdemStats || defaultHoldemStats(),
+          };
+        }
+        const nextHoldemState = {
+          ...sourceState,
+          dealReadyBySeat: nextReadyBySeat,
+          statusMessage: buildHoldemDealReadyStatusMessage(nextReadyBySeat, actingSeat),
+          updatedAt: new Date().toISOString(),
+        };
+        transaction.set(gameRef, {
+          holdemState: nextHoldemState,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+        return {
+          status: 'ready',
+          holdemState: nextHoldemState,
+          holdemStats: gameData?.holdemStats || defaultHoldemStats(),
+        };
+      });
+      if (dealResult?.holdemState) {
+        applyLocalHoldemState(dealResult.holdemState, dealResult.holdemStats || game?.holdemStats || defaultHoldemStats());
+      }
+      setNotice(
+        dealResult?.status === 'dealt'
+          ? 'Texas Hold’em hand dealt.'
+          : dealResult?.status === 'already-live'
+            ? 'The hand is already live.'
+            : dealResult?.status === 'already-ready'
+              ? 'You are already ready. Waiting for the other player.'
+              : 'Hold’em deal ready updated.',
+      );
+      return true;
+    } catch (error) {
+      const message = String(error?.message || 'Could not start Texas Hold’em.');
+      const normalizedMessage = normalizeText(message);
+      if (
+        normalizedMessage.includes('quota exceeded')
+        || normalizedMessage.includes('quotaexceeded')
+        || normalizedMessage.includes('resource exhausted')
+        || normalizedMessage.includes('resource-exhausted')
+      ) {
+        setNotice('Texas Hold’em is being rate-limited by Firestore right now. Wait a moment and try the ready button again.');
+        return null;
+      }
+      setNotice(message);
+      return null;
+    } finally {
+      setIsHoldemStartBusy(false);
+    }
+  };
+
+  const takeHoldemAction = async ({ action = '', amount = 0 } = {}) =>
+    withBusy(async () => {
+      if (!game?.id) throw new Error('Open a Hold’em room first.');
+      if (!currentSeat) throw new Error('Could not determine your Hold’em seat.');
+      if (!isHoldemGameMode(game?.gameMode || 'standard')) throw new Error('Texas Hold’em actions only work in Texas Hold’em rooms.');
+
+      if (isCurrentLocalTestGame) {
+        setGame((current) => {
+          if (!current || !isHoldemGameMode(current?.gameMode || 'standard')) return current;
+          const nextHoldemState = applyHoldemAction(current.holdemState || initializeHoldemSessionState(currentSeat, true), {
+            seat: currentSeat,
+            action,
+            amount,
+          });
+          if (nextHoldemState?.settlement) {
+            nextHoldemState.lastSettledBalances = {
+              jay: Math.max(0, Number(nextHoldemState.players?.jay?.stack || 0)),
+              kim: Math.max(0, Number(nextHoldemState.players?.kim?.stack || 0)),
+            };
+          }
+          const currentStats = current.holdemStats || defaultHoldemStats();
+          const nextStats = nextHoldemState?.settlement ? mergeHoldemStats(currentStats, getHoldemStatDelta(nextHoldemState)) : currentStats;
+          return {
+            ...current,
+            holdemState: {
+              ...nextHoldemState,
+              updatedAt: new Date().toISOString(),
+            },
+            holdemStats: nextStats,
+            ...buildHoldemSummaryFields(nextHoldemState, nextStats),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        return true;
+      }
+
+      if (!firestore) throw new Error('Firebase is not configured.');
+      const gameRef = doc(firestore, 'games', game.id);
+      const sourceHoldemState = game?.holdemState || initializeHoldemSessionState(currentSeat, true);
+      const nextHoldemState = applyHoldemAction(sourceHoldemState, {
+        seat: currentSeat,
+        action,
+        amount,
+      });
+      const currentStats = game?.holdemStats || defaultHoldemStats();
+      let nextStats = currentStats;
+      const batch = writeBatch(firestore);
+      if (nextHoldemState?.settlement) {
+        nextStats = mergeHoldemStats(currentStats, getHoldemStatDelta(nextHoldemState));
+        const settledBalances = {
+          jay: Math.max(0, Number(nextHoldemState?.players?.jay?.stack || 0)),
+          kim: Math.max(0, Number(nextHoldemState?.players?.kim?.stack || 0)),
+        };
+        // Penalty points double as the Hold'em bankroll for this mode. We apply
+        // the settled hand balances back to the player docs without rereading them,
+        // so live actions do not stall on extra Firestore reads.
+        nextHoldemState.lastSettledBalances = settledBalances;
+        batch.set(doc(firestore, 'users', fixedPlayerUids.jay), {
+          uid: fixedPlayerUids.jay,
+          displayName: 'Jay',
+          lifetimePenaltyPoints: settledBalances.jay,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+        batch.set(doc(firestore, 'users', fixedPlayerUids.kim), {
+          uid: fixedPlayerUids.kim,
+          displayName: 'Kim',
+          lifetimePenaltyPoints: settledBalances.kim,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      }
+      batch.set(gameRef, {
+        holdemState: {
+          ...nextHoldemState,
+          updatedAt: serverTimestamp(),
+        },
+        holdemStats: nextStats,
+        ...buildHoldemSummaryFields(nextHoldemState, nextStats),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      await batch.commit();
+      applyLocalHoldemState(nextHoldemState, nextStats);
+      if (nextHoldemState?.settlement?.lastSettledBalances || nextHoldemState?.lastSettledBalances) {
+        const settledBalances = nextHoldemState?.lastSettledBalances || null;
+        if (settledBalances) {
+          const settledAtIso = new Date().toISOString();
+          setPlayerAccounts((current) => ({
+            ...current,
+            jay: {
+              ...(current?.jay || {}),
+              uid: fixedPlayerUids.jay,
+              displayName: current?.jay?.displayName || 'Jay',
+              lifetimePenaltyPoints: Math.max(0, Number(settledBalances.jay || 0)),
+              updatedAt: settledAtIso,
+            },
+            kim: {
+              ...(current?.kim || {}),
+              uid: fixedPlayerUids.kim,
+              displayName: current?.kim?.displayName || 'Kim',
+              lifetimePenaltyPoints: Math.max(0, Number(settledBalances.kim || 0)),
+              updatedAt: settledAtIso,
+            },
+          }));
+        }
+      }
+      return true;
+    }, 'Could not update Texas Hold’em.');
+
   const updateCurrentRound = async (nextRoundPatch) => {
     if (isCurrentLocalTestGame) {
       setGame((current) =>
@@ -11565,11 +19681,11 @@ function ProductionApp() {
     const seat = seatForUid(game, user.uid) || inferSeatFromUser(user, profile) || '';
     if (!seat) return;
     const agreement = normalizeQuizWagerAgreement(game);
-    if (Number.isFinite(Number(agreement.proposedAmount))) {
+    if (agreement.proposedAmount !== null) {
       setQuizWagerDraft(String(agreement.proposedAmount || ''));
       return;
     }
-    if (Number.isFinite(Number(agreement.amount))) {
+    if (agreement.amount !== null) {
       setQuizWagerDraft(String(agreement.amount || ''));
       return;
     }
@@ -11612,55 +19728,45 @@ function ProductionApp() {
     }).catch(() => null);
   }, [game?.id, game?.gameMode, game?.currentRound?.status, isCurrentLocalTestGame]);
   const quizSetupLaunchRef = useRef('');
+  const quizSetupCountdownRef = useRef('');
   const quizAdvanceRef = useRef('');
+  const quizRevealSettleRef = useRef('');
   const quizTimeoutRevealRef = useRef('');
-  const quizWheelFinalizeRef = useRef('');
   const standardRevealSettleRef = useRef('');
-  useEffect(() => {
-    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-    const agreement = normalizeQuizWagerAgreement(game || {});
-    const spinEndsAtMs = Date.parse(agreement.wheelSpinEndsAt || '');
-    const finalizeKey = `${game?.id || ''}:${agreement.wheelSpinEndsAt || ''}:${agreement.wheelResultIndex ?? ''}`;
-    if (!isQuizGame || game?.currentRound || agreement.status === 'agreed' || agreement.status === 'wheel_locked' || !Number.isFinite(spinEndsAtMs)) {
-      if (quizWheelFinalizeRef.current === finalizeKey) quizWheelFinalizeRef.current = '';
-      return undefined;
-    }
-    const remainingMs = Math.max(0, spinEndsAtMs - Date.now());
-    const timeout = window.setTimeout(() => {
-      if (quizWheelFinalizeRef.current === finalizeKey) return;
-      quizWheelFinalizeRef.current = finalizeKey;
-      finalizeQuizWheelWager()
-        .catch(() => null)
-        .finally(() => {
-          quizWheelFinalizeRef.current = '';
-        });
-    }, remainingMs + 50);
-    return () => window.clearTimeout(timeout);
-  }, [
-    game?.id,
-    game?.gameMode,
-    game?.currentRound?.id,
-    game?.quizWagerAgreement?.status,
-    game?.quizWagerAgreement?.wheelSpinEndsAt,
-    game?.quizWagerAgreement?.wheelResultIndex,
-    isCurrentLocalTestGame,
-  ]);
-  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, startOpen = false } = {}) => {
+  const trueFalseRevealSettleRef = useRef('');
+  const trueFalseTimeoutRevealRef = useRef('');
+  const thisOrThatRevealSettleRef = useRef('');
+  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isTrueFalseGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
+    const quizRoundKey = sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question';
+    const roundType = normalizeQuestionType(nextQuestionItem.roundType, 'text');
+    const multipleChoiceOptions = inferChoiceOptions({
+      roundType,
+      question: nextQuestionItem.question,
+      multipleChoiceOptions: nextQuestionItem.multipleChoiceOptions || [],
+    });
     return {
-      id: makeId('round'),
+      id: isQuizGame ? `round-quiz-${nextRoundNumber}-${quizRoundKey}` : makeId('round'),
       number: nextRoundNumber,
       questionId: nextQuestionItem.id,
       question: nextQuestionItem.question,
       category: nextQuestionItem.category || '',
-      roundType: nextQuestionItem.roundType || 'numeric',
-      defaultAnswerType: nextQuestionItem.defaultAnswerType || getDefaultAnswerType(nextQuestionItem.roundType),
-      multipleChoiceOptions: nextQuestionItem.multipleChoiceOptions || [],
+      roundType,
+      bankType: normalizeQuestionBankType(nextQuestionItem.bankType),
+      defaultAnswerType: nextQuestionItem.defaultAnswerType || getDefaultAnswerType(roundType),
+      multipleChoiceOptions,
       correctAnswer: nextQuestionItem.correctAnswer || '',
       normalizedCorrectAnswer: nextQuestionItem.normalizedCorrectAnswer || '',
       notes: nextQuestionItem.notes || '',
       tags: nextQuestionItem.tags || [],
+      intensity: Number(nextQuestionItem.intensity || 0),
+      tone: nextQuestionItem.tone || '',
+      relationshipArea: nextQuestionItem.relationshipArea || '',
+      avoidIf: nextQuestionItem.avoidIf || [],
+      gameSuitability: nextQuestionItem.gameSuitability || [],
+      aiUseCase: nextQuestionItem.aiUseCase || [],
+      repeatGroup: nextQuestionItem.repeatGroup || '',
       unitLabel: nextQuestionItem.unitLabel || '',
       status: startOpen ? 'open' : 'ready',
       ready: startOpen ? { jay: true, kim: true } : { jay: false, kim: false },
@@ -11670,33 +19776,52 @@ function ProductionApp() {
       quizTimerSeconds: isQuizGame && startOpen ? QUIZ_TIMER_SECONDS : 0,
       quizTimerStartedAt: isQuizGame && startOpen ? nowIso : '',
       quizTimerEndsAt: isQuizGame && startOpen ? new Date(now + (QUIZ_TIMER_SECONDS * 1000)).toISOString() : '',
+      trueFalseTimerSeconds: isTrueFalseGame && startOpen ? TRUE_FALSE_TIMER_SECONDS : 0,
+      trueFalseTimerStartedAt: isTrueFalseGame && startOpen ? nowIso : '',
+      trueFalseTimerEndsAt: isTrueFalseGame && startOpen ? new Date(now + (TRUE_FALSE_TIMER_SECONDS * 1000)).toISOString() : '',
       createdAt: nowIso,
     };
   };
+  const getTrueFalsePenaltyMap = useCallback((round = null) => {
+    const outcome = buildTrueFalseRoundOutcome(round || {});
+    return {
+      jay: outcome.jayPenalty,
+      kim: outcome.kimPenalty,
+    };
+  }, []);
+  const getThisOrThatPenaltyMap = useCallback((round = null) => {
+    const outcome = buildThisOrThatRoundOutcome(round || {});
+    return {
+      jay: outcome.jayPenalty,
+      kim: outcome.kimPenalty,
+    };
+  }, []);
 
   const markReady = async (seatToReady = '') =>
     withBusy(async () => {
-      const seat = seatToReady === 'kim' ? 'kim' : seatToReady === 'jay' ? 'jay' : currentSeat;
+      const requestedSeat = seatToReady === 'kim' ? 'kim' : seatToReady === 'jay' ? 'jay' : '';
+      const seat = currentSeat || requestedSeat;
       if (!seat) return;
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-      const sharedQuizWagerLocked = isQuizWagerAgreementLocked(game);
+      const sharedQuizWagerLocked = isQuizWagerEffectivelyLocked(game);
 
       if (isQuizGame && !game?.currentRound) {
         if (!sharedQuizWagerLocked) throw new Error('Both players must agree one shared wager before starting Quick Fire.');
         if (isCurrentLocalTestGame) {
-          const otherSeat = oppositeSeatOf(seat);
           setGame((current) => {
             if (!current || current.currentRound) return current;
+            const currentReady = (current.quizReadyState && current.quizReadyState.ready) || { jay: false, kim: false };
+            const nextReady = { ...currentReady, [seat]: true };
+            const bothReady = Boolean(nextReady.jay && nextReady.kim);
+            const nowIso = new Date().toISOString();
             return {
               ...current,
               quizReadyState: {
-                ...(current.quizReadyState || defaultQuizReadyState('opening')),
-                stage: 'opening',
-                ready: {
-                  ...((current.quizReadyState && current.quizReadyState.ready) || { jay: false, kim: false }),
-                  [seat]: true,
-                  [otherSeat]: true,
-                },
+                ...(current.quizReadyState || defaultQuizReadyState('ready')),
+                stage: bothReady ? 'countdown' : 'ready',
+                ready: nextReady,
+                countdownStartedAt: bothReady ? nowIso : (current.quizReadyState?.countdownStartedAt || ''),
+                countdownEndsAt: bothReady ? new Date(Date.now() + QUIZ_SETUP_COUNTDOWN_MS).toISOString() : (current.quizReadyState?.countdownEndsAt || ''),
               },
               updatedAt: new Date().toISOString(),
             };
@@ -11705,27 +19830,72 @@ function ProductionApp() {
         }
 
         const gameRef = makeGameRef();
-        if (!gameRef) return null;
-        await runTransaction(firestore, async (transaction) => {
-          const snap = await transaction.get(gameRef);
-          if (!snap.exists()) throw new Error('Room not found.');
-          const data = snap.data() || {};
-          if (data.currentRound) return;
-          if (!isQuizWagerAgreementLocked(data)) {
-            throw new Error('Both players must agree one shared wager before starting Quick Fire.');
-          }
-          const currentReady = data.quizReadyState?.ready || { jay: false, kim: false };
-          transaction.update(gameRef, {
-            quizReadyState: {
-              stage: 'opening',
-              ready: {
-                ...currentReady,
-                [seat]: true,
-              },
-            },
-            updatedAt: serverTimestamp(),
-          });
+        if (!gameRef || !firestore) return null;
+        const nowMs = Date.now();
+        const liveSeat = seatForUid(game, user?.uid) || seat;
+        if (!liveSeat) throw new Error('Could not determine your player seat.');
+        const previousReadyState = normalizeQuizReadyState(game?.quizReadyState || null, 'ready');
+        const optimisticReadyState = {
+          ...previousReadyState,
+          stage: previousReadyState.stage === 'countdown' ? 'countdown' : 'ready',
+          ready: {
+            ...(previousReadyState.ready || { jay: false, kim: false }),
+            [liveSeat]: true,
+          },
+        };
+        if (!isQuizWagerAgreementLocked(game) && !isQuizWagerEffectivelyLocked(game, nowMs)) {
+          throw new Error('Both players must agree one shared wager before starting Quick Fire.');
+        }
+        debugRoom('quizSetupReadyWrite', {
+          gameId: game?.id || gameId || '',
+          userId: user?.uid || '',
+          seat,
+          requestedSeat,
+          liveSeat,
+          previousStage: game?.quizReadyState?.stage || '',
+          previousReady: game?.quizReadyState?.ready || {},
         });
+        setGame((current) => current && !current.currentRound
+          ? {
+              ...current,
+              quizReadyState: optimisticReadyState,
+              updatedAt: new Date().toISOString(),
+            }
+          : current);
+        try {
+          const readyWritePatch = {
+            [`quizReadyState.ready.${liveSeat}`]: true,
+            updatedAt: serverTimestamp(),
+          };
+          if (optimisticReadyState.stage !== 'countdown') {
+            readyWritePatch['quizReadyState.stage'] = 'ready';
+          }
+          await updateDoc(gameRef, readyWritePatch);
+          debugRoom('quizSetupReadyWriteComplete', {
+            gameId: game?.id || gameId || '',
+            userId: user?.uid || '',
+            seat,
+            requestedSeat,
+            liveSeat,
+            stage: optimisticReadyState.stage || '',
+            ready: optimisticReadyState.ready || {},
+          });
+        } catch (error) {
+          setGame((current) => current && !current.currentRound
+            ? {
+                ...current,
+                quizReadyState: previousReadyState,
+                updatedAt: new Date().toISOString(),
+              }
+            : current);
+          debugRoom('quizSetupReadyWriteFailed', {
+            gameId: game?.id || gameId || '',
+            seat,
+            code: error?.code || '',
+            message: error?.message || String(error),
+          });
+          throw error;
+        }
         return true;
       }
 
@@ -11753,19 +19923,54 @@ function ProductionApp() {
           return true;
         }
         const gameRef = makeGameRef();
-        if (!gameRef) return null;
-        await runTransaction(firestore, async (transaction) => {
-          const snap = await transaction.get(gameRef);
-          if (!snap.exists()) throw new Error('Room not found.');
-          const data = snap.data() || {};
-          const round = data.currentRound || null;
-          if (!round || round.status !== 'reveal') return;
-          transaction.update(gameRef, {
-            [`currentRound.nextReady.${seat}`]: true,
+        if (!gameRef || !firestore) return null;
+        const liveSeat = seatForUid(game, user?.uid) || seat;
+        if (!liveSeat) throw new Error('Could not determine your player seat.');
+        const previousNextReady = {
+          jay: Boolean(game.currentRound?.nextReady?.jay),
+          kim: Boolean(game.currentRound?.nextReady?.kim),
+        };
+        if (previousNextReady[liveSeat]) return true;
+        const roundKey = stableRoundIdentityKey(game.currentRound || {});
+        const optimisticNextReady = {
+          ...previousNextReady,
+          [liveSeat]: true,
+        };
+        setGame((current) =>
+          current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'reveal'
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  nextReady: optimisticNextReady,
+                  updatedAt: new Date().toISOString(),
+                },
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        try {
+          await updateDoc(gameRef, {
+            [`currentRound.nextReady.${liveSeat}`]: true,
             'currentRound.updatedAt': serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
-        });
+        } catch (error) {
+          setGame((current) =>
+            current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'reveal'
+              ? {
+                  ...current,
+                  currentRound: {
+                    ...current.currentRound,
+                    nextReady: previousNextReady,
+                    updatedAt: new Date().toISOString(),
+                  },
+                  updatedAt: new Date().toISOString(),
+                }
+              : current,
+          );
+          throw error;
+        }
         return true;
       }
 
@@ -11806,10 +20011,12 @@ function ProductionApp() {
         const data = snap.data() || {};
         const round = data.currentRound || null;
         if (!round || round.status !== 'ready') return;
-        const ready = { ...(round.ready || {}), [seat]: true };
+        const liveSeat = seatForUid(data, user?.uid) || seat;
+        if (!liveSeat) throw new Error('Could not determine your player seat.');
+        const ready = { ...(round.ready || {}), [liveSeat]: true };
         const bothReady = Boolean(ready.jay && ready.kim);
         const patch = {
-          [`currentRound.ready.${seat}`]: true,
+          [`currentRound.ready.${liveSeat}`]: true,
           'currentRound.updatedAt': serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
@@ -11826,7 +20033,160 @@ function ProductionApp() {
       return true;
     }, 'Could not mark ready.');
 
+  const lockAutoChoiceAnswerField = async ({ fieldName = '', value = '', gameMode = TRUE_FALSE_GAME_MODE } = {}) => {
+    const targetField = fieldName === 'guessedOther' ? 'guessedOther' : fieldName === 'ownAnswer' ? 'ownAnswer' : '';
+    let previousLocalAnswer = null;
+    let optimisticRoundKey = '';
+    if (!targetField) return null;
+
+    const isTrueFalseMode = gameMode === TRUE_FALSE_GAME_MODE;
+    const choiceModeLabel = isTrueFalseMode ? 'True or False' : 'This or That';
+    const normalizeChoice = (rawValue, round) =>
+      isTrueFalseMode ? normalizeTrueFalseChoice(rawValue) : normalizeThisOrThatChoice(rawValue, round);
+    const resolveDefaultChoices = (round) => {
+      if (isTrueFalseMode) return ['True', 'False'];
+      const options = getThisOrThatOptions(round);
+      return options.length >= 2 ? options : ['Option A', 'Option B'];
+    };
+
+    try {
+      if (!game?.currentRound || !currentSeat) throw new Error(`No active ${choiceModeLabel} round.`);
+      if (resolveGameMode(game?.gameMode || 'standard') !== gameMode) {
+        throw new Error(`Auto-lock answers are only available in ${choiceModeLabel} games.`);
+      }
+      if (game.currentRound.status !== 'open') return true;
+      const currentAnswer = game.currentRound.answers?.[currentSeat] || {};
+      if (normalizeChoice(currentAnswer?.[targetField] || '', game.currentRound)) return true;
+
+      const rawLockedValue = isTrueFalseMode
+        ? serialiseAnswerForQuestionType('trueFalse', value)
+        : serialiseAnswerForQuestionType('preference', value);
+      const lockedValue = normalizeChoice(rawLockedValue, game.currentRound);
+      if (!lockedValue) {
+        throw new Error(isTrueFalseMode ? 'Choose True or False.' : 'Choose one of the two options.');
+      }
+
+      const lockedAtIso = new Date().toISOString();
+      const otherField = targetField === 'ownAnswer' ? 'guessedOther' : 'ownAnswer';
+      const completedAt = normalizeChoice(currentAnswer?.[otherField] || '', game.currentRound) ? lockedAtIso : (currentAnswer?.completedAt || '');
+      const displayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[currentSeat] || 'Player';
+
+      if (isCurrentLocalTestGame) {
+        setGame((current) => {
+          if (!current?.currentRound || current.currentRound.status !== 'open') return current;
+          const defaultChoices = resolveDefaultChoices(current.currentRound);
+          const otherSeat = oppositeSeatOf(currentSeat);
+          const currentSeatAnswer = current.currentRound.answers?.[currentSeat] || {};
+          const nextAnswer = {
+            ...currentSeatAnswer,
+            [targetField]: lockedValue,
+            submittedBy: user?.uid || '',
+            displayName,
+            [`${targetField}LockedAt`]: lockedAtIso,
+            ...(normalizeChoice(currentSeatAnswer?.[otherField] || '', current.currentRound) ? { completedAt } : {}),
+            updatedAt: lockedAtIso,
+          };
+          const otherSeatAnswer = current.currentRound.answers?.[otherSeat] || {};
+          const autoOtherAnswer = {
+            ...otherSeatAnswer,
+            ownAnswer: normalizeChoice(otherSeatAnswer?.ownAnswer || '', current.currentRound) || defaultChoices[0] || '',
+            guessedOther: normalizeChoice(otherSeatAnswer?.guessedOther || '', current.currentRound) || defaultChoices[1] || defaultChoices[0] || '',
+            submittedBy: 'editing-mode',
+            displayName: otherSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)',
+            ownAnswerLockedAt: otherSeatAnswer?.ownAnswerLockedAt || lockedAtIso,
+            guessedOtherLockedAt: otherSeatAnswer?.guessedOtherLockedAt || lockedAtIso,
+            completedAt: otherSeatAnswer?.completedAt || lockedAtIso,
+            autoSubmitted: true,
+            updatedAt: lockedAtIso,
+          };
+          return {
+            ...current,
+            currentRound: {
+              ...current.currentRound,
+              answers: {
+                ...(current.currentRound.answers || {}),
+                [currentSeat]: nextAnswer,
+                [otherSeat]: autoOtherAnswer,
+              },
+              updatedAt: lockedAtIso,
+            },
+            updatedAt: lockedAtIso,
+          };
+        });
+        return true;
+      }
+
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) throw new Error('Room is missing.');
+      previousLocalAnswer = game.currentRound.answers?.[currentSeat] || null;
+      const roundKey = stableRoundIdentityKey(game.currentRound || {});
+      optimisticRoundKey = roundKey;
+      setGame((current) =>
+        current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                answers: {
+                  ...(current.currentRound.answers || {}),
+                  [currentSeat]: {
+                    ...(current.currentRound.answers?.[currentSeat] || {}),
+                    [targetField]: lockedValue,
+                    submittedBy: user?.uid || '',
+                    displayName,
+                    [`${targetField}LockedAt`]: lockedAtIso,
+                    ...(normalizeChoice((current.currentRound.answers?.[currentSeat] || {})?.[otherField] || '', current.currentRound) ? { completedAt } : {}),
+                    updatedAt: lockedAtIso,
+                  },
+                },
+              },
+            }
+          : current,
+      );
+      await updateDoc(gameRef, {
+        [`currentRound.answers.${currentSeat}.${targetField}`]: lockedValue,
+        [`currentRound.answers.${currentSeat}.submittedBy`]: user?.uid || '',
+        [`currentRound.answers.${currentSeat}.displayName`]: displayName,
+        [`currentRound.answers.${currentSeat}.${targetField}LockedAt`]: lockedAtIso,
+        ...(completedAt ? { [`currentRound.answers.${currentSeat}.completedAt`]: completedAt } : {}),
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return true;
+    } catch (error) {
+      if (optimisticRoundKey && currentSeat) {
+        setGame((current) =>
+          current?.currentRound && stableRoundIdentityKey(current.currentRound) === optimisticRoundKey
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  answers: (() => {
+                    const nextAnswers = { ...(current.currentRound.answers || {}) };
+                    if (previousLocalAnswer && Object.keys(previousLocalAnswer).length) nextAnswers[currentSeat] = previousLocalAnswer;
+                    else delete nextAnswers[currentSeat];
+                    return nextAnswers;
+                  })(),
+                },
+              }
+            : current,
+        );
+      }
+      setNotice(String(error?.message || `Could not lock that ${choiceModeLabel} answer.`));
+      return null;
+    }
+  };
+
+  const lockTrueFalseAnswerField = async (fieldName = '', value = '') =>
+    lockAutoChoiceAnswerField({ fieldName, value, gameMode: TRUE_FALSE_GAME_MODE });
+
+  const lockThisOrThatAnswerField = async (fieldName = '', value = '') =>
+    lockAutoChoiceAnswerField({ fieldName, value, gameMode: THIS_OR_THAT_GAME_MODE });
+
   const submitAnswer = async (draftOverride = null) => {
+    let previousLocalAnswer;
+    let optimisticPayload = null;
+    let optimisticRoundKey = '';
     try {
       if (!game?.currentRound || !currentSeat) throw new Error('No active round to answer.');
       if (game.currentRound.status !== 'open') throw new Error('Both players must be ready before answering.');
@@ -11836,6 +20196,9 @@ function ProductionApp() {
         guessedOther: String(game.currentRound.answers?.[currentSeat]?.guessedOther ?? ''),
       };
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+      const roundType = normalizeQuestionType(game.currentRound?.roundType, 'text');
+      const serialisedOwnAnswer = serialiseAnswerForQuestionType(roundType, draft.ownAnswer);
+      const serialisedGuessedOther = isQuizGame ? '' : serialiseAnswerForQuestionType(roundType, draft.guessedOther);
       const submittedAtIso = new Date().toISOString();
       const quizEndsAtMs = Date.parse(game.currentRound?.quizTimerEndsAt || '');
       const nowMs = Date.now();
@@ -11843,11 +20206,11 @@ function ProductionApp() {
         ? Math.max(0, quizEndsAtMs - nowMs)
         : QUIZ_TIMER_SECONDS * 1000;
       const timerSecondsLeft = Math.max(0, Math.ceil(timerMsLeft / 1000));
-      const quizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, draft.ownAnswer.trim()) : false;
+      const quizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, serialisedOwnAnswer.trim()) : false;
       const quizPointsAwarded = isQuizGame && quizWasCorrect ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
       const baseAnswerPayload = {
-        ownAnswer: draft.ownAnswer.trim(),
-        guessedOther: isQuizGame ? '' : draft.guessedOther.trim(),
+        ownAnswer: serialisedOwnAnswer.trim(),
+        guessedOther: serialisedGuessedOther.trim(),
         submittedBy: user?.uid || '',
         displayName: profile?.displayName || user?.displayName || '',
         submittedAt: submittedAtIso,
@@ -11871,12 +20234,18 @@ function ProductionApp() {
           [currentSeat]: baseAnswerPayload,
         };
         if (!nextAnswers[otherSeat]?.ownAnswer) {
-          const autoOwnAnswer = game.currentRound.roundType === 'numeric' ? '0' : choiceOptions[0] || 'Test mode response';
+          const autoOwnAnswer = usesNumberInputForQuestionType(roundType)
+            ? '0'
+            : usesRatingInputForQuestionType(roundType)
+              ? '5'
+              : usesListInputForQuestionType(roundType)
+                ? 'Item 1\nItem 2\nItem 3'
+                : choiceOptions[0] || 'Test mode response';
           const autoQuizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, autoOwnAnswer) : false;
           const autoQuizPoints = isQuizGame && autoQuizWasCorrect ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
           nextAnswers[otherSeat] = {
             ownAnswer: autoOwnAnswer,
-            guessedOther: isQuizGame ? '' : draft.ownAnswer.trim() || draft.guessedOther.trim() || choiceOptions[1] || choiceOptions[0] || 'Test guess',
+            guessedOther: isQuizGame ? '' : serialisedOwnAnswer.trim() || serialisedGuessedOther.trim() || choiceOptions[1] || choiceOptions[0] || 'Test guess',
             submittedBy: 'editing-mode',
             displayName: otherSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)',
             submittedAt: new Date().toISOString(),
@@ -11914,12 +20283,15 @@ function ProductionApp() {
       const gameRef = makeGameRef();
       if (!gameRef || !firestore) throw new Error('Room is missing.');
       const existingLocalAnswer = currentAnswers?.[currentSeat] || {};
+      previousLocalAnswer = currentAnswers?.[currentSeat];
+      optimisticRoundKey = stableRoundIdentityKey(game.currentRound || {});
       const payload = {
         ...baseAnswerPayload,
         submittedBy: existingLocalAnswer.submittedBy || baseAnswerPayload.submittedBy,
         submittedAt: existingLocalAnswer.submittedAt || baseAnswerPayload.submittedAt,
         updatedAt: submittedAtIso,
       };
+      optimisticPayload = payload;
       const nextLocalAnswers = {
         ...currentAnswers,
         [currentSeat]: payload,
@@ -11936,7 +20308,9 @@ function ProductionApp() {
           currentRound: {
             ...current.currentRound,
             answers: nextAnswers,
-            status: nextAnswers.jay?.ownAnswer && nextAnswers.kim?.ownAnswer ? 'reveal' : 'open',
+            status: isQuizGame
+              ? current.currentRound.status
+              : (nextAnswers.jay?.ownAnswer && nextAnswers.kim?.ownAnswer ? 'reveal' : 'open'),
           },
         };
       });
@@ -11949,35 +20323,10 @@ function ProductionApp() {
         });
         return true;
       }
-      await runTransaction(firestore, async (transaction) => {
-        const snap = await transaction.get(gameRef);
-        if (!snap.exists()) throw new Error('Room not found.');
-        const data = snap.data() || {};
-        const round = data.currentRound || null;
-        if (!round) throw new Error('No active round to answer.');
-        if (round.status !== 'open') throw new Error('This round is not open for answers.');
-        const serverSeatAnswer = (round.answers || {})[currentSeat] || {};
-        const existingSubmittedBy = serverSeatAnswer.submittedBy || '';
-        const existingSubmittedAt = serverSeatAnswer.submittedAt || '';
-        if (existingSubmittedBy && existingSubmittedBy !== user.uid) {
-          throw new Error('This answer was submitted by another player.');
-        }
-        const payload = {
-          ...baseAnswerPayload,
-          submittedBy: existingSubmittedBy || baseAnswerPayload.submittedBy,
-          submittedAt: existingSubmittedAt || baseAnswerPayload.submittedAt,
-          updatedAt: submittedAtIso,
-        };
-        const serverAnswers = round.answers || {};
-        const nextAnswers = { ...serverAnswers, [currentSeat]: payload };
-        const bothAnswered = Boolean(normalizeText(nextAnswers.jay?.ownAnswer) && normalizeText(nextAnswers.kim?.ownAnswer));
-        const patch = {
-          [`currentRound.answers.${currentSeat}`]: payload,
-          ...(bothAnswered ? { 'currentRound.status': 'reveal' } : {}),
-          'currentRound.updatedAt': serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        };
-        transaction.update(gameRef, patch);
+      await updateDoc(gameRef, {
+        [`currentRound.answers.${currentSeat}`]: payload,
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
       if (isQuizGame) {
         const roundQuestionId = normalizeText(game.currentRound?.questionId || '') || sanitizeNoteKey(game.currentRound?.question || '');
@@ -11994,7 +20343,7 @@ function ProductionApp() {
             category: normalizeText(game.currentRound?.category || ''),
             questionType: normalizeText(game.currentRound?.roundType || ''),
             correctAnswer: normalizeText(game.currentRound?.correctAnswer || ''),
-            playerAnswer: draft.ownAnswer.trim(),
+            playerAnswer: serialisedOwnAnswer.trim(),
             playerId: user.uid,
             playerSeat: currentSeat,
             wasCorrect: quizWasCorrect,
@@ -12015,14 +20364,29 @@ function ProductionApp() {
       }
       return true;
     } catch (error) {
+      if ((game?.gameMode || 'standard') === 'quiz' && game?.currentRound && currentSeat) {
+        setGame((current) => {
+          if (!current?.currentRound || stableRoundIdentityKey(current.currentRound) !== optimisticRoundKey) return current;
+          if (!areRoundAnswerSnapshotsEqual(current.currentRound.answers?.[currentSeat], optimisticPayload)) return current;
+          const nextAnswers = { ...(current.currentRound.answers || {}) };
+          if (previousLocalAnswer) nextAnswers[currentSeat] = previousLocalAnswer;
+          else delete nextAnswers[currentSeat];
+          return {
+            ...current,
+            currentRound: {
+              ...current.currentRound,
+              answers: nextAnswers,
+            },
+          };
+        });
+      }
       const message = String(error?.message || 'Could not submit answer.');
-      const normalizedMessage = normalizeText(message);
-      if (
-        normalizedMessage.includes('quota exceeded')
-        || normalizedMessage.includes('quotaexceeded')
-        || (normalizedMessage.includes('storage') && normalizedMessage.includes('quota'))
-      ) {
+      if (isLocalStorageQuotaError(error)) {
         console.warn('Suppressed storage quota warning from answer submit.', error);
+        return null;
+      }
+      if (isFirestoreRateLimitedError(error)) {
+        setNotice('Firebase is rate-limiting answer sync right now. Wait a moment and try again.');
         return null;
       }
       setNotice(message);
@@ -12032,11 +20396,15 @@ function ProductionApp() {
 
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+    const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
     const round = game?.currentRound || null;
     const roundKey = stableRoundIdentityKey(round || {});
     const settleKey = `${game?.id || ''}:${roundKey}:standard-reveal`;
     if (
       isQuizGame
+      || isTrueFalseGame
+      || isThisOrThatGame
       || !round
       || round.status !== 'open'
       || !hasSubmittedRoundAnswer(round, 'jay')
@@ -12068,10 +20436,254 @@ function ProductionApp() {
     game?.currentRound?.answers?.kim?.ownAnswer,
   ]);
 
+  useEffect(() => {
+    const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const bothPlayersCompleted = hasCompletedTrueFalseRoundAnswer(round, 'jay') && hasCompletedTrueFalseRoundAnswer(round, 'kim');
+    const settleKey = `${game?.id || ''}:${roundKey}:truefalse-reveal:answers-complete`;
+    if (
+      !isTrueFalseGame
+      || !round
+      || round.status !== 'open'
+      || !bothPlayersCompleted
+      || (!isCurrentLocalTestGame && currentSeat !== coordinatorSeat)
+    ) {
+      if (trueFalseRevealSettleRef.current === settleKey) trueFalseRevealSettleRef.current = '';
+      return undefined;
+    }
+    if (trueFalseRevealSettleRef.current === settleKey) return undefined;
+    const penalties = getTrueFalsePenaltyMap(round);
+    trueFalseRevealSettleRef.current = settleKey;
+    if (isCurrentLocalTestGame) {
+      setGame((current) =>
+        current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'open'
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                penalties,
+                status: 'reveal',
+                updatedAt: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      return undefined;
+    }
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return undefined;
+    updateDoc(gameRef, {
+      'currentRound.penalties': penalties,
+      'currentRound.status': 'reveal',
+      'currentRound.updatedAt': serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {
+      trueFalseRevealSettleRef.current = '';
+    });
+    return undefined;
+  }, [
+    currentSeat,
+    firestore,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.answers?.jay?.ownAnswer,
+    game?.currentRound?.answers?.jay?.guessedOther,
+    game?.currentRound?.answers?.kim?.ownAnswer,
+    game?.currentRound?.answers?.kim?.guessedOther,
+    getTrueFalsePenaltyMap,
+    isCurrentLocalTestGame,
+  ]);
+
+  useEffect(() => {
+    const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const bothPlayersCompleted = hasCompletedThisOrThatRoundAnswer(round, 'jay') && hasCompletedThisOrThatRoundAnswer(round, 'kim');
+    const settleKey = `${game?.id || ''}:${roundKey}:this-or-that-reveal`;
+    if (
+      !isThisOrThatGame
+      || !round
+      || round.status !== 'open'
+      || !bothPlayersCompleted
+      || (!isCurrentLocalTestGame && currentSeat !== coordinatorSeat)
+    ) {
+      if (thisOrThatRevealSettleRef.current === settleKey) thisOrThatRevealSettleRef.current = '';
+      return undefined;
+    }
+    if (thisOrThatRevealSettleRef.current === settleKey) return undefined;
+    const penalties = getThisOrThatPenaltyMap(round);
+    thisOrThatRevealSettleRef.current = settleKey;
+    if (isCurrentLocalTestGame) {
+      setGame((current) =>
+        current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'open'
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                penalties,
+                status: 'reveal',
+                updatedAt: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      return undefined;
+    }
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return undefined;
+    updateDoc(gameRef, {
+      'currentRound.penalties': penalties,
+      'currentRound.status': 'reveal',
+      'currentRound.updatedAt': serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {
+      thisOrThatRevealSettleRef.current = '';
+    });
+    return undefined;
+  }, [
+    currentSeat,
+    firestore,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.answers?.jay?.ownAnswer,
+    game?.currentRound?.answers?.jay?.guessedOther,
+    game?.currentRound?.answers?.kim?.ownAnswer,
+    game?.currentRound?.answers?.kim?.guessedOther,
+    getThisOrThatPenaltyMap,
+    isCurrentLocalTestGame,
+  ]);
+
+  useEffect(() => {
+    const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    if (!isTrueFalseGame || !round || round.status !== 'open' || (!isCurrentLocalTestGame && currentSeat !== coordinatorSeat)) {
+      trueFalseTimeoutRevealRef.current = '';
+      return undefined;
+    }
+    const endsAtMs = Date.parse(round?.trueFalseTimerEndsAt || '');
+    if (!Number.isFinite(endsAtMs)) return undefined;
+    const timeoutKey = `${game?.id || ''}:${roundKey}:${round?.trueFalseTimerEndsAt || ''}`;
+    const remainingMs = Math.max(0, endsAtMs - Date.now());
+    const timeout = window.setTimeout(() => {
+      if (trueFalseTimeoutRevealRef.current === timeoutKey) return;
+      trueFalseTimeoutRevealRef.current = timeoutKey;
+      const penalties = getTrueFalsePenaltyMap(game?.currentRound || round || {});
+      if (isCurrentLocalTestGame) {
+        setGame((current) =>
+          current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'open'
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  penalties,
+                  status: 'reveal',
+                  updatedAt: new Date().toISOString(),
+                },
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        return;
+      }
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) return;
+      updateDoc(gameRef, {
+        'currentRound.penalties': penalties,
+        'currentRound.status': 'reveal',
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }).catch(() => null);
+    }, remainingMs + 10);
+    return () => window.clearTimeout(timeout);
+  }, [
+    currentSeat,
+    firestore,
+    game,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.trueFalseTimerEndsAt,
+    getTrueFalsePenaltyMap,
+    isCurrentLocalTestGame,
+  ]);
+
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const settleKey = `${game?.id || ''}:${roundKey}:quiz-reveal`;
+    if (
+      !isQuizGame
+      || currentSeat !== coordinatorSeat
+      || !round
+      || round.status !== 'open'
+      || !hasSubmittedRoundAnswer(round, 'jay')
+      || !hasSubmittedRoundAnswer(round, 'kim')
+    ) {
+      if (quizRevealSettleRef.current === settleKey) quizRevealSettleRef.current = '';
+      return undefined;
+    }
+    if (quizRevealSettleRef.current === settleKey) return undefined;
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return undefined;
+    quizRevealSettleRef.current = settleKey;
+    updateDoc(gameRef, {
+      'currentRound.status': 'reveal',
+      'currentRound.updatedAt': serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {
+      quizRevealSettleRef.current = '';
+    });
+    return undefined;
+  }, [
+    currentSeat,
+    firestore,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.answers?.jay?.ownAnswer,
+    game?.currentRound?.answers?.kim?.ownAnswer,
+  ]);
+
   const drawQuestion = (sourceGame = game, sourceRounds = rounds) => {
-    const sourceBankType = sourceGame?.questionBankType === 'quiz' ? 'quiz' : 'game';
-    const sourcePool = sourceBankType === 'quiz' ? quizBankQuestions : gameBankQuestions;
-    const retiredQuestionIds = sourceBankType === 'quiz' ? trackedUsedQuizQuestionIds : effectiveRetiredQuestionIds;
+    const sourceBankType = normalizeQuestionBankType(sourceGame?.questionBankType || getQuestionBankTypeForGameMode(sourceGame?.gameMode || 'standard'));
+    const sourceIsThisOrThatGame = isThisOrThatGameMode(sourceGame?.gameMode || 'standard');
+    const sourcePool = sourceBankType === 'quiz'
+      ? quizBankQuestions
+      : sourceBankType === 'thisOrThatGame'
+        ? thisOrThatBankQuestions
+      : sourceBankType === 'trueFalseGame'
+        ? trueFalseBankQuestions
+        : gameBankQuestions;
+    const retiredQuestionIds = sourceBankType === 'quiz'
+      ? trackedUsedQuizQuestionIds
+      : sourceBankType === 'thisOrThatGame'
+        ? trackedUsedThisOrThatQuestionIds
+      : sourceBankType === 'trueFalseGame'
+        ? trackedUsedTrueFalseQuestionIds
+        : effectiveRetiredQuestionIds;
     const localUsedQuestionIds = mergeUniqueIds(
       sourceGame?.usedQuestionIds || [],
       (sourceRounds || []).map((round) => round.questionId),
@@ -12082,20 +20694,28 @@ function ProductionApp() {
     const questionQueueIds = Array.isArray(sourceGame?.questionQueueIds) ? sourceGame.questionQueueIds.filter(Boolean) : [];
     const availablePool = sourcePool.filter(
       (question) =>
-        !retiredQuestionIds.has(question.id)
+        (!sourceIsThisOrThatGame || isThisOrThatQuestionCompatible(question))
+        && !retiredQuestionIds.has(question.id)
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
+    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame'
+      ? []
+      : standardSelectableQuestions.filter(
+          (question) =>
+            (!sourceIsThisOrThatGame || isThisOrThatQuestionCompatible(question))
+            && !retiredQuestionIds.has(question.id)
+            && !reservedQuestionIds.has(question.id)
+            && !usedIds.has(question.id),
+        );
     const candidateQuestions = availablePool.length
       ? availablePool
       : sourcePool.length
         ? []
-        : sourceBankType === 'quiz'
-          ? []
-          : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question));
+        : starterFallbackPool;
     const queuePool = questionQueueIds
       .map((id) => sourcePool.find((question) => question.id === id))
-      .filter((question) => question && !usedIds.has(question.id) && question.id !== previousQuestionId);
+      .filter((question) => question && (!sourceIsThisOrThatGame || isThisOrThatQuestionCompatible(question)) && !usedIds.has(question.id) && question.id !== previousQuestionId);
     if (queuePool.length) {
       return { question: queuePool[0], remainingQueueIds: questionQueueIds.filter((id) => id !== queuePool[0].id) };
     }
@@ -12119,12 +20739,14 @@ function ProductionApp() {
     withBusy(async () => {
       if (!game) throw new Error('No room open.');
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+      const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
+      const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
       if (
         game.currentRound
         && game.currentRound.status !== 'reveal'
         && !(
-          hasSubmittedRoundAnswer(game.currentRound, 'jay')
-          && hasSubmittedRoundAnswer(game.currentRound, 'kim')
+          hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', game.currentRound, 'jay')
+          && hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', game.currentRound, 'kim')
         )
       ) {
         throw new Error('Both players must submit their answers before loading the next question.');
@@ -12147,7 +20769,14 @@ function ProductionApp() {
         let savedCurrentRound = false;
 
         if (game.currentRound) {
-          const penalties = isQuizGame ? { jay: 0, kim: 0 } : toPenaltyScores(penaltyDraft);
+          const penalties = isQuizGame
+            ? { jay: 0, kim: 0 }
+            : isTrueFalseGame || isThisOrThatGame
+              ? {
+                  jay: Number(game.currentRound.penalties?.jay || 0),
+                  kim: Number(game.currentRound.penalties?.kim || 0),
+                }
+              : toPenaltyScores(penaltyDraft);
           const roundResult = createRoundResult(
             {
               ...game.currentRound,
@@ -12228,7 +20857,7 @@ function ProductionApp() {
             Number(nextGameState.currentRound?.number || 0) + 1,
             1,
           );
-          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, startOpen: true });
+          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, startOpen: true });
           nextGameState = {
             ...nextGameState,
             totals: nextTotals,
@@ -12261,10 +20890,18 @@ function ProductionApp() {
       let completedRoundsAfterSave = completedRoundsBefore;
       let nextQuizTotals = game.quizTotals || { jay: 0, kim: 0 };
       let archivedQuestionId = '';
+      let archivedQuestionRecord = null;
       let savedCurrentRound = false;
 
       if (game.currentRound) {
-        const penalties = isQuizGame ? { jay: 0, kim: 0 } : toPenaltyScores(penaltyDraft);
+        const penalties = isQuizGame
+          ? { jay: 0, kim: 0 }
+          : isTrueFalseGame || isThisOrThatGame
+            ? {
+                jay: Number(game.currentRound.penalties?.jay || 0),
+                kim: Number(game.currentRound.penalties?.kim || 0),
+              }
+            : toPenaltyScores(penaltyDraft);
 
         const roundResult = createRoundResult(
           {
@@ -12306,7 +20943,14 @@ function ProductionApp() {
         }
         completedRoundsAfterSave = completedRoundsBefore + 1;
         archivedQuestionId = game.currentRound.questionId || '';
+        archivedQuestionRecord = bankQuestions.find((question) => question.id === archivedQuestionId) || null;
         savedCurrentRound = true;
+        if (archivedQuestionRecord) {
+          await updateQuestionBankUsage([archivedQuestionRecord], true);
+        }
+        if (archivedQuestionId) {
+          await recordPairQuestionUsage([archivedQuestionId]);
+        }
 
         if (totalQuestionGoal > 0 && completedRoundsAfterSave >= totalQuestionGoal) {
           await setDoc(gameRef, {
@@ -12331,7 +20975,18 @@ function ProductionApp() {
           }
         }
         const drawn = drawQuestion();
-        const nextQuestionItem = drawn.question;
+        let nextQuestionItem = drawn.question || null;
+        let nextRemainingQueueIds = drawn.remainingQueueIds;
+        if (!nextQuestionItem && Array.isArray(game.questionQueueIds) && game.questionQueueIds.length) {
+          const queuedQuestionId = game.questionQueueIds.find(Boolean) || '';
+          if (queuedQuestionId) {
+            const queuedQuestionSnap = await getDoc(doc(firestore, 'questionBank', queuedQuestionId)).catch(() => null);
+            if (queuedQuestionSnap?.exists()) {
+              nextQuestionItem = normalizeStoredQuestion(queuedQuestionSnap.data(), queuedQuestionSnap.id);
+              nextRemainingQueueIds = game.questionQueueIds.filter((id) => id !== queuedQuestionId);
+            }
+          }
+        }
         if (!nextQuestionItem) {
           if (savedCurrentRound) {
             await setDoc(gameRef, {
@@ -12352,15 +21007,12 @@ function ProductionApp() {
           );
           return;
         }
-        if (!Array.isArray(game.questionQueueIds) || !game.questionQueueIds.includes(nextQuestionItem.id)) {
-          await updateQuestionBankUsage([nextQuestionItem], true);
-        }
         const nextRoundNumber = Math.max(
           completedRoundsAfterSave + 1,
           Number(game.currentRound?.number || 0) + 1,
           1,
         );
-        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, startOpen: true });
+        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, startOpen: true });
         const gamePatch = {
           ...(savedCurrentRound
             ? {
@@ -12372,7 +21024,7 @@ function ProductionApp() {
             : {}),
           currentRound: nextRound,
           quizReadyState: null,
-          questionQueueIds: drawn.remainingQueueIds,
+          questionQueueIds: nextRemainingQueueIds,
           status: 'active',
           updatedAt: serverTimestamp(),
         };
@@ -12382,10 +21034,92 @@ function ProductionApp() {
       }
     }, 'Could not move to the next question.');
 
+  const startQuizSetupCountdown = async () => {
+    if (!game || !((game?.gameMode || 'standard') === 'quiz') || game.currentRound) return;
+    if (!isQuizWagerEffectivelyLocked(game)) return;
+    const readyState = normalizeQuizReadyState(game.quizReadyState || null, 'opening');
+    const ready = readyState.ready || { jay: false, kim: false };
+    const stage = normalizeText(readyState.stage || 'opening') || 'opening';
+    if (stage === 'countdown' || !ready.jay || !ready.kim) return;
+
+    if (isCurrentLocalTestGame) {
+      debugRoom('quizSetupCountdownLocal', { gameId: game?.id || '', ready });
+      return;
+    }
+
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return;
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const previousReadyState = readyState;
+    const previousAgreement = game?.quizWagerAgreement || null;
+    const previousQuizWagers = game?.quizWagers || {};
+    const liveLockSource = isQuizWagerEffectivelyLocked(game, nowMs)
+      ? game
+      : {
+          ...game,
+          quizWagerAgreement: game?.quizWagerAgreement || null,
+          quizWagers: game?.quizWagers || {},
+        };
+    const lockPatch = buildQuizWagerLockPatch(liveLockSource, nowIso);
+    if (!isQuizWagerAgreementLocked(game) && !isQuizWagerEffectivelyLocked(game, nowMs) && !lockPatch) {
+      return;
+    }
+    const nextReadyState = buildQuizSetupCountdownState(readyState, ready, nowMs);
+    debugRoom('quizSetupCountdownAttempt', {
+      gameId: game?.id || gameId || '',
+      stage,
+      ready,
+      countdownEndsAt: readyState.countdownEndsAt || '',
+    });
+    setGame((current) => current && !current.currentRound
+      ? {
+          ...current,
+          ...(lockPatch || {}),
+          quizReadyState: nextReadyState,
+          updatedAt: new Date().toISOString(),
+        }
+      : current);
+    try {
+      await updateDoc(gameRef, {
+        ...(lockPatch || {}),
+        quizReadyState: nextReadyState,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      setGame((current) => current && !current.currentRound
+        ? {
+            ...current,
+            quizWagerAgreement: previousAgreement,
+            quizWagers: previousQuizWagers,
+            quizReadyState: previousReadyState,
+            updatedAt: new Date().toISOString(),
+          }
+        : current);
+      debugRoom('quizSetupCountdownFailed', {
+        gameId: game?.id || gameId || '',
+        message: error?.message || String(error),
+      });
+      throw error;
+    }
+    debugRoom('quizSetupCountdownComplete', {
+      gameId: game?.id || gameId || '',
+      status: 'countdown-started',
+      stage: nextReadyState.stage || '',
+      ready: nextReadyState.ready || {},
+      countdownEndsAt: nextReadyState.countdownEndsAt || '',
+    });
+  };
+
   const launchQuizRoundFromSetup = async () => {
     if (!game || !((game?.gameMode || 'standard') === 'quiz') || game.currentRound) return;
-    if (!isQuizWagerAgreementLocked(game)) return;
-    const ready = game.quizReadyState?.ready || { jay: false, kim: false };
+    if (!isQuizWagerEffectivelyLocked(game)) return;
+    const readyState = normalizeQuizReadyState(game.quizReadyState || null, 'opening');
+    const ready = readyState.ready || { jay: false, kim: false };
+    const stage = normalizeText(readyState.stage || 'opening') || 'opening';
+    const countdownEndsAtMs = Date.parse(readyState.countdownEndsAt || '');
+    const localCountdownReady = stage === 'countdown' && Number.isFinite(countdownEndsAtMs) && Date.now() >= countdownEndsAtMs;
+    if (!localCountdownReady) return;
     if (!ready.jay || !ready.kim) return;
 
     if (isCurrentLocalTestGame) {
@@ -12410,57 +21144,206 @@ function ProductionApp() {
           : current,
       );
       setNotice('Quick Fire question started.');
+      debugRoom('quizSetupLaunchLocal', { gameId: game?.id || '', roundId: nextRound.id, questionId: nextRound.questionId });
       return;
     }
 
     const gameRef = makeGameRef();
     if (!gameRef || !firestore) return;
-    await runTransaction(firestore, async (transaction) => {
-      const snap = await transaction.get(gameRef);
-      if (!snap.exists()) throw new Error('Room not found.');
-      const data = snap.data() || {};
-      if (data.currentRound) return;
-      const setupReady = data.quizReadyState?.ready || { jay: false, kim: false };
-      if (!setupReady.jay || !setupReady.kim) return;
-      if (!isQuizWagerAgreementLocked(data)) return;
-      const sourceGame = { ...game, ...data, id: game.id };
-      const drawn = drawQuestion(sourceGame, rounds);
-      if (!drawn.question) throw new Error('No quiz questions are available.');
-      const nextRoundNumber = Math.max(Number(sourceGame.roundsPlayed || 0) + 1, 1);
-      const nextRound = buildRoundFromQuestion(drawn.question, nextRoundNumber, { isQuizGame: true, startOpen: true });
-      transaction.update(gameRef, {
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const previousReadyState = readyState;
+    const previousAgreement = game?.quizWagerAgreement || null;
+    const previousQuizWagers = game?.quizWagers || {};
+    const previousQuestionQueueIds = Array.isArray(game?.questionQueueIds) ? game.questionQueueIds : [];
+    const previousStatus = game?.status || 'active';
+    debugRoom('quizSetupLaunchAttempt', {
+      gameId: game?.id || gameId || '',
+      stage,
+      ready,
+      countdownEndsAt: readyState.countdownEndsAt || '',
+    });
+    const liveLockSource = isQuizWagerEffectivelyLocked(game, nowMs)
+      ? game
+      : {
+          ...game,
+          quizWagerAgreement: game?.quizWagerAgreement || null,
+          quizWagers: game?.quizWagers || {},
+        };
+    const lockPatch = buildQuizWagerLockPatch(liveLockSource, nowIso);
+    if (!isQuizWagerAgreementLocked(game) && !isQuizWagerEffectivelyLocked(game, nowMs) && !lockPatch) {
+      return;
+    }
+    const sourceGame = {
+      ...game,
+      quizWagerAgreement: lockPatch?.quizWagerAgreement || game.quizWagerAgreement || null,
+      quizWagers: lockPatch?.quizWagers || game.quizWagers || { jay: 0, kim: 0 },
+    };
+    const drawn = drawQuestion(sourceGame, rounds);
+    const nextQuestionItem = drawn.question || null;
+    const nextRemainingQueueIds = drawn.remainingQueueIds || [];
+    if (!nextQuestionItem) {
+      throw new Error('No quiz questions are available.');
+    }
+    const sourceRoundsPlayed = Math.max(Number(game.roundsPlayed || 0), Number(rounds.length || 0));
+    const nextRoundNumber = Math.max(sourceRoundsPlayed + 1, 1);
+    const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame: true, startOpen: true });
+    setGame((current) => current && !current.currentRound
+      ? {
+          ...current,
+          ...(lockPatch || {}),
+          currentRound: nextRound,
+          quizReadyState: null,
+          questionQueueIds: nextRemainingQueueIds,
+          status: 'active',
+          updatedAt: new Date().toISOString(),
+        }
+      : current);
+    try {
+      await updateDoc(gameRef, {
+        ...(lockPatch || {}),
         currentRound: nextRound,
         quizReadyState: null,
-        questionQueueIds: drawn.remainingQueueIds,
+        questionQueueIds: nextRemainingQueueIds,
         status: 'active',
         updatedAt: serverTimestamp(),
       });
+    } catch (error) {
+      setGame((current) => current && stableRoundIdentityKey(current.currentRound || {}) === stableRoundIdentityKey(nextRound)
+        ? {
+            ...current,
+            quizWagerAgreement: previousAgreement,
+            quizWagers: previousQuizWagers,
+            quizReadyState: previousReadyState,
+            currentRound: null,
+            questionQueueIds: previousQuestionQueueIds,
+            status: previousStatus,
+            updatedAt: new Date().toISOString(),
+          }
+        : current);
+      throw error;
+    }
+    debugRoom('quizSetupLaunchComplete', {
+      gameId: game?.id || gameId || '',
+      status: 'launched',
+      roundId: nextRound?.id || '',
+      questionId: nextRound?.questionId || '',
     });
+    setNotice('Quick Fire question started.');
   };
 
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-    const ready = game?.quizReadyState?.ready || {};
-    const setupKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${Boolean(ready.jay)}:${Boolean(ready.kim)}`;
-    if (!isQuizGame || game?.currentRound || !ready.jay || !ready.kim) {
+    const readyState = game?.quizReadyState || null;
+    const ready = readyState?.ready || {};
+    const stage = normalizeText(readyState?.stage || 'opening') || 'opening';
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const countdownKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${stage}:${Boolean(ready.jay)}:${Boolean(ready.kim)}:${game?.quizWagerAgreement?.status || ''}:${game?.quizWagerAgreement?.amount ?? ''}:${game?.quizWagerAgreement?.wheelResultAmount ?? ''}`;
+    if (
+      !isQuizGame
+      || currentSeat !== coordinatorSeat
+      || game?.currentRound
+      || stage === 'countdown'
+      || !ready.jay
+      || !ready.kim
+      || !isQuizWagerEffectivelyLocked(game)
+    ) {
+      if (quizSetupCountdownRef.current === countdownKey) quizSetupCountdownRef.current = '';
+      return undefined;
+    }
+    let stoppedForRateLimit = false;
+    const attemptCountdownStart = () => {
+      if (stoppedForRateLimit || quizSetupCountdownRef.current === countdownKey) return;
+      quizSetupCountdownRef.current = countdownKey;
+      startQuizSetupCountdown()
+        .catch((error) => {
+          debugRoom('quizSetupCountdownFailed', { gameId: game?.id || '', message: error?.message || String(error) });
+          if (isFirestoreRateLimitedError(error)) {
+            stoppedForRateLimit = true;
+            setNotice('Firebase is rate-limiting quiz setup right now. Waiting for the room to catch up.');
+            return;
+          }
+          setNotice(error?.message || 'Could not start the Quick Fire countdown.');
+        })
+        .finally(() => {
+          quizSetupCountdownRef.current = '';
+        });
+    };
+    attemptCountdownStart();
+    const fallbackTimer = window.setTimeout(attemptCountdownStart, 1500);
+    return () => {
+      window.clearTimeout(fallbackTimer);
+    };
+  }, [
+    currentSeat,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
+    game?.currentRound?.id,
+    game?.quizReadyState?.ready?.jay,
+    game?.quizReadyState?.ready?.kim,
+    game?.quizReadyState?.stage,
+    game?.quizWagerAgreement?.status,
+    game?.quizWagerAgreement?.amount,
+    game?.quizWagerAgreement?.wheelResultAmount,
+  ]);
+
+  useEffect(() => {
+    const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+    const readyState = game?.quizReadyState || null;
+    const ready = readyState?.ready || {};
+    const stage = normalizeText(readyState?.stage || 'opening') || 'opening';
+    const endsAt = readyState?.countdownEndsAt || '';
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const setupKey = `${game?.id || ''}:${game?.currentRound ? 'round-live' : 'no-round'}:${stage}:${endsAt}:${Boolean(ready.jay)}:${Boolean(ready.kim)}:${game?.quizWagerAgreement?.status || ''}:${game?.quizWagerAgreement?.amount ?? ''}:${game?.quizWagerAgreement?.wheelResultAmount ?? ''}`;
+    if (!isQuizGame || currentSeat !== coordinatorSeat || game?.currentRound || stage !== 'countdown') {
       if (quizSetupLaunchRef.current === setupKey) quizSetupLaunchRef.current = '';
       return;
     }
-    if (quizSetupLaunchRef.current === setupKey || isBusy) return;
-    quizSetupLaunchRef.current = setupKey;
-    launchQuizRoundFromSetup()
-      .catch(() => null)
-      .finally(() => {
-        quizSetupLaunchRef.current = '';
-      });
+    const endsAtMs = Date.parse(endsAt || '');
+    let stoppedForRateLimit = false;
+    const attemptLaunch = () => {
+      if (stoppedForRateLimit || quizSetupLaunchRef.current === setupKey) return;
+      quizSetupLaunchRef.current = setupKey;
+      launchQuizRoundFromSetup()
+        .catch((error) => {
+          debugRoom('quizSetupLaunchFailed', { gameId: game?.id || '', message: error?.message || String(error) });
+          if (isFirestoreRateLimitedError(error)) {
+            stoppedForRateLimit = true;
+            setNotice('Firebase is rate-limiting the quiz launch right now. Waiting for the live room to catch up.');
+            return;
+          }
+          setNotice(error?.message || 'Could not start Quick Fire.');
+        })
+        .finally(() => {
+          quizSetupLaunchRef.current = '';
+        });
+    };
+    const launchDelayMs = Number.isFinite(endsAtMs) ? Math.max(0, endsAtMs - Date.now() + 60) : 0;
+    const launchTimer = window.setTimeout(() => {
+      attemptLaunch();
+    }, launchDelayMs);
+    const fallbackTimer = window.setTimeout(attemptLaunch, launchDelayMs + 2500);
+    const finalFallbackTimer = window.setTimeout(attemptLaunch, launchDelayMs + 6000);
+    return () => {
+      window.clearTimeout(launchTimer);
+      window.clearTimeout(fallbackTimer);
+      window.clearTimeout(finalFallbackTimer);
+    };
   }, [
+    currentSeat,
     game?.id,
     game?.gameMode,
+    game?.hostUid,
     game?.currentRound?.id,
     game?.currentRound?.questionId,
     game?.quizReadyState?.ready?.jay,
     game?.quizReadyState?.ready?.kim,
-    isBusy,
+    game?.quizReadyState?.stage,
+    game?.quizReadyState?.countdownEndsAt,
+    game?.quizWagerAgreement?.status,
+    game?.quizWagerAgreement?.amount,
+    game?.quizWagerAgreement?.wheelResultAmount,
     rounds.length,
   ]);
 
@@ -12468,8 +21351,16 @@ function ProductionApp() {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
     const roundKey = stableRoundIdentityKey(game?.currentRound || {});
     const ready = game?.currentRound?.nextReady || {};
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
     const advanceKey = `${game?.id || ''}:${roundKey}:${Boolean(ready.jay)}:${Boolean(ready.kim)}`;
-    if (!isQuizGame || !game?.currentRound || game.currentRound.status !== 'reveal' || !ready.jay || !ready.kim) {
+    if (
+      !isQuizGame
+      || currentSeat !== coordinatorSeat
+      || !game?.currentRound
+      || game.currentRound.status !== 'reveal'
+      || !ready.jay
+      || !ready.kim
+    ) {
       if (quizAdvanceRef.current === advanceKey) quizAdvanceRef.current = '';
       return;
     }
@@ -12488,13 +21379,16 @@ function ProductionApp() {
     game?.currentRound?.number,
     game?.currentRound?.nextReady?.jay,
     game?.currentRound?.nextReady?.kim,
+    game?.hostUid,
+    currentSeat,
     isBusy,
   ]);
 
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
     const currentRoundKey = stableRoundIdentityKey(game?.currentRound || {});
-    if (!isQuizGame || !game?.currentRound || game.currentRound.status !== 'open') {
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    if (!isQuizGame || currentSeat !== coordinatorSeat || !game?.currentRound || game.currentRound.status !== 'open') {
       quizTimeoutRevealRef.current = '';
       return;
     }
@@ -12523,25 +21417,32 @@ function ProductionApp() {
       }
       const gameRef = makeGameRef();
       if (!gameRef || !firestore) return;
-      runTransaction(firestore, async (transaction) => {
-        const snap = await transaction.get(gameRef);
-        if (!snap.exists()) return;
-        const data = snap.data() || {};
-        const round = data.currentRound || null;
-        if (!round || round.status !== 'open') return;
-        if (stableRoundIdentityKey(round) !== currentRoundKey) return;
-        transaction.update(gameRef, {
-          'currentRound.status': 'reveal',
-          'currentRound.updatedAt': serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+      setGame((current) =>
+        current?.currentRound && stableRoundIdentityKey(current.currentRound) === currentRoundKey && current.currentRound.status === 'open'
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                status: 'reveal',
+                updatedAt: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      updateDoc(gameRef, {
+        'currentRound.status': 'reveal',
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
       }).catch(() => null);
     }, remainingMs + 10);
     return () => window.clearTimeout(timeout);
   }, [
+    currentSeat,
     firestore,
     game?.id,
     game?.gameMode,
+    game?.hostUid,
     game?.currentRound?.status,
     game?.currentRound?.questionId,
     game?.currentRound?.number,
@@ -12549,30 +21450,35 @@ function ProductionApp() {
     isCurrentLocalTestGame,
   ]);
 
-  const sendChat = async () =>
-    withBusy(async () => {
-      const text = chatDraft.trim();
-      if (!text) return;
-      if (isCurrentLocalTestGame) {
-        const seat = seatForUid(game, user?.uid) || 'neutral';
-        setChatMessages((current) => [
-          ...current,
-          {
-            id: makeId('chat'),
-            text,
-            uid: user?.uid || '',
-            displayName: profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player',
-            seat,
-            role: roleForUid(game, user?.uid) || 'guest',
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-        setChatDraft('');
-        return;
-      }
-      if (!gameId || !user || !firestore) throw new Error('Open a room before chatting.');
-      const seat = seatForUid(game, user.uid) || 'neutral';
-      const messageRef = doc(collection(doc(firestore, 'games', gameId), 'chatMessages'));
+  const sendChat = async (textOverride = '') => {
+    const text = String(textOverride || chatDraft || '').trim();
+    if (!text || isRoomChatSending) return null;
+    if (isCurrentLocalTestGame) {
+      const localSeat = seatForUid(game, user?.uid) || 'neutral';
+      setChatMessages((current) => [
+        ...current,
+        {
+          id: makeId('chat'),
+          text,
+          uid: user?.uid || '',
+          displayName: profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player',
+          seat: localSeat,
+          role: roleForUid(game, user?.uid) || 'guest',
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      setChatDraft('');
+      return true;
+    }
+    if (!gameId || !user || !firestore) {
+      setNotice('Open a room before chatting.');
+      return null;
+    }
+    const seat = seatForUid(game, user.uid) || 'neutral';
+    const messageRef = doc(collection(doc(firestore, 'games', gameId), 'chatMessages'));
+    setIsRoomChatSending(true);
+    setChatDraft('');
+    try {
       await setDoc(messageRef, {
         text,
         uid: user.uid,
@@ -12581,8 +21487,155 @@ function ProductionApp() {
         role: roleForUid(game, user.uid) || 'guest',
         createdAt: new Date().toISOString(),
       });
-      setChatDraft('');
-    }, 'Could not send chat message.');
+      return messageRef.id;
+    } catch (error) {
+      setChatDraft((current) => current || text);
+      setNotice(String(error?.message || 'Could not send chat message.'));
+      return null;
+    } finally {
+      setIsRoomChatSending(false);
+    }
+  };
+
+  const sendLobbyChat = async (textOverride = '') => {
+    const text = String(textOverride || lobbyChatDraft || '').trim();
+    if (!text || isLobbyChatSending) return null;
+    if (!firestore || !user) {
+      setNotice('Firebase is not configured.');
+      return null;
+    }
+
+    const messageRef = doc(collection(firestore, 'lobbyChat'));
+    const optimisticMessage = {
+      id: messageRef.id,
+      text,
+      uid: user.uid || '',
+      displayName: profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player',
+      createdAt: new Date().toISOString(),
+    };
+
+    setIsLobbyChatSending(true);
+    setLobbyChatDraft('');
+
+    try {
+      await setDoc(messageRef, {
+        text,
+        uid: user.uid || '',
+        displayName: optimisticMessage.displayName,
+        createdAt: optimisticMessage.createdAt,
+      });
+      return messageRef.id;
+    } catch (error) {
+      setLobbyChatDraft((current) => current || text);
+      setNotice(String(error?.message || 'Could not send lobby chat message.'));
+      return null;
+    } finally {
+      setIsLobbyChatSending(false);
+    }
+  };
+
+  const sendAiChat = async (textOverride = '') => {
+    const text = String(textOverride || aiChatDraft || '').trim();
+    if (!text || isAiChatSending) return null;
+    if (!firestore || !user?.uid) {
+      setNotice('You must be signed in to use the AI page.');
+      return null;
+    }
+
+    const viewerSeat = dashboardSeat || inferSeatFromUser(user, profile) || 'jay';
+    const displayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[viewerSeat] || 'Player';
+    const reply = buildEvidenceBasedAiReply({
+      prompt: text,
+      viewerSeat,
+      evidenceSnapshot: aiEvidenceSnapshot,
+    });
+    const userMessageRef = doc(collection(firestore, 'users', user.uid, 'aiChatMessages'));
+    const assistantMessageRef = doc(collection(firestore, 'users', user.uid, 'aiChatMessages'));
+    const startedAtMs = Date.now();
+    const optimisticUserMessage = {
+      id: userMessageRef.id,
+      role: 'user',
+      seat: viewerSeat,
+      uid: user.uid,
+      displayName,
+      text,
+      createdAt: new Date(startedAtMs).toISOString(),
+      createdAtMs: startedAtMs,
+    };
+    const optimisticAssistantMessage = {
+      id: assistantMessageRef.id,
+      role: 'assistant',
+      seat: 'ai',
+      uid: 'kjk-ai',
+      displayName: 'KJK AI',
+      text: reply.text,
+      confidence: String(reply.confidence || '').toLowerCase(),
+      prompt: text,
+      evidence: (reply.selectedEvidence || []).map((item) => ({
+        id: item.id || '',
+        kind: item.kind || '',
+        seat: item.seat || '',
+        summary: item.summary || '',
+        sourceLabel: item.sourceLabel || '',
+      })),
+      createdAt: new Date(startedAtMs + 1).toISOString(),
+      createdAtMs: startedAtMs + 1,
+    };
+    const batch = writeBatch(firestore);
+    batch.set(userMessageRef, {
+      ...optimisticUserMessage,
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(assistantMessageRef, {
+      ...optimisticAssistantMessage,
+      updatedAt: serverTimestamp(),
+    });
+
+    setIsAiChatSending(true);
+    setAiChatDraft('');
+    setOptimisticAiChatMessages((current) => {
+      const merged = new Map(current.map((entry) => [entry.id, entry]));
+      merged.set(optimisticUserMessage.id, optimisticUserMessage);
+      merged.set(optimisticAssistantMessage.id, optimisticAssistantMessage);
+      return [...merged.values()].sort((left, right) => Number(left?.createdAtMs || 0) - Number(right?.createdAtMs || 0));
+    });
+
+    try {
+      await batch.commit();
+      return assistantMessageRef.id;
+    } catch (error) {
+      setAiChatDraft((current) => current || text);
+      if (String(error?.code || '').includes('permission-denied') || String(error?.message || '').toLowerCase().includes('insufficient permissions')) {
+        setNotice('AI reply shown locally, but private AI history could not be saved until Firestore permissions are updated.');
+      } else {
+        setNotice(String(error?.message || 'Could not send AI chat message.'));
+      }
+      return null;
+    } finally {
+      setIsAiChatSending(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!firestore || hasOpenRoomSession || dashboardTabState !== 'gameLobby') {
+      setLobbyChatMessages([]);
+      return undefined;
+    }
+
+    const q = query(collection(firestore, 'lobbyChat'), orderBy('createdAt', 'asc'), limitToLast(200));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+      setLobbyChatMessages(msgs);
+    }, (err) => {
+      console.warn('Lobby chat listener error', err);
+      setLobbyChatMessages([]);
+      if (String(err?.code || '').includes('permission-denied') || String(err?.message || '').toLowerCase().includes('insufficient permissions')) {
+        setNotice((current) => current || 'Lobby chat is unavailable until Firestore permissions are updated.');
+      }
+    });
+
+    return () => unsub();
+  }, [dashboardTabState, firestore, hasOpenRoomSession]);
 
   const addQuestion = async () =>
     withBusy(async () => {
@@ -12663,6 +21716,70 @@ function ProductionApp() {
       );
       setNotice('Quiz bank synced from Google Sheet.');
     }, 'Could not sync the quiz bank.');
+
+  const importThisOrThatSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'thisOrThatGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = thisOrThatBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new This or That questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. This or That bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice(`This or That import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import This or That questions from the Google Sheet.');
+
+  const syncThisOrThatSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: true,
+        targetBankType: 'thisOrThatGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = thisOrThatBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Synced This or That bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. This or That bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice('This or That bank synced from Google Sheet.');
+    }, 'Could not sync the This or That bank.');
+
+  const importTrueFalseSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'trueFalseGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = trueFalseBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new True or False questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. True or False bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice(`True or False import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import True or False questions from the Google Sheet.');
+
+  const syncTrueFalseSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: true,
+        targetBankType: 'trueFalseGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = trueFalseBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Synced True or False bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. True or False bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice('True or False bank synced from Google Sheet.');
+    }, 'Could not sync the True or False bank.');
 
   if (authLoading) {
     return (
@@ -12796,6 +21913,12 @@ function ProductionApp() {
 	        questionNotes={questionNotes}
 	        questionFeedback={questionFeedback}
 	        quizAnswers={visibleQuizAnswers}
+        aiEvidenceSnapshot={aiEvidenceSnapshot}
+        aiChatMessages={visibleAiChatMessages}
+        aiChatDraft={aiChatDraft}
+        isAiChatSending={isAiChatSending}
+        setAiChatDraft={setAiChatDraft}
+        sendAiChat={sendAiChat}
         onSaveDisplayName={saveDisplayNameProfile}
         onUpdateQuestionNote={updatePrivateQuestionNote}
         onDeleteQuestionNote={deletePrivateQuestionNote}
@@ -12805,6 +21928,7 @@ function ProductionApp() {
         currentPlayerSeat={dashboardSeat}
         currentPlayerLifetimeLabel={currentPlayerLifetimeLabel}
         pendingActivityCount={pendingActivityCount}
+        bankQuestions={gameBankQuestions}
         questionCategories={lobbyCategoryOptions}
         gameName={lobbyGameName}
         gameQuestionCount={lobbyQuestionCount}
@@ -12820,8 +21944,12 @@ function ProductionApp() {
         onDismissGameInvite={dismissGameInviteAction}
         onSyncQuestionBank={syncSheet}
         onSyncQuizBank={syncQuizSheet}
+        onSyncThisOrThatBank={syncThisOrThatSheet}
+        onSyncTrueFalseBank={syncTrueFalseSheet}
         onImportQuestions={importSheet}
         onImportQuizQuestions={importQuizSheet}
+        onImportThisOrThatQuestions={importThisOrThatSheet}
+        onImportTrueFalseQuestions={importTrueFalseSheet}
         onResumeGame={resumeGame}
         onViewSummary={setSelectedGameId}
         onEndGame={requestEndGame}
@@ -12833,6 +21961,7 @@ function ProductionApp() {
         previousGames={previousGames}
         lobbyAnalytics={lobbyAnalytics}
         lobbyRoundAnalytics={lobbyRoundAnalytics}
+        holdemAnalytics={holdemAnalytics}
         categoryColorMap={categoryColorMap}
         bankCount={bankCount}
         questionCount={gameBankQuestions.length || STARTER_QUESTIONS.length}
@@ -12841,6 +21970,12 @@ function ProductionApp() {
         quizQuestionCount={quizBankCount}
         usedQuizQuestionCount={usedQuizQuestionCount}
         remainingQuizQuestionCount={remainingQuizQuestionCount}
+        thisOrThatQuestionCount={thisOrThatBankCount}
+        usedThisOrThatQuestionCount={usedThisOrThatQuestionCount}
+        remainingThisOrThatQuestionCount={remainingThisOrThatQuestionCount}
+        trueFalseQuestionCount={trueFalseBankCount}
+        usedTrueFalseQuestionCount={usedTrueFalseQuestionCount}
+        remainingTrueFalseQuestionCount={remainingTrueFalseQuestionCount}
         unusedQuestionCount={unusedQuestionCount}
         syncNotice={syncNotice}
         gameInvites={incomingGameInvites}
@@ -12849,6 +21984,9 @@ function ProductionApp() {
         responseAlerts={pendingForfeitResponseAlerts}
         amaRequests={amaRequests}
         diaryEntries={diaryEntries}
+        onBackfillGameDiaryEntries={backfillMissingGameDiaryEntries}
+        gameDiaryBackfillState={gameDiaryBackfillState}
+        missingGameDiaryCount={missingGameDiaryCount}
         pendingAmaInbox={pendingAmaInbox}
         pendingAmaOutbox={pendingAmaOutbox}
         onMarkRedemptionSeen={markRedemptionSeenAction}
@@ -12880,6 +22018,12 @@ function ProductionApp() {
         onConfirmAction={confirmGameAction}
         onCancelAction={cancelGameAction}
         onResetQuestionBank={resetQuestionBankAction}
+        onActiveTabChange={setDashboardTabState}
+        lobbyChatMessages={lobbyChatMessages}
+        lobbyChatDraft={lobbyChatDraft}
+        isLobbyChatSending={isLobbyChatSending}
+        setLobbyChatDraft={setLobbyChatDraft}
+        sendLobbyChat={sendLobbyChat}
       />
     );
   }
@@ -12903,7 +22047,11 @@ function ProductionApp() {
       onEndGame={() => requestEndGame(game?.id)}
       onPauseToggle={pauseToggle}
 	      onNextQuestion={nextQuestion}
+      onStartHoldemHand={startHoldemHand}
+      onTakeHoldemAction={takeHoldemAction}
 	      onSubmitAnswer={submitAnswer}
+      onLockTrueFalseAnswer={lockTrueFalseAnswerField}
+      onLockThisOrThatAnswer={lockThisOrThatAnswerField}
 	      onMarkReady={markReady}
 	      onAddQuestion={addQuestion}
       onSyncSheet={syncSheet}
@@ -12913,6 +22061,7 @@ function ProductionApp() {
       onConfirmAction={confirmGameAction}
       onCancelAction={cancelGameAction}
       isBusy={isBusy}
+      holdemStartBusy={isHoldemStartBusy}
       currentRound={currentRound}
       penaltyDraft={penaltyDraft}
       setPenaltyDraft={setPenaltyDraft}
@@ -12925,6 +22074,7 @@ function ProductionApp() {
       chatDraft={chatDraft}
       setChatDraft={setChatDraft}
       onSendChat={sendChat}
+      chatIsBusy={isRoomChatSending}
       onReconnectLiveRoom={() => {
         setConnectionState((current) => ({ ...current, lastError: '' }));
         resetRoomLoadState();

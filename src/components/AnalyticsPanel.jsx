@@ -588,6 +588,34 @@ function RecentRoundsLog({ rows }) {
   );
 }
 
+function GameModeScoreboard({ rows = [] }) {
+  if (!rows.length) return <p className="empty-copy">Completed game scores appear once matches finish.</p>;
+
+  return (
+    <div className="analytics-mode-scoreboard">
+      {rows.map((row) => (
+        <article className="analytics-mode-score-row" key={row.id || row.label}>
+          <div className="analytics-mode-score-head">
+            <strong>{row.label}</strong>
+            {row.ties ? <span>{row.ties} {row.ties === 1 ? 'tie' : 'ties'}</span> : null}
+          </div>
+          <div className="analytics-mode-score-values" aria-label={`${row.label} wins`}>
+            <span className="analytics-mode-score-chip analytics-mode-score-chip--jay">
+              <small>Jay</small>
+              <strong>{row.jayWins}</strong>
+            </span>
+            <span className="analytics-mode-score-divider" aria-hidden="true">-</span>
+            <span className="analytics-mode-score-chip analytics-mode-score-chip--kim">
+              <small>Kim</small>
+              <strong>{row.kimWins}</strong>
+            </span>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function AnalyticsPanel({ analytics, categoryColorMap = CATEGORY_COLOR_MAP, variant = 'default', summary = null }) {
   const highestScoringRound = getHighestScoringRound(analytics.roundBars || []);
 
@@ -783,6 +811,14 @@ function AnalyticsPanel({ analytics, categoryColorMap = CATEGORY_COLOR_MAP, vari
             </div>
             <strong className="analytics-cockpit-value">{summary?.totalQuestionsUsed ?? analytics.totalRounds ?? 0}</strong>
             <small className="analytics-cockpit-subvalue">Most common {analytics.mostCommonCategory || '-'}</small>
+          </article>
+
+          <article className="analytics-cockpit-card analytics-cockpit-card--mode-scores">
+            <div className="analytics-cockpit-head">
+              <span className="analytics-cockpit-label">Game Scores</span>
+              <span className="analytics-cockpit-meta">Wins by game mode</span>
+            </div>
+            <GameModeScoreboard rows={summary?.gameModeScoreRows || []} />
           </article>
 
           <article className="analytics-cockpit-card analytics-cockpit-card--trend">
