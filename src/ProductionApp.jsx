@@ -285,6 +285,21 @@ const getQuestionBankTypeForGameMode = (value = 'standard') => {
   if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalseGame';
   return 'game';
 };
+const ANALYTICS_GAME_SCORE_MODES = [
+  { id: 'standard', label: 'Game Score' },
+  { id: 'quiz', label: 'Quiz Score' },
+  { id: 'trueFalse', label: 'True or False' },
+  { id: 'thisOrThat', label: 'This or That' },
+  { id: 'holdem', label: 'Texas Hold Em' },
+];
+const getAnalyticsGameScoreModeId = (value = 'standard') => {
+  const gameMode = resolveGameMode(value);
+  if (gameMode === 'quiz') return 'quiz';
+  if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalse';
+  if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThat';
+  if (gameMode === HOLDEM_GAME_MODE) return 'holdem';
+  return 'standard';
+};
 const QUIZ_TIMER_SECONDS = 10;
 const QUIZ_WHEEL_SLOT_COUNT = 20;
 const QUIZ_WHEEL_MAX_AMOUNT = 2500;
@@ -14240,11 +14255,29 @@ function ProductionApp() {
 
   const lobbyAnalytics = useMemo(() => {
     const completed = previousCompletedGames;
+    const gameModeScoreMap = new Map(
+      ANALYTICS_GAME_SCORE_MODES.map((mode) => [
+        mode.id,
+        {
+          id: mode.id,
+          label: mode.label,
+          jayWins: 0,
+          kimWins: 0,
+          ties: 0,
+        },
+      ]),
+    );
     const wins = completed.reduce(
       (acc, gameEntry) => {
+        const scoreRow = gameModeScoreMap.get(getAnalyticsGameScoreModeId(gameEntry?.gameMode || 'standard'));
         if (gameEntry.winner === 'jay') acc.jay += 1;
         else if (gameEntry.winner === 'kim') acc.kim += 1;
         else acc.draws += 1;
+        if (scoreRow) {
+          if (gameEntry.winner === 'jay') scoreRow.jayWins += 1;
+          else if (gameEntry.winner === 'kim') scoreRow.kimWins += 1;
+          else scoreRow.ties += 1;
+        }
         return acc;
       },
       { jay: 0, kim: 0, draws: 0 },
@@ -14347,6 +14380,7 @@ function ProductionApp() {
         ? `${completed.slice().sort((a, b) => Math.abs((b.finalScores?.jay || 0) - (b.finalScores?.kim || 0)) - Math.abs((a.finalScores?.jay || 0) - (a.finalScores?.kim || 0)))[0]?.gameName || completed[0]?.joinCode || 'N/A'}`
         : 'N/A',
       longestStreakLabel: longestStreak.count ? `${PLAYER_LABEL[longestStreak.winner] || longestStreak.winner} x${longestStreak.count}` : 'No streak',
+      gameModeScoreRows: ANALYTICS_GAME_SCORE_MODES.map((mode) => gameModeScoreMap.get(mode.id)),
     };
   }, [
     analyticsActiveGames.length,
