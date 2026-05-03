@@ -1427,6 +1427,7 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
   const mentionsJay = /\bjay\b/.test(normalizedPrompt);
   const mentionsKim = /\bkim\b/.test(normalizedPrompt);
   const asksAboutRelationship = /\bwe\b|\bus\b|\bour\b|both of us|the two of us|together|relationship|compatib|match/.test(normalizedPrompt);
+  const asksForComparison = /who('?s| is)?\s+(more|less)|which (one|person|of us)|between jay and kim|between kim and jay|out of the two|of the two/.test(normalizedPrompt);
   const asksAboutQuiz = /quiz|quick fire|trivia|correct|wrong|accuracy|fast|timer|knowledge/.test(normalizedPrompt);
   const asksAboutPreference = /like|likes|liked|love|prefer|favo[u]?rite|into|enjoy|dislike|hate|turn on|turn-off|turn off/.test(normalizedPrompt);
   const asksAboutDiary = /diary|ama|story|context|remember|why|because|chapter/.test(normalizedPrompt);
@@ -1448,6 +1449,8 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
       ? ['jay']
       : mentionsKim
         ? ['kim']
+        : asksForComparison
+          ? ['jay', 'kim']
         : asksAboutRelationship
           ? ['jay', 'kim']
           : [viewerSeat === 'kim' ? 'kim' : 'jay'];
@@ -1457,6 +1460,7 @@ const buildAiIntentProfile = (prompt = '', viewerSeat = 'jay') => {
     mentionsJay,
     mentionsKim,
     asksAboutRelationship,
+    asksForComparison,
     asksAboutQuiz,
     asksAboutPreference,
     asksAboutDiary,
@@ -1549,7 +1553,7 @@ const buildAiItemDirectSentence = (item = {}, seat = 'jay') => {
         ? `A private note for ${playerLabel} says "${truncateAiText(item.answer, 118)}"${item.question ? ` about "${truncateAiText(item.question, 94)}"` : ''}.`
         : `There is a private note for ${playerLabel} tied to "${truncateAiText(item.question || 'that topic', 94)}".`;
     case 'question-feedback':
-      return `${playerLabel} ${item.feedbackValue === 'disliked' ? 'disliked' : 'liked'} the question "${truncateAiText(item.question || 'that question', 108)}".`;
+      return `${playerLabel} reacted ${item.feedbackValue === 'disliked' ? 'negatively' : 'positively'} to the prompt "${truncateAiText(item.question || 'that question', 108)}".`;
     case 'quiz-answer':
       return item.answer
         ? `${playerLabel} answered "${truncateAiText(item.answer, 96)}" for "${truncateAiText(item.question || 'that quiz question', 92)}" and was ${item.wasCorrect ? 'correct' : 'incorrect'}.`
@@ -1671,7 +1675,7 @@ const buildAiSeatRecommendationNarrative = ({
     opening = `Based on ${playerLabel}'s saved answers, I would lean toward something personal and clearly tied to the themes they keep coming back to.`;
   }
   const supportLead = primaryItem.kind === 'question-feedback'
-    ? `${playerLabel} ${primaryItem.feedbackValue === 'disliked' ? 'disliked' : 'liked'} the question "${truncateAiText(primaryItem.question || 'that question', 100)}".`
+    ? `${playerLabel} reacted ${primaryItem.feedbackValue === 'disliked' ? 'negatively' : 'positively'} to the prompt "${truncateAiText(primaryItem.question || 'that question', 100)}".`
     : buildAiItemDirectSentence(primaryItem, seat);
   const supportLines = [supportLead, ...supportItems.map((item) => buildAiItemDirectSentence(item, seat))];
   return `${opening} ${supportLines.map((line, index) => (index === 0 ? `Most relevant clue: ${line}` : `Also relevant: ${line}`)).join(' ')}`;
@@ -1702,6 +1706,25 @@ const buildAiDisplayedEvidence = ({
     return scoredEvidence.filter((item) => item?.seat === primarySeat).slice(0, AI_EVIDENCE_PREVIEW_LIMIT);
   }
   return scoredEvidence.slice(0, AI_EVIDENCE_PREVIEW_LIMIT);
+};
+
+const buildAiSeatComparisonSnapshot = ({
+  seat = 'jay',
+  scoredEvidence = [],
+  intent = {},
+} = {}) => {
+  const directHighlights = pickAiSeatHighlights(scoredEvidence, seat, intent, 2, DIRECT_AI_EVIDENCE_KINDS);
+  const supportHighlights = directHighlights.length ? directHighlights : pickAiSeatHighlights(scoredEvidence, seat, intent, 2);
+  return {
+    seat,
+    directHighlights,
+    supportHighlights,
+    weightedScore: supportHighlights.reduce(
+      (sum, item) => sum + Number(item.score || 0) + getAiItemKindPriority(item, intent),
+      0,
+    ),
+    hasDirectEvidence: directHighlights.length > 0,
+  };
 };
 
 const scoreAiEvidenceItem = (item = {}, intent = {}) => {
@@ -1762,7 +1785,75 @@ const pickFallbackAiEvidence = (snapshot = {}, intent = {}, viewerSeat = 'jay') 
 
 const formatAiEvidenceBullet = (item = {}) => {
   const sourceLabel = item.sourceLabel ? ` (${item.sourceLabel})` : '';
-  return `${truncateAiText(item.summary || item.title || 'Saved evidence', 150)}${sourceLabel}`;
+  const summaryLine = buildAiItemDirectSentence(item, item.seat || 'jay').replace(/\.$/, '');
+  return `${truncateAiText(summaryLine || item.summary || item.title || 'Saved evidence', 170)}${sourceLabel}`;
+};
+
+const buildAiConfidenceNarrative = ({
+  confidence = 'Low',
+  selectedEvidence = [],
+  hasDirectAnswerEvidence = false,
+  intent = {},
+} = {}) => {
+  if (!selectedEvidence.length) return 'I do not have much saved material to work from yet.';
+  if (confidence === 'High') {
+    return hasDirectAnswerEvidence
+      ? 'I feel pretty confident about that because multiple saved clues point the same way.'
+      : 'I feel fairly confident, but it is still an indirect read from nearby saved clues rather than a direct answer.';
+  }
+  if (confidence === 'Medium') {
+    if (intent.asksForComparison) {
+      return hasDirectAnswerEvidence
+        ? 'I have a reasonable case for that, but it is not completely one-sided.'
+        : 'That is a lean, not a lock. I am reading between nearby saved clues rather than a direct answer.';
+    }
+    return hasDirectAnswerEvidence
+      ? 'I have enough saved evidence to lean that way, but not enough to call it airtight.'
+      : 'This is a softer read based on nearby saved clues, not a direct answer.';
+  }
+  return hasDirectAnswerEvidence
+    ? 'I only have a thin amount of saved evidence for that, so treat it as tentative.'
+    : 'This is only a light read from a small amount of saved evidence.';
+};
+
+const buildAiComparisonNarrative = ({
+  focusSeats = ['jay', 'kim'],
+  scoredEvidence = [],
+  intent = {},
+} = {}) => {
+  const snapshots = focusSeats
+    .map((seat) => buildAiSeatComparisonSnapshot({ seat, scoredEvidence, intent }))
+    .sort((left, right) => right.weightedScore - left.weightedScore);
+  const [leader, runnerUp] = snapshots;
+  const leaderLabel = PLAYER_LABEL[leader?.seat] || leader?.seat || 'that side';
+  const runnerLabel = PLAYER_LABEL[runnerUp?.seat] || runnerUp?.seat || 'the other side';
+  const leadItem = leader?.supportHighlights?.[0] || null;
+  const leadGap = Math.abs(Number(leader?.weightedScore || 0) - Number(runnerUp?.weightedScore || 0));
+
+  if (!Number(leader?.weightedScore || 0) && !Number(runnerUp?.weightedScore || 0)) {
+    return "I can't make a real call on that yet because I do not have enough saved evidence pointing either way.";
+  }
+
+  if (leadGap <= 4) {
+    return leadItem
+      ? `The saved evidence is pretty mixed, so I would call this close rather than pick a clear winner. The nearest clue I have is ${buildAiItemDirectSentence(leadItem, leadItem.seat || leader?.seat || 'jay')}`
+      : 'The saved evidence is pretty mixed, so I would call this close rather than pick a clear winner.';
+  }
+
+  const opener = leadGap >= 12
+    ? `If I go strictly by the saved evidence, ${leaderLabel} comes across as the stronger answer here.`
+    : `If I go strictly by the saved evidence, I lean ${leaderLabel} here.`;
+  const leadReason = leadItem
+    ? `The clearest clue is ${buildAiItemDirectSentence(leadItem, leadItem.seat || leader?.seat || 'jay')}`
+    : '';
+  const contrast = Number(runnerUp?.weightedScore || 0) > 0
+    ? `${runnerLabel} has some relevant evidence too, just not as much that matches this question.`
+    : `I do not see an equally strong saved clue on ${runnerLabel}'s side for this one.`;
+  const directness = leader?.hasDirectEvidence || runnerUp?.hasDirectEvidence
+    ? ''
+    : ` I do not have a direct saved answer about ${intent.topicLabel || 'that topic'}, so this is an indirect read from nearby clues.`;
+
+  return `${opener} ${leadReason} ${contrast}${directness}`.trim();
 };
 
 const buildEvidenceBasedAiReply = ({
@@ -1801,6 +1892,12 @@ const buildEvidenceBasedAiReply = ({
       scoredEvidence: scoredEvidence.length ? scoredEvidence : fallbackEvidence,
       intent,
       stats: primaryStats,
+    });
+  } else if (intent.asksForComparison && focusSeats.length === 2) {
+    answer = buildAiComparisonNarrative({
+      focusSeats,
+      scoredEvidence: scoredEvidence.length ? scoredEvidence : fallbackEvidence,
+      intent,
     });
   } else if (focusSeats.length === 2) {
     const seatBlocks = focusSeats.map((seat) => {
@@ -1855,15 +1952,20 @@ const buildEvidenceBasedAiReply = ({
         ? 'Medium'
         : 'Low';
   const evidenceLines = selectedEvidence.map((item) => `• ${formatAiEvidenceBullet(item)}`);
+  const confidenceNarrative = buildAiConfidenceNarrative({
+    confidence,
+    selectedEvidence,
+    hasDirectAnswerEvidence,
+    intent,
+  });
   return {
     confidence,
     selectedEvidence,
     text: [
       answer,
-      `Confidence: ${confidence}. I am only using saved evidence and will not guess beyond it.`,
-      selectedEvidence.length ? 'Evidence used:' : '',
-      ...evidenceLines,
-    ].filter(Boolean).join('\n'),
+      confidenceNarrative,
+      selectedEvidence.length ? ["What I'm basing that on:", ...evidenceLines].join('\n') : '',
+    ].filter(Boolean).join('\n\n'),
   };
 };
 
