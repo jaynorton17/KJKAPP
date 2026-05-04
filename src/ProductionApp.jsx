@@ -14080,7 +14080,7 @@ function ProductionApp() {
       return undefined;
     }
     if (shouldPauseBackgroundFirestore) return undefined;
-    const diaryRef = query(collection(firestore, 'diaryEntries'), orderBy('updatedAt', 'desc'), limit(120));
+    const diaryRef = query(collection(firestore, 'diaryEntries'), orderBy('updatedAt', 'desc'));
     const unsubscribe = onSnapshot(diaryRef, (snapshot) => {
       setDiaryEntries(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() })));
     }, (error) => reportFirestoreListenerError('diaryEntriesSnapshotError', error));
@@ -15637,7 +15637,36 @@ function ProductionApp() {
   }, [buildAiDiaryDraft, firestore]);
 
   const backfillMissingGameDiaryEntries = useCallback(async () => {
-    if (!diaryBackfillGameIds.length) {
+    setGameDiaryBackfillState({
+      status: 'running',
+      processed: 0,
+      created: 0,
+      skipped: 0,
+      error: '',
+    });
+
+    let scannedCompletedGamesById = new Map();
+    try {
+      if (firestore && user?.uid) {
+        const scannedSnapshot = await getDocs(query(collection(firestore, 'games'), where('playerUids', 'array-contains', user.uid)));
+        scannedCompletedGamesById = new Map(
+          scannedSnapshot.docs
+            .map((entry) => {
+              const data = entry.data() || {};
+              const status = normalizeText(data.status || '');
+              if ((!COMPLETED_GAME_STATUSES.includes(status) && !data?.endedAt) || !entry?.id) return null;
+              return [normalizeText(entry.id), buildGameLibraryEntry(entry.id, data, [])];
+            })
+            .filter(Boolean),
+        );
+      }
+    } catch (error) {
+      console.warn('Could not scan all completed games for diary backfill.', error);
+    }
+
+    const scannedCompletedGameIds = [...scannedCompletedGamesById.keys()].filter(Boolean);
+    const allBackfillGameIds = mergeUniqueIds(diaryBackfillGameIds, scannedCompletedGameIds);
+    if (!allBackfillGameIds.length) {
       setGameDiaryBackfillState({
         status: 'done',
         processed: 0,
@@ -15649,24 +15678,39 @@ function ProductionApp() {
       return;
     }
 
-    setGameDiaryBackfillState({
-      status: 'running',
-      processed: 0,
-      created: 0,
-      skipped: 0,
-      error: '',
-    });
+    const knownCompletedIds = new Set(
+      (pairHistory?.completedGameIds || []).map((entry) => normalizeText(entry || '')).filter(Boolean),
+    );
+    const repairedCompletedGameIds = scannedCompletedGameIds.filter((gameId) => !knownCompletedIds.has(gameId));
+    if (firestore && repairedCompletedGameIds.length) {
+      const pairRef = doc(firestore, 'playerPairs', buildPairKey());
+      for (const chunk of chunkArray(repairedCompletedGameIds, 400)) {
+        await setDoc(pairRef, {
+          pairId: buildPairKey(),
+          playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
+          completedGameIds: arrayUnion(...chunk),
+          updatedAt: serverTimestamp(),
+        }, { merge: true }).catch(() => null);
+      }
+    }
 
     let created = 0;
     let skipped = 0;
     let processed = 0;
     let firstError = '';
 
-    for (const gameId of diaryBackfillGameIds) {
+    for (const gameId of allBackfillGameIds) {
       const normalizedGameId = normalizeText(gameId || '');
-      let gameSummary = previousGamesById.get(normalizedGameId) || null;
-      if (!gameSummary && normalizedGameId) {
-        gameSummary = await loadGameSummaryById(normalizedGameId).catch(() => null);
+      const existingEntry = diaryGameEntriesBySourceId.get(normalizedGameId) || null;
+      const existingStatus = normalizeIdentity(existingEntry?.aiDiaryStatus || (existingEntry?.aiGenerated ? 'ready' : ''));
+      const needsFullSummary = !existingEntry || !existingEntry?.aiGenerated || existingStatus === 'error';
+      let gameSummary =
+        previousGamesById.get(normalizedGameId)
+        || scannedCompletedGamesById.get(normalizedGameId)
+        || null;
+      const hasLoadedRounds = Array.isArray(gameSummary?.rounds) && gameSummary.rounds.length > 0;
+      if ((!gameSummary || (needsFullSummary && !hasLoadedRounds)) && normalizedGameId) {
+        gameSummary = await loadGameSummaryById(normalizedGameId, gameSummary).catch(() => gameSummary);
       }
       if (!gameSummary || isLocalTestGame(gameSummary) || isHoldemGameMode(gameSummary?.gameMode || 'standard')) {
         processed += 1;
@@ -15716,7 +15760,7 @@ function ProductionApp() {
       return;
     }
     setNotice(`Backfill finished: ${created} game diary chapters created or refreshed, ${skipped} skipped.`);
-  }, [diaryBackfillGameIds, ensureGameDiaryEntryGenerated, loadGameSummaryById, previousGamesById, questionFeedback, questionReplays, setNotice, visibleQuizAnswers]);
+  }, [diaryBackfillGameIds, diaryGameEntriesBySourceId, ensureGameDiaryEntryGenerated, firestore, loadGameSummaryById, pairHistory?.completedGameIds, previousGamesById, questionFeedback, questionReplays, setNotice, user?.uid, visibleQuizAnswers]);
 
   const archivePairHistory = async (gameDoc, endedGameId = gameDoc?.id) => {
     if (!firestore || !gameDoc) return;
