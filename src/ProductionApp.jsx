@@ -315,9 +315,10 @@ const QUIZ_SETUP_COUNTDOWN_MS = 3000;
 const QUIZ_REVEAL_FLASH_MS = 3000;
 const AI_CHAT_MESSAGE_LIMIT = 160;
 const AI_EVIDENCE_PREVIEW_LIMIT = 4;
-const AI_DIARY_PROMPT_VERSION = '2026-05-06-unique-titles-v1';
+const AI_DIARY_PROMPT_VERSION = '2026-05-04-story-chat-v2';
 const AI_DIARY_GAME_HIGHLIGHT_LIMIT = 8;
 const AI_DIARY_SIGNAL_LIMIT = 4;
+const AI_DIARY_CHAT_HIGHLIGHT_LIMIT = 8;
 const AI_SEARCH_STOPWORDS = new Set([
   'a',
   'about',
@@ -1236,17 +1237,17 @@ const diaryChapterTitleKey = (value = '') => normalizeIdentity(normalizeText(val
 const collectExistingDiaryChapterTitlesList = (diaryEntries = [], excludeEntryId = '', limit = 40) => {
   const titles = [];
   const seen = new Set();
-  (Array.isArray(diaryEntries) ? diaryEntries : []).forEach((entry) => {
-    if (excludeEntryId && normalizeText(entry?.id || '') === normalizeText(excludeEntryId)) return;
-    if (!isDiaryBookEntry(entry)) return;
+  for (const entry of (Array.isArray(diaryEntries) ? diaryEntries : [])) {
+    if (titles.length >= limit) break;
+    if (excludeEntryId && normalizeText(entry?.id || '') === normalizeText(excludeEntryId)) continue;
+    if (!isDiaryBookEntry(entry)) continue;
     const title = normalizeText(entry?.chapterTitle || '');
-    if (!title) return;
+    if (!title) continue;
     const key = diaryChapterTitleKey(title);
-    if (seen.has(key)) return;
+    if (seen.has(key)) continue;
     seen.add(key);
     titles.push(title);
-    if (titles.length >= limit) return;
-  });
+  }
   return titles;
 };
 
@@ -1478,6 +1479,51 @@ const buildDiaryQuizSummary = (quizAnswers = [], gameId = '') => {
   };
 };
 
+const buildDiaryChatSummary = (chatMessages = [], limit = AI_DIARY_CHAT_HIGHLIGHT_LIMIT) => {
+  const rows = (Array.isArray(chatMessages) ? chatMessages : [])
+    .map((entry, index) => {
+      const text = normalizeText(entry?.text || entry?.message || entry?.body || '');
+      if (!text) return null;
+      const seat = seatFromPlayerRef(entry?.seat || entry?.uid || entry?.displayName || '') || '';
+      const speaker = seat ? PLAYER_LABEL[seat] || seat : normalizeText(entry?.displayName || entry?.role || 'Someone') || 'Someone';
+      return {
+        index,
+        seat,
+        speaker,
+        text: truncateAiText(text, 180),
+        createdAtMs: getRecordTime(entry?.createdAt || entry?.createdAtMs || entry?.updatedAt || 0),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.createdAtMs - right.createdAtMs || left.index - right.index);
+
+  const bySeat = rows.reduce((bucket, entry) => {
+    const key = entry.seat || 'other';
+    bucket[key] = Number(bucket[key] || 0) + 1;
+    return bucket;
+  }, { jay: 0, kim: 0, other: 0 });
+
+  const personalSignalPattern = /\b(lol|haha|love|miss|remember|sorry|promise|kiss|cute|cheeky|ouch|wow|deal|bet|wager|secret|honest|actually|always|never)\b/i;
+  const highlights = rows
+    .map((entry, index) => ({
+      ...entry,
+      score:
+        (entry.text.length >= 24 ? 2 : 0)
+        + (personalSignalPattern.test(entry.text) ? 4 : 0)
+        + (index / Math.max(1, rows.length)),
+    }))
+    .sort((left, right) => right.score - left.score || right.createdAtMs - left.createdAtMs || right.index - left.index)
+    .slice(0, limit)
+    .sort((left, right) => left.createdAtMs - right.createdAtMs || left.index - right.index)
+    .map(({ seat, speaker, text }) => ({ seat, speaker, text }));
+
+  return {
+    totalMessages: rows.length,
+    bySeat,
+    highlights,
+  };
+};
+
 const buildGameDiaryRoundHighlights = (gameSummary = {}) => {
   const gameMode = resolveGameMode(gameSummary?.gameMode || 'standard');
   return normalizeStoredRounds(gameSummary?.rounds || [])
@@ -1563,6 +1609,13 @@ const applyReservedDiaryHeadlinePolish = (draft, factsBundle = {}) => {
   return { ...draft, headline: polished };
 };
 
+const buildUniqueDiaryChapterTitle = (rawTitle = '', diaryEntries = [], excludeEntryId = '', seed = '') =>
+  polishUniqueDiaryChapterTitle(
+    rawTitle,
+    collectReservedDiaryChapterTitleKeys(diaryEntries, excludeEntryId),
+    seed || excludeEntryId || rawTitle,
+  );
+
 const pickStableDiaryTitleCandidate = (seed = '', candidates = [], reservedKeys = null) => {
   const seen = new Set();
   const uniqueCandidates = (candidates || [])
@@ -1641,6 +1694,7 @@ const buildAiGameDiaryFacts = ({
   questionFeedback = [],
   questionReplays = [],
   quizAnswers = [],
+  chatMessages = [],
 } = {}) => {
   const rounds = normalizeStoredRounds(gameSummary?.rounds || []);
   const gameMode = resolveGameMode(gameSummary?.gameMode || 'standard');
@@ -1649,6 +1703,7 @@ const buildAiGameDiaryFacts = ({
   const feedbackSummary = buildDiaryFeedbackSummary(questionFeedback, gameSummary?.id || '');
   const replaySummary = buildDiaryReplaySummary(questionReplays, gameSummary?.id || '');
   const quizSummary = gameMode === 'quiz' ? buildDiaryQuizSummary(quizAnswers, gameSummary?.id || '') : null;
+  const chatSummary = buildDiaryChatSummary(chatMessages);
   const topCategories = collectDiaryTopCategories(rounds);
 
   return {
@@ -1679,9 +1734,12 @@ const buildAiGameDiaryFacts = ({
     feedback: feedbackSummary,
     replayRequests: replaySummary,
     quiz: quizSummary,
+    gameChat: chatSummary,
     privacy: {
       privateNotesIncluded: false,
       privateNotesReason: 'Shared diary chapters omit private question notes so nothing user-specific leaks across players.',
+      sharedGameChatIncluded: Boolean(chatSummary.totalMessages),
+      sharedGameChatReason: 'Only shared in-room game chat from this game is included for personal color.',
     },
   };
 };
@@ -1733,6 +1791,9 @@ const buildAiDiarySystemInstruction = (sourceType = 'game') => [
   sourceType === 'ama'
     ? 'Turn the supplied AMA facts into a funny, warm, affectionate diary chapter.'
     : 'Turn the supplied game facts into a funny, warm, affectionate diary chapter.',
+  'Write like a keepsake story with a beginning, middle, and ending, not like a stats report.',
+  'Use small personal details, turning points, answer contrasts, and shared jokes from the supplied facts to make the chapter feel specific to Jay and Kim.',
+  'When facts.gameChat.highlights contains messages, weave one to three of those shared room-chat moments into the story as personal color, with the speaker named. Do not dump the chat as a transcript.',
   'Use only the supplied facts. Do not invent hidden events, feelings, scores, or questions.',
   'When facts.existingChapterTitles is a non-empty array, your JSON headline must not match any listed title when compared case-insensitively (ignore extra spaces). Invent a fresh headline if the obvious choice would collide.',
   'Make the headline short, playful, and specific to this exact chapter. Vary the wording between chapters and avoid repetitive winner-template titles.',
@@ -1750,6 +1811,7 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   const replayRequests = facts?.replayRequests || [];
   const analytics = facts?.analytics || null;
   const quiz = facts?.quiz || null;
+  const chatHighlights = Array.isArray(facts?.gameChat?.highlights) ? facts.gameChat.highlights : [];
   const firstMoment = facts?.questionHighlights?.[0] || null;
   const secondMoment = facts?.questionHighlights?.[1] || null;
   const sharedLikedQuestion = feedback?.sharedLiked?.[0]?.questionText || '';
@@ -1761,12 +1823,15 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   }, facts, facts?.reservedChapterTitleKeys instanceof Set ? facts.reservedChapterTitleKeys : null);
   const summary = game?.scoreSummary || `${game?.gameModeLabel || 'Game night'} finished with plenty to talk about.`;
 
-  const opening = `${summary} ${game?.name ? `${game.name} gave them ${Math.max(1, Number(game?.roundsPlayed || 0))} rounds of evidence, banter, and at least one answer that probably deserves to be quoted again later.` : ''}`.trim();
+  const opening = `By the time ${game?.name || 'this game'} became a diary chapter, the scoreboard already had a plot. ${summary} ${game?.name ? `${game.name} gave them ${Math.max(1, Number(game?.roundsPlayed || 0))} rounds of answers, second-guesses, and little moments worth keeping.` : ''}`.trim();
   const middle = analytics
     ? `${analytics.leaderboardSummary || 'The score stayed lively.'} Jay looked strongest in ${analytics.strongestCategoryJay || 'a few familiar lanes'}, while Kim shone in ${analytics.strongestCategoryKim || 'some sharp little moments'}. ${analytics.weakestCategoryJay ? `Jay had a wobble around ${analytics.weakestCategoryJay}.` : ''} ${analytics.weakestCategoryKim ? `Kim had a wobble around ${analytics.weakestCategoryKim}.` : ''}`.trim()
     : quiz
       ? `Quick Fire stayed true to its name: Jay finished on ${quiz.bySeat?.jay?.points || 0} points with ${quiz.bySeat?.jay?.accuracy || 0}% accuracy, while Kim landed ${quiz.bySeat?.kim?.points || 0} points at ${quiz.bySeat?.kim?.accuracy || 0}% accuracy. ${quiz.strongestCategories?.jay?.[0]?.category ? `Jay looked especially comfortable in ${quiz.strongestCategories.jay[0].category}.` : ''} ${quiz.strongestCategories?.kim?.[0]?.category ? `Kim looked especially comfortable in ${quiz.strongestCategories.kim[0].category}.` : ''}`.trim()
       : 'The scoreline told one story, but the answers underneath it were where the real charm lived.';
+  const chatMoment = chatHighlights.length
+    ? `The room chat gave the chapter its fingerprints too: ${chatHighlights.slice(0, 3).map((entry) => `${entry.speaker || 'Someone'} said "${truncateAiText(entry.text, 90)}"`).join('; ')}.`
+    : '';
   const learning = [
     firstMoment ? `One memorable clue came when Jay answered "${firstMoment.jayAnswer}" and Kim answered "${firstMoment.kimAnswer}" to "${firstMoment.question}".` : '',
     secondMoment ? `Later, "${secondMoment.question}" quietly added another layer: Jay went with "${secondMoment.jayAnswer}", while Kim went with "${secondMoment.kimAnswer}".` : '',
@@ -1778,7 +1843,7 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   return {
     headline,
     summary,
-    writeup: [opening, middle, learning || 'What came through most clearly was that the game gave both of them fresh little windows into each other, and the score was only part of the story.']
+    writeup: [opening, middle, chatMoment, learning || 'What came through most clearly was that the game gave both of them fresh little windows into each other, and the score was only part of the story.']
       .filter(Boolean)
       .join('\n\n'),
     model: 'local-fallback',
@@ -10805,8 +10870,15 @@ function DiaryDashboardSection({
   const [mediaFiles, setMediaFiles] = useState([]);
   const themeOptions = useMemo(() => buildDiaryThemeOptions(roundAnalytics), [roundAnalytics]);
   const chapters = useMemo(
-    () =>
-      diaryEntries
+    () => {
+      const usedChapterTitleKeys = new Set();
+      const reserveChapterTitle = (rawTitle = '', seed = '') => {
+        const uniqueTitle = polishUniqueDiaryChapterTitle(rawTitle, usedChapterTitleKeys, seed);
+        usedChapterTitleKeys.add(diaryChapterTitleKey(uniqueTitle));
+        return uniqueTitle;
+      };
+
+      return diaryEntries
         .filter((entry) => isDiaryBookEntry(entry))
         .sort(sortByOldest)
         .map((entry, index) => {
@@ -10826,7 +10898,10 @@ function DiaryDashboardSection({
               entryType: 'game',
               bookChapterNumber,
               chapterNumber: bookChapterNumber,
-              chapterTitle: normalizeText(entry.chapterTitle) || buildGameDiaryChapterTitleFallback(entry, scoreContext),
+              chapterTitle: reserveChapterTitle(
+                normalizeText(entry.chapterTitle) || buildGameDiaryChapterTitleFallback(entry, scoreContext),
+                entry.id || entry.sourceId || bookChapterNumber,
+              ),
               createdLabel: playedLabel,
               answeredLabel: generatedLabel,
               statusLabel: aiDiaryStatus === 'generating'
@@ -10847,9 +10922,13 @@ function DiaryDashboardSection({
           const amaChapterNumber = Number(entry.chapterNumber || index + 1);
           const askedByPlayerId = entry.requestedByPlayerId || entry.requestedByUserId || '';
           const answeredByPlayerId = entry.ownerPlayerId || entry.receiverPlayerId || entry.storeOwnerUserId || '';
-          const chapterTitle = normalizeText(entry.question)
-            ? buildAmaChapterTitle(entry.question, amaChapterNumber)
-            : normalizeText(entry.chapterTitle) || buildAmaChapterTitle(entry.title || '', amaChapterNumber);
+          const chapterTitle = reserveChapterTitle(
+            normalizeText(entry.chapterTitle)
+              || (normalizeText(entry.question)
+                ? buildAmaChapterTitle(entry.question, amaChapterNumber)
+                : buildAmaChapterTitle(entry.title || '', amaChapterNumber)),
+            entry.id || entry.sourceId || bookChapterNumber,
+          );
           const status = normalizeIdentity(entry.chapterState || entry.status);
           return {
             ...entry,
@@ -10871,7 +10950,8 @@ function DiaryDashboardSection({
                 : 'Awaiting question',
             snapshotInsights: baseSnapshotInsights,
           };
-        }),
+        });
+    },
     [diaryEntries],
   );
   const gameChapterCount = chapters.filter((entry) => entry.entryType === 'game').length;
@@ -15489,19 +15569,26 @@ function ProductionApp() {
     playerAccounts,
   ]);
 
-  const loadGameDiarySignalsFromFirestore = useCallback(async (gameId = '') => {
+  const loadGameDiarySignalsFromFirestore = useCallback(async (gameId = '', options = {}) => {
     if (!firestore || !gameId) {
-      return { feedbackRows: [], replayRows: [], quizRows: [] };
+      return { feedbackRows: [], replayRows: [], quizRows: [], chatRows: [] };
     }
-    const [feedbackSnap, replaySnap, quizSnap] = await Promise.all([
-      getDocs(query(collection(firestore, 'questionFeedback'), where('gameId', '==', gameId), limit(400))),
-      getDocs(query(collection(firestore, 'questionReplays'), where('gameId', '==', gameId), limit(400))),
-      getDocs(query(collection(firestore, 'quizAnswers'), where('gameId', '==', gameId), limit(400))),
+    const includeFeedback = options.includeFeedback !== false;
+    const includeReplays = options.includeReplays !== false;
+    const includeQuiz = options.includeQuiz !== false;
+    const includeChat = options.includeChat !== false;
+    const gameRef = doc(firestore, 'games', gameId);
+    const [feedbackSnap, replaySnap, quizSnap, chatSnap] = await Promise.all([
+      includeFeedback ? getDocs(query(collection(firestore, 'questionFeedback'), where('gameId', '==', gameId), limit(400))) : Promise.resolve(null),
+      includeReplays ? getDocs(query(collection(firestore, 'questionReplays'), where('gameId', '==', gameId), limit(400))) : Promise.resolve(null),
+      includeQuiz ? getDocs(query(collection(firestore, 'quizAnswers'), where('gameId', '==', gameId), limit(400))) : Promise.resolve(null),
+      includeChat ? getDocs(query(collection(gameRef, 'chatMessages'), orderBy('createdAt', 'asc'), limit(160))) : Promise.resolve(null),
     ]);
     return {
-      feedbackRows: feedbackSnap.docs.map((entry) => ({ id: entry.id, ...entry.data() })),
-      replayRows: replaySnap.docs.map((entry) => ({ id: entry.id, ...entry.data() })),
-      quizRows: quizSnap.docs.map((entry) => ({ id: entry.id, ...entry.data() })),
+      feedbackRows: feedbackSnap?.docs?.map((entry) => ({ id: entry.id, ...entry.data() })) || [],
+      replayRows: replaySnap?.docs?.map((entry) => ({ id: entry.id, ...entry.data() })) || [],
+      quizRows: quizSnap?.docs?.map((entry) => ({ id: entry.id, ...entry.data() })) || [],
+      chatRows: chatSnap?.docs?.map((entry) => ({ id: entry.id, ...entry.data() })) || [],
     };
   }, [firestore]);
 
@@ -15540,6 +15627,7 @@ function ProductionApp() {
     questionFeedbackOverride = null,
     questionReplaysOverride = null,
     quizAnswersOverride = null,
+    chatMessagesOverride = null,
   } = {}) => {
     if (!firestore || !gameSummary?.id || isLocalTestGame(gameSummary) || isHoldemGameMode(gameSummary?.gameMode || 'standard')) {
       return { status: 'skipped' };
@@ -15577,13 +15665,20 @@ function ProductionApp() {
       return { status: 'skipped', entryId };
     }
 
-    const fetchedSignals = (
-      Array.isArray(questionFeedbackOverride)
-      && Array.isArray(questionReplaysOverride)
-      && Array.isArray(quizAnswersOverride)
-    )
-      ? null
-      : await loadGameDiarySignalsFromFirestore(gameSummary.id);
+    const shouldFetchSignals = (
+      !Array.isArray(questionFeedbackOverride)
+      || !Array.isArray(questionReplaysOverride)
+      || !Array.isArray(quizAnswersOverride)
+      || !Array.isArray(chatMessagesOverride)
+    );
+    const fetchedSignals = shouldFetchSignals
+      ? await loadGameDiarySignalsFromFirestore(gameSummary.id, {
+          includeFeedback: !Array.isArray(questionFeedbackOverride),
+          includeReplays: !Array.isArray(questionReplaysOverride),
+          includeQuiz: !Array.isArray(quizAnswersOverride),
+          includeChat: !Array.isArray(chatMessagesOverride),
+        })
+      : null;
     const existingChapterTitles = collectExistingDiaryChapterTitlesList(diaryEntries, entryId, 40);
     const reservedChapterTitleKeys = collectReservedDiaryChapterTitleKeys(diaryEntries, entryId);
     const facts = {
@@ -15592,6 +15687,7 @@ function ProductionApp() {
         questionFeedback: Array.isArray(questionFeedbackOverride) ? questionFeedbackOverride : (fetchedSignals?.feedbackRows || []),
         questionReplays: Array.isArray(questionReplaysOverride) ? questionReplaysOverride : (fetchedSignals?.replayRows || []),
         quizAnswers: Array.isArray(quizAnswersOverride) ? quizAnswersOverride : (fetchedSignals?.quizRows || []),
+        chatMessages: Array.isArray(chatMessagesOverride) ? chatMessagesOverride : (fetchedSignals?.chatRows || []),
       }),
       existingChapterTitles,
       reservedChapterTitleKeys,
@@ -15612,7 +15708,12 @@ function ProductionApp() {
       gameName: facts?.game?.name || normalizeText(gameSummary?.name || gameSummary?.gameName || '') || `Game ${normalizeText(gameSummary?.joinCode || gameSummary?.id || '')}`,
       joinCode: facts?.game?.joinCode || normalizeText(gameSummary?.joinCode || ''),
       title: facts?.game?.name || normalizeText(gameSummary?.name || gameSummary?.gameName || '') || 'Game diary',
-      chapterTitle: buildGameDiaryChapterTitleFallback(existingEntry || gameSummary, scoreContext, facts),
+      chapterTitle: buildUniqueDiaryChapterTitle(
+        buildGameDiaryChapterTitleFallback(existingEntry || gameSummary, scoreContext, facts),
+        diaryEntries,
+        entryId,
+        gameSummary.id,
+      ),
       chapterState: 'completed',
       status: 'completed',
       question: '',
@@ -15638,6 +15739,7 @@ function ProductionApp() {
       },
       replayHighlights: facts?.replayRequests || [],
       quizSummary: facts?.quiz || null,
+      gameChatSummary: facts?.gameChat || { totalMessages: 0, bySeat: { jay: 0, kim: 0, other: 0 }, highlights: [] },
       privateNotesIncluded: false,
       createdAt: canonicalCreatedAt,
       endedAt: canonicalEndedAt,
@@ -15661,10 +15763,16 @@ function ProductionApp() {
         sourceType: 'game',
         facts,
       });
+      const finalChapterTitle = buildUniqueDiaryChapterTitle(
+        draft?.headline || basePayload.chapterTitle,
+        diaryEntries,
+        entryId,
+        gameSummary.id,
+      );
 
       await setDoc(entryRef, {
         ...basePayload,
-        chapterTitle: draft?.headline || basePayload.chapterTitle,
+        chapterTitle: finalChapterTitle,
         aiDiaryStatus: 'ready',
         aiDiaryError: '',
         aiDiarySummary: draft?.summary || basePayload.resultSummary,
@@ -15741,7 +15849,12 @@ function ProductionApp() {
         id: diaryEntryId,
         sourceType: 'ama',
         sourceId: requestData.id,
-        chapterTitle: existingEntry?.chapterTitle || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
+        chapterTitle: buildUniqueDiaryChapterTitle(
+          existingEntry?.chapterTitle || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
+          diaryEntries,
+          diaryEntryId,
+          requestData.id,
+        ),
         aiDiaryStatus: 'generating',
         aiDiaryError: '',
         aiGenerated: false,
@@ -15753,14 +15866,20 @@ function ProductionApp() {
         sourceType: 'ama',
         facts,
       });
+      const finalChapterTitle = buildUniqueDiaryChapterTitle(
+        draft?.headline
+          || existingEntry?.chapterTitle
+          || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
+        diaryEntries,
+        diaryEntryId,
+        requestData.id,
+      );
 
       await setDoc(entryRef, {
         id: diaryEntryId,
         sourceType: 'ama',
         sourceId: requestData.id,
-        chapterTitle: draft?.headline
-          || existingEntry?.chapterTitle
-          || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
+        chapterTitle: finalChapterTitle,
         aiDiaryStatus: 'ready',
         aiDiaryError: '',
         aiDiarySummary: draft?.summary || '',
@@ -16300,7 +16419,7 @@ function ProductionApp() {
       buildGameLibraryEntry(targetGameId, finalizedGameDoc, finalizedRoundsData),
     );
     if (gameSummary) {
-      void ensureGameDiaryEntryGenerated({ gameSummary }).catch((error) => {
+      void ensureGameDiaryEntryGenerated({ gameSummary, chatMessagesOverride: chatMessages }).catch((error) => {
         console.warn('Background game diary generation failed after game finalization.', error);
       });
     }
@@ -16776,7 +16895,12 @@ function ProductionApp() {
           linkedForfeitId: freshItem.id,
           amaHistoryId: redeemerHistoryRef.id,
           chapterNumber,
-          chapterTitle: buildAmaChapterTitle('', chapterNumber),
+          chapterTitle: buildUniqueDiaryChapterTitle(
+            buildAmaChapterTitle('', chapterNumber),
+            diaryEntries,
+            diaryRef.id,
+            amaRequestRef.id,
+          ),
           question: '',
           answer: '',
           story: '',
@@ -17019,7 +17143,12 @@ function ProductionApp() {
           amaItemId: requestData.amaItemId || requestData.linkedForfeitId || '',
           linkedForfeitId: requestData.linkedForfeitId || requestData.amaItemId || '',
           chapterNumber: requestData.chapterNumber || undefined,
-          chapterTitle: buildAmaChapterTitle(cleanQuestion, requestData.chapterNumber || 0),
+          chapterTitle: buildUniqueDiaryChapterTitle(
+            buildAmaChapterTitle(cleanQuestion, requestData.chapterNumber || 0),
+            diaryEntries,
+            nextDiaryRef.id,
+            requestRef.id,
+          ),
           question: cleanQuestion,
           answer: '',
           story: '',
@@ -17076,7 +17205,12 @@ function ProductionApp() {
           amaItemId: requestData.amaItemId || requestData.linkedForfeitId || '',
           linkedForfeitId: requestData.linkedForfeitId || requestData.amaItemId || '',
           chapterNumber: requestData.chapterNumber || undefined,
-          chapterTitle: buildAmaChapterTitle(requestData.question || '', requestData.chapterNumber || 0),
+          chapterTitle: buildUniqueDiaryChapterTitle(
+            buildAmaChapterTitle(requestData.question || '', requestData.chapterNumber || 0),
+            diaryEntries,
+            nextDiaryRef.id,
+            requestRef.id,
+          ),
           question: requestData.question || '',
           answer: cleanAnswer,
           story: cleanStory,
