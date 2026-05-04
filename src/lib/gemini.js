@@ -168,6 +168,12 @@ export const generateGeminiDiaryWriteup = async ({
   facts = {},
   systemInstruction = '',
 } = {}) => {
+  const reservedHeadlineLines = Array.isArray(facts?.existingChapterTitles) && facts.existingChapterTitles.length
+    ? `\n\nHeadlines already used in this diary book (your JSON headline must not match any of these, case-insensitive):\n${facts.existingChapterTitles
+      .map((entry) => `- ${String(entry || '').trim()}`)
+      .filter((line) => line.length > 2)
+      .join('\n')}`
+    : '';
   const prompt = [
     'Return strict JSON only.',
     'Use this schema exactly:',
@@ -175,7 +181,7 @@ export const generateGeminiDiaryWriteup = async ({
     `Source type: ${String(sourceType || 'game').trim() || 'game'}`,
     `Prompt version: ${String(promptVersion || '').trim() || 'unspecified'}`,
     'Make the headline feel distinct to this specific chapter. Avoid repeating the same title structure from one chapter to the next.',
-    `Facts JSON:\n${JSON.stringify(facts || {}, null, 2)}`,
+    `Facts JSON:\n${JSON.stringify(facts || {}, null, 2)}${reservedHeadlineLines}`,
   ].join('\n\n');
 
   const result = await requestGeminiText({

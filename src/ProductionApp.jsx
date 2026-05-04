@@ -315,7 +315,7 @@ const QUIZ_SETUP_COUNTDOWN_MS = 3000;
 const QUIZ_REVEAL_FLASH_MS = 3000;
 const AI_CHAT_MESSAGE_LIMIT = 160;
 const AI_EVIDENCE_PREVIEW_LIMIT = 4;
-const AI_DIARY_PROMPT_VERSION = '2026-05-04-v2';
+const AI_DIARY_PROMPT_VERSION = '2026-05-06-unique-titles-v1';
 const AI_DIARY_GAME_HIGHLIGHT_LIMIT = 8;
 const AI_DIARY_SIGNAL_LIMIT = 4;
 const AI_SEARCH_STOPWORDS = new Set([
@@ -1231,6 +1231,30 @@ const isGameDiaryEntry = (entry = {}) =>
 
 const isDiaryBookEntry = (entry = {}) => isAmaDiaryEntry(entry) || isGameDiaryEntry(entry);
 
+const diaryChapterTitleKey = (value = '') => normalizeIdentity(normalizeText(value));
+
+const collectExistingDiaryChapterTitlesList = (diaryEntries = [], excludeEntryId = '', limit = 40) => {
+  const titles = [];
+  const seen = new Set();
+  (Array.isArray(diaryEntries) ? diaryEntries : []).forEach((entry) => {
+    if (excludeEntryId && normalizeText(entry?.id || '') === normalizeText(excludeEntryId)) return;
+    if (!isDiaryBookEntry(entry)) return;
+    const title = normalizeText(entry?.chapterTitle || '');
+    if (!title) return;
+    const key = diaryChapterTitleKey(title);
+    if (seen.has(key)) return;
+    seen.add(key);
+    titles.push(title);
+    if (titles.length >= limit) return;
+  });
+  return titles;
+};
+
+const collectReservedDiaryChapterTitleKeys = (diaryEntries = [], excludeEntryId = '') =>
+  new Set(
+    collectExistingDiaryChapterTitlesList(diaryEntries, excludeEntryId, 200).map((title) => diaryChapterTitleKey(title)),
+  );
+
 const buildGameDiaryEntryId = (gameId = '') => `game-diary-${normalizeText(gameId) || 'unknown'}`;
 
 const buildAiDiaryGenerationKey = (sourceType = '', sourceId = '') =>
@@ -1509,7 +1533,37 @@ const buildStableDiaryHash = (seed = '') =>
     (total + (character.charCodeAt(0) * (index + 1))) % 2147483647
   ), 0);
 
-const pickStableDiaryTitleCandidate = (seed = '', candidates = []) => {
+const polishUniqueDiaryChapterTitle = (rawHeadline = '', reservedKeys = null, disambiguatorSeed = '') => {
+  const seed = normalizeText(disambiguatorSeed) || 'chapter';
+  let title = normalizeText(rawHeadline);
+  if (!title) title = 'A chapter worth keeping';
+  if (!(reservedKeys instanceof Set) || !reservedKeys.size || !reservedKeys.has(diaryChapterTitleKey(title))) {
+    return title.slice(0, 96);
+  }
+  const stem = title.slice(0, 52).trim() || 'Chapter';
+  const tag = seed.replace(/[^a-z0-9]+/gi, '').slice(-6) || 'more';
+  for (let attempt = 2; attempt < 80; attempt += 1) {
+    const suffix = attempt === 2 ? tag : `${tag}${attempt}`;
+    const candidate = `${stem} · ${suffix}`.trim();
+    if (!reservedKeys.has(diaryChapterTitleKey(candidate))) {
+      return candidate.slice(0, 96);
+    }
+  }
+  const hashSuffix = String(buildStableDiaryHash(`${seed}-title`) % 100000);
+  return `${stem} · ${hashSuffix}`.slice(0, 96);
+};
+
+const applyReservedDiaryHeadlinePolish = (draft, factsBundle = {}) => {
+  if (!draft?.headline) return draft;
+  const reserved = factsBundle?.reservedChapterTitleKeys;
+  const seed = factsBundle?.game?.id || factsBundle?.ama?.sourceId || '';
+  if (!(reserved instanceof Set) || !reserved.size) return draft;
+  const polished = polishUniqueDiaryChapterTitle(draft.headline, reserved, seed);
+  if (polished === draft.headline) return draft;
+  return { ...draft, headline: polished };
+};
+
+const pickStableDiaryTitleCandidate = (seed = '', candidates = [], reservedKeys = null) => {
   const seen = new Set();
   const uniqueCandidates = (candidates || [])
     .map((candidate) => normalizeText(candidate))
@@ -1520,10 +1574,14 @@ const pickStableDiaryTitleCandidate = (seed = '', candidates = []) => {
       return true;
     });
   if (!uniqueCandidates.length) return '';
-  return uniqueCandidates[buildStableDiaryHash(seed) % uniqueCandidates.length];
+  const filtered = reservedKeys instanceof Set && reservedKeys.size
+    ? uniqueCandidates.filter((candidate) => !reservedKeys.has(diaryChapterTitleKey(candidate)))
+    : uniqueCandidates;
+  const pool = filtered.length ? filtered : uniqueCandidates;
+  return pool[buildStableDiaryHash(seed) % pool.length];
 };
 
-const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = null, facts = null) => {
+const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = null, facts = null, reservedKeys = null) => {
   const gameMode = scoreContext?.gameMode || resolveGameMode(gameSummary?.gameMode || 'standard');
   const winnerSeat = scoreContext?.winnerSeat || (gameSummary?.winner === 'jay' || gameSummary?.winner === 'kim' ? gameSummary.winner : '');
   const winnerLabel = winnerSeat ? PLAYER_LABEL[winnerSeat] || winnerSeat : '';
@@ -1567,8 +1625,15 @@ const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = nul
     generalCandidates.push('Penalty Points and Plot Twists', 'Confessions and Curveballs', 'Sweet Chaos on the Scoreboard');
   }
 
-  return pickStableDiaryTitleCandidate(seed, [...specificCandidates, ...generalCandidates])
+  const reserved = reservedKeys instanceof Set && reservedKeys.size
+    ? reservedKeys
+    : (facts?.reservedChapterTitleKeys instanceof Set ? facts.reservedChapterTitleKeys : null);
+  let chosen = pickStableDiaryTitleCandidate(seed, [...specificCandidates, ...generalCandidates], reserved)
     || buildLegacyGameDiaryChapterTitle(gameSummary, scoreContext);
+  if (reserved?.has(diaryChapterTitleKey(chosen))) {
+    chosen = polishUniqueDiaryChapterTitle(chosen, reserved, seed);
+  }
+  return chosen;
 };
 
 const buildAiGameDiaryFacts = ({
@@ -1669,6 +1734,7 @@ const buildAiDiarySystemInstruction = (sourceType = 'game') => [
     ? 'Turn the supplied AMA facts into a funny, warm, affectionate diary chapter.'
     : 'Turn the supplied game facts into a funny, warm, affectionate diary chapter.',
   'Use only the supplied facts. Do not invent hidden events, feelings, scores, or questions.',
+  'When facts.existingChapterTitles is a non-empty array, your JSON headline must not match any listed title when compared case-insensitively (ignore extra spaces). Invent a fresh headline if the obvious choice would collide.',
   'Make the headline short, playful, and specific to this exact chapter. Vary the wording between chapters and avoid repetitive winner-template titles.',
   'Mention the result and winner if the facts include one.',
   'Explain what Jay and Kim learned about each other, what went well, and who struggled where, while staying kind and playful.',
@@ -1692,7 +1758,7 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   const headline = buildGameDiaryChapterTitleFallback(game, {
     gameMode: game?.gameMode,
     winnerSeat: game?.winnerSeat || '',
-  }, facts);
+  }, facts, facts?.reservedChapterTitleKeys instanceof Set ? facts.reservedChapterTitleKeys : null);
   const summary = game?.scoreSummary || `${game?.gameModeLabel || 'Game night'} finished with plenty to talk about.`;
 
   const opening = `${summary} ${game?.name ? `${game.name} gave them ${Math.max(1, Number(game?.roundsPlayed || 0))} rounds of evidence, banter, and at least one answer that probably deserves to be quoted again later.` : ''}`.trim();
@@ -1722,7 +1788,9 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
 const buildLocalAmaDiaryWriteup = (facts = {}) => {
   const ama = facts?.ama || {};
   const snapshot = facts?.snapshot || null;
-  const headline = ama?.question ? buildAmaChapterTitle(ama.question, 0) : `${ama?.askedBy || 'Someone'} asked and ${ama?.answeredBy || 'someone'} answered`;
+  const baseHeadline = ama?.question ? buildAmaChapterTitle(ama.question, 0) : `${ama?.askedBy || 'Someone'} asked and ${ama?.answeredBy || 'someone'} answered`;
+  const reservedKeys = facts?.reservedChapterTitleKeys instanceof Set ? facts.reservedChapterTitleKeys : null;
+  const headline = polishUniqueDiaryChapterTitle(baseHeadline, reservedKeys, ama?.sourceId || '');
   const summary = `${ama?.askedBy || 'Jay or Kim'} asked "${truncateAiText(ama?.question || 'an AMA question', 90)}" and ${ama?.answeredBy || 'the other player'} answered with "${truncateAiText(ama?.answer || 'a very KJK-style answer', 90)}".`;
   const opening = `${ama?.itemTitle || 'AMA time'} delivered exactly what it was supposed to: a direct question, a real answer, and a little more context than either of them would have gotten from a scorecard alone.`;
   const middle = ama?.story
@@ -15442,22 +15510,28 @@ function ProductionApp() {
       ? buildLocalAmaDiaryWriteup(facts)
       : buildLocalGameDiaryWriteup(facts);
 
-    if (!geminiIsConfigured) return fallbackDraft;
+    const guardedFallback = applyReservedDiaryHeadlinePolish(fallbackDraft, facts);
+
+    if (!geminiIsConfigured) return guardedFallback;
 
     try {
+      const { reservedChapterTitleKeys: _reservedStrip, ...geminiFacts } = facts || {};
       const geminiDraft = await generateGeminiDiaryWriteup({
         sourceType,
         promptVersion: AI_DIARY_PROMPT_VERSION,
-        facts,
+        facts: geminiFacts,
         systemInstruction: buildAiDiarySystemInstruction(sourceType),
       });
-      return {
-        ...geminiDraft,
-        model: geminiDraft.model || geminiConfig.model || 'gemini',
-      };
+      return applyReservedDiaryHeadlinePolish(
+        {
+          ...geminiDraft,
+          model: geminiDraft.model || geminiConfig.model || 'gemini',
+        },
+        facts,
+      );
     } catch (error) {
       console.warn(`Gemini ${sourceType} diary generation failed. Falling back to local diary prose.`, error);
-      return fallbackDraft;
+      return guardedFallback;
     }
   }, []);
 
@@ -15510,12 +15584,18 @@ function ProductionApp() {
     )
       ? null
       : await loadGameDiarySignalsFromFirestore(gameSummary.id);
-    const facts = buildAiGameDiaryFacts({
-      gameSummary,
-      questionFeedback: Array.isArray(questionFeedbackOverride) ? questionFeedbackOverride : (fetchedSignals?.feedbackRows || []),
-      questionReplays: Array.isArray(questionReplaysOverride) ? questionReplaysOverride : (fetchedSignals?.replayRows || []),
-      quizAnswers: Array.isArray(quizAnswersOverride) ? quizAnswersOverride : (fetchedSignals?.quizRows || []),
-    });
+    const existingChapterTitles = collectExistingDiaryChapterTitlesList(diaryEntries, entryId, 40);
+    const reservedChapterTitleKeys = collectReservedDiaryChapterTitleKeys(diaryEntries, entryId);
+    const facts = {
+      ...buildAiGameDiaryFacts({
+        gameSummary,
+        questionFeedback: Array.isArray(questionFeedbackOverride) ? questionFeedbackOverride : (fetchedSignals?.feedbackRows || []),
+        questionReplays: Array.isArray(questionReplaysOverride) ? questionReplaysOverride : (fetchedSignals?.replayRows || []),
+        quizAnswers: Array.isArray(quizAnswersOverride) ? quizAnswersOverride : (fetchedSignals?.quizRows || []),
+      }),
+      existingChapterTitles,
+      reservedChapterTitleKeys,
+    };
     const analyticsSnapshot = facts?.game?.gameMode === 'quiz'
       ? null
       : buildDiaryAnalyticsSnapshot(calculateAnalytics(normalizeStoredRounds(gameSummary?.rounds || [])), []);
@@ -15616,7 +15696,7 @@ function ProductionApp() {
         error: message,
       };
     }
-  }, [buildAiDiaryDraft, diaryGameEntriesBySourceId, firestore, loadGameDiarySignalsFromFirestore]);
+  }, [buildAiDiaryDraft, diaryEntries, diaryGameEntriesBySourceId, firestore, loadGameDiarySignalsFromFirestore]);
 
   const ensureAmaDiaryWriteup = useCallback(async ({
     requestData = null,
@@ -15641,14 +15721,20 @@ function ProductionApp() {
       return { status: 'skipped', entryId: diaryEntryId };
     }
 
-    const facts = buildAiAmaDiaryFacts({
-      requestData,
-      answer,
-      story,
-      relatedCategories,
-      analyticsSnapshot,
-      attachments,
-    });
+    const existingChapterTitles = collectExistingDiaryChapterTitlesList(diaryEntries, diaryEntryId, 40);
+    const reservedChapterTitleKeys = collectReservedDiaryChapterTitleKeys(diaryEntries, diaryEntryId);
+    const facts = {
+      ...buildAiAmaDiaryFacts({
+        requestData,
+        answer,
+        story,
+        relatedCategories,
+        analyticsSnapshot,
+        attachments,
+      }),
+      existingChapterTitles,
+      reservedChapterTitleKeys,
+    };
 
     try {
       await setDoc(entryRef, {
@@ -15672,7 +15758,9 @@ function ProductionApp() {
         id: diaryEntryId,
         sourceType: 'ama',
         sourceId: requestData.id,
-        chapterTitle: existingEntry?.chapterTitle || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
+        chapterTitle: draft?.headline
+          || existingEntry?.chapterTitle
+          || buildAmaChapterTitle(requestData?.question || '', requestData?.chapterNumber || 0),
         aiDiaryStatus: 'ready',
         aiDiaryError: '',
         aiDiarySummary: draft?.summary || '',
@@ -15707,7 +15795,7 @@ function ProductionApp() {
         error: message,
       };
     }
-  }, [buildAiDiaryDraft, firestore]);
+  }, [buildAiDiaryDraft, diaryEntries, firestore]);
 
   const backfillMissingGameDiaryEntries = useCallback(async () => {
     setGameDiaryBackfillState({
