@@ -315,7 +315,7 @@ const QUIZ_SETUP_COUNTDOWN_MS = 3000;
 const QUIZ_REVEAL_FLASH_MS = 3000;
 const AI_CHAT_MESSAGE_LIMIT = 160;
 const AI_EVIDENCE_PREVIEW_LIMIT = 4;
-const AI_DIARY_PROMPT_VERSION = '2026-05-03-v1';
+const AI_DIARY_PROMPT_VERSION = '2026-05-04-v2';
 const AI_DIARY_GAME_HIGHLIGHT_LIMIT = 8;
 const AI_DIARY_SIGNAL_LIMIT = 4;
 const AI_SEARCH_STOPWORDS = new Set([
@@ -1495,13 +1495,80 @@ const buildGameDiaryAnalyticsSummary = (analytics = null) => {
   };
 };
 
-const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = null) => {
+const buildLegacyGameDiaryChapterTitle = (gameSummary = {}, scoreContext = null) => {
   const baseLabel = getDiaryGameModeLabel(gameSummary?.gameMode || 'standard');
   const winnerLabel = scoreContext?.winnerSeat ? PLAYER_LABEL[scoreContext.winnerSeat] || scoreContext.winnerSeat : 'Tie Game';
   if ((scoreContext?.gameMode || resolveGameMode(gameSummary?.gameMode || 'standard')) === 'quiz') {
     return scoreContext?.winnerSeat ? `${winnerLabel} took the ${baseLabel}` : `${baseLabel} ended all square`;
   }
   return scoreContext?.winnerSeat ? `${winnerLabel} edged the ${baseLabel}` : `${baseLabel} finished level`;
+};
+
+const buildStableDiaryHash = (seed = '') =>
+  [...String(seed || '')].reduce((total, character, index) => (
+    (total + (character.charCodeAt(0) * (index + 1))) % 2147483647
+  ), 0);
+
+const pickStableDiaryTitleCandidate = (seed = '', candidates = []) => {
+  const seen = new Set();
+  const uniqueCandidates = (candidates || [])
+    .map((candidate) => normalizeText(candidate))
+    .filter((candidate) => {
+      const key = normalizeIdentity(candidate);
+      if (!candidate || !key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  if (!uniqueCandidates.length) return '';
+  return uniqueCandidates[buildStableDiaryHash(seed) % uniqueCandidates.length];
+};
+
+const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = null, facts = null) => {
+  const gameMode = scoreContext?.gameMode || resolveGameMode(gameSummary?.gameMode || 'standard');
+  const winnerSeat = scoreContext?.winnerSeat || (gameSummary?.winner === 'jay' || gameSummary?.winner === 'kim' ? gameSummary.winner : '');
+  const winnerLabel = winnerSeat ? PLAYER_LABEL[winnerSeat] || winnerSeat : '';
+  const categories = [
+    ...(Array.isArray(gameSummary?.relatedCategories) ? gameSummary.relatedCategories : []),
+    ...((facts?.categories || []).map((entry) => entry?.label || entry?.category || '')),
+    gameSummary?.analyticsSnapshot?.summary?.mostCommonCategory || '',
+    gameSummary?.questionHighlights?.find((entry) => normalizeText(entry?.category || ''))?.category || '',
+  ]
+    .map((entry) => normalizeText(entry))
+    .filter(Boolean);
+  const categoryLabel = categories[0] || '';
+  const sharedLikedCount = Number(facts?.feedback?.sharedLiked?.length || gameSummary?.feedbackHighlights?.sharedLiked?.length || 0);
+  const splitOpinionCount = Number(facts?.feedback?.splitOpinions?.length || gameSummary?.feedbackHighlights?.splitOpinions?.length || 0);
+  const replayCount = Number(facts?.replayRequests?.length || gameSummary?.replayHighlights?.length || 0);
+  const quizTotals = scoreContext?.quizTotals || gameSummary?.quizTotals || null;
+  const finalScores = scoreContext?.finalScores || gameSummary?.finalScores || null;
+  const scoreGap = gameMode === 'quiz'
+    ? Math.abs(Number(quizTotals?.jay || 0) - Number(quizTotals?.kim || 0))
+    : Math.abs(Number(finalScores?.jay || 0) - Number(finalScores?.kim || 0));
+  const wasTie = !winnerSeat || normalizeIdentity(gameSummary?.winner || '') === 'tie';
+  const wasClose = Number.isFinite(scoreGap) && (gameMode === 'quiz' ? scoreGap <= 2 : scoreGap <= 10);
+  const seed = normalizeText(gameSummary?.sourceId || gameSummary?.gameId || gameSummary?.id || gameSummary?.joinCode || gameSummary?.gameName || categoryLabel || gameMode);
+  const specificCandidates = [];
+  const generalCandidates = [];
+
+  if (gameMode === 'quiz') {
+    if (wasTie) specificCandidates.push('Buzzers, Banter, Dead Heat', 'A Quiz Too Close to Call');
+    if (wasClose && winnerLabel) specificCandidates.push(`${winnerLabel} at the Buzzer`, `${winnerLabel}'s Photo Finish`);
+    if (winnerLabel) specificCandidates.push(`${winnerLabel} Beat the Clock`, `${winnerLabel}'s Fast Finish`);
+    if (categoryLabel) specificCandidates.push(`${categoryLabel} on the Clock`, `${categoryLabel} at Full Speed`);
+    generalCandidates.push('Fast Fingers, Full Hearts', 'Buzzers and Bragging Rights', 'Quick Fire and Cute Chaos');
+  } else {
+    if (wasTie) specificCandidates.push('Too Close to Call', 'A Perfect Little Deadlock');
+    if (wasClose && winnerLabel) specificCandidates.push(`${winnerLabel} by a Whisper`, `${winnerLabel}'s Narrow Escape`);
+    if (winnerLabel) specificCandidates.push(`${winnerLabel} Took the Edge`, `${winnerLabel}'s Little Triumph`);
+    if (replayCount) specificCandidates.push('The Replay Request Night', 'One More Round, Please');
+    if (categoryLabel) specificCandidates.push(`${categoryLabel} Took Center Stage`, `A ${categoryLabel} Plot Twist`);
+    if (sharedLikedCount) specificCandidates.push('A Shared Favourite Night', 'Soft Spots and Scorecards');
+    if (splitOpinionCount) specificCandidates.push('Split Opinions, Big Grins', 'A Little Debate, A Lot of Love');
+    generalCandidates.push('Penalty Points and Plot Twists', 'Confessions and Curveballs', 'Sweet Chaos on the Scoreboard');
+  }
+
+  return pickStableDiaryTitleCandidate(seed, [...specificCandidates, ...generalCandidates])
+    || buildLegacyGameDiaryChapterTitle(gameSummary, scoreContext);
 };
 
 const buildAiGameDiaryFacts = ({
@@ -1602,6 +1669,7 @@ const buildAiDiarySystemInstruction = (sourceType = 'game') => [
     ? 'Turn the supplied AMA facts into a funny, warm, affectionate diary chapter.'
     : 'Turn the supplied game facts into a funny, warm, affectionate diary chapter.',
   'Use only the supplied facts. Do not invent hidden events, feelings, scores, or questions.',
+  'Make the headline short, playful, and specific to this exact chapter. Vary the wording between chapters and avoid repetitive winner-template titles.',
   'Mention the result and winner if the facts include one.',
   'Explain what Jay and Kim learned about each other, what went well, and who struggled where, while staying kind and playful.',
   'Do not sound clinical, robotic, mean, or generic.',
@@ -1624,7 +1692,7 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   const headline = buildGameDiaryChapterTitleFallback(game, {
     gameMode: game?.gameMode,
     winnerSeat: game?.winnerSeat || '',
-  });
+  }, facts);
   const summary = game?.scoreSummary || `${game?.gameModeLabel || 'Game night'} finished with plenty to talk about.`;
 
   const opening = `${summary} ${game?.name ? `${game.name} gave them ${Math.max(1, Number(game?.roundsPlayed || 0))} rounds of evidence, banter, and at least one answer that probably deserves to be quoted again later.` : ''}`.trim();
@@ -15412,10 +15480,14 @@ function ProductionApp() {
     const canonicalCreatedAt = gameSummary?.endedAt || existingEntry?.endedAt || existingEntry?.createdAt || gameSummary?.createdAt || serverTimestamp();
     const canonicalEndedAt = gameSummary?.endedAt || existingEntry?.endedAt || null;
     const existingStatus = normalizeIdentity(existingEntry?.aiDiaryStatus || (existingEntry?.aiGenerated ? 'ready' : ''));
+    const scoreContext = buildGameDiaryScoreContext(gameSummary);
+    const needsPromptRefresh = normalizeText(existingEntry?.promptVersion || '') !== AI_DIARY_PROMPT_VERSION;
+    const usesLegacyTitle = normalizeText(existingEntry?.chapterTitle || '')
+      && normalizeText(existingEntry?.chapterTitle || '') === normalizeText(buildLegacyGameDiaryChapterTitle(existingEntry, scoreContext));
     if (existingEntry?.aiGenerated && existingStatus === 'ready') {
       const createdAtChanged = getRecordTime(existingEntry?.createdAt || 0) !== getRecordTime(canonicalCreatedAt || 0);
       const endedAtChanged = getRecordTime(existingEntry?.endedAt || 0) !== getRecordTime(canonicalEndedAt || 0);
-      if (createdAtChanged || endedAtChanged) {
+      if (!needsPromptRefresh && !usesLegacyTitle && (createdAtChanged || endedAtChanged)) {
         await setDoc(entryRef, {
           createdAt: canonicalCreatedAt,
           endedAt: canonicalEndedAt,
@@ -15423,13 +15495,14 @@ function ProductionApp() {
         }, { merge: true }).catch(() => null);
         return { status: 'updated', entryId };
       }
-      return { status: 'skipped', entryId };
+      if (!needsPromptRefresh && !usesLegacyTitle) {
+        return { status: 'skipped', entryId };
+      }
     }
     if (existingStatus === 'generating') {
       return { status: 'skipped', entryId };
     }
 
-    const scoreContext = buildGameDiaryScoreContext(gameSummary);
     const fetchedSignals = (
       Array.isArray(questionFeedbackOverride)
       && Array.isArray(questionReplaysOverride)
@@ -15459,7 +15532,7 @@ function ProductionApp() {
       gameName: facts?.game?.name || normalizeText(gameSummary?.name || gameSummary?.gameName || '') || `Game ${normalizeText(gameSummary?.joinCode || gameSummary?.id || '')}`,
       joinCode: facts?.game?.joinCode || normalizeText(gameSummary?.joinCode || ''),
       title: facts?.game?.name || normalizeText(gameSummary?.name || gameSummary?.gameName || '') || 'Game diary',
-      chapterTitle: existingEntry?.chapterTitle || buildGameDiaryChapterTitleFallback(gameSummary, scoreContext),
+      chapterTitle: buildGameDiaryChapterTitleFallback(existingEntry || gameSummary, scoreContext, facts),
       chapterState: 'completed',
       status: 'completed',
       question: '',

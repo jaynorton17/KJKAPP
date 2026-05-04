@@ -171,9 +171,10 @@ export const generateGeminiDiaryWriteup = async ({
   const prompt = [
     'Return strict JSON only.',
     'Use this schema exactly:',
-    '{"headline":"Short chapter title","summary":"One-sentence summary","writeup":"Diary prose with 2-4 short paragraphs"}',
+    '{"headline":"Short varied chapter title (about 2-6 words)","summary":"One-sentence summary","writeup":"Diary prose with 2-4 short paragraphs"}',
     `Source type: ${String(sourceType || 'game').trim() || 'game'}`,
     `Prompt version: ${String(promptVersion || '').trim() || 'unspecified'}`,
+    'Make the headline feel distinct to this specific chapter. Avoid repeating the same title structure from one chapter to the next.',
     `Facts JSON:\n${JSON.stringify(facts || {}, null, 2)}`,
   ].join('\n\n');
 
