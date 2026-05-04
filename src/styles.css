@@ -4257,6 +4257,10 @@ button:disabled {
   margin: 0;
 }
 
+.diary-theme-grid .filter-chip.is-on {
+  color: #111;
+}
+
 .diary-theme-chip {
   justify-content: center;
 }
