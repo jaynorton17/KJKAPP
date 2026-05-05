@@ -7,7 +7,7 @@ import {
   normalizeQuestionBankType,
   normalizeText,
 } from './game.js';
-import { QUESTION_TYPE_CONFIGS, normalizeQuestionType } from './questionTypes.js';
+import { DEFAULT_PLAYER_CHOICE_OPTIONS, QUESTION_TYPE_CONFIGS, normalizeQuestionType } from './questionTypes.js';
 
 const FIELD_ALIASES = {
   question: ['question', 'text', 'prompt', 'title'],
@@ -893,6 +893,151 @@ export const parseGoogleSheetThisOrThatImport = ({
 
   return {
     format: 'googleSheetThisOrThatCsv',
+    preview,
+    imports,
+    updates,
+    summary: {
+      total: rows.length,
+      imported: imports.length,
+      updated: updates.length,
+      duplicates,
+      invalid,
+      skipped,
+    },
+  };
+};
+
+export const parseGoogleSheetMostLikelyImport = ({
+  rawText,
+  existingQuestions = [],
+  overwriteExisting = true,
+  importedAt = new Date().toISOString(),
+  sourceLabel = '',
+}) => {
+  const parsed = parseCsvRows(rawText);
+  const rows = parsed.rows.map((row) => enrichMappedRow(row));
+  const seenQuestions = [];
+  const imports = [];
+  const updates = [];
+  let duplicates = 0;
+  let invalid = 0;
+  let skipped = 0;
+
+  const preview = rows.map((row, index) => {
+    const rawQuestion = normalizeText(row.question);
+    const rawCategory = normalizeText(row.category) || 'Most Likely To';
+    const isActive = parseBooleanish(row.active, true);
+    const errors = [];
+
+    if (!rawQuestion) errors.push('Missing question text');
+
+    const question = createQuestionTemplate({
+      ...row,
+      category: rawCategory,
+      roundType: 'multipleChoice',
+      answerType: 'multipleChoice',
+      defaultAnswerType: 'multipleChoice',
+      multipleChoiceOptions: DEFAULT_PLAYER_CHOICE_OPTIONS,
+      source: 'googleSheetMostLikely',
+      sourceLabel,
+      addedBy: row.addedBy,
+      importedFromGoogleSheet: true,
+      importDate: importedAt,
+      bankType: 'mostLikelyGame',
+    });
+
+    if (errors.length) {
+      invalid += 1;
+      return {
+        index,
+        question,
+        errors,
+        status: 'invalid',
+      };
+    }
+
+    if (!isActive) {
+      skipped += 1;
+      return {
+        index,
+        question,
+        errors,
+        status: 'inactive',
+      };
+    }
+
+    const duplicateImport = seenQuestions.some((seenQuestion) => matchesQuestionTemplate(seenQuestion, question));
+    if (duplicateImport) {
+      duplicates += 1;
+      return {
+        index,
+        question,
+        errors,
+        status: 'duplicate',
+      };
+    }
+    seenQuestions.push(question);
+
+    const existingMatch = findSheetQuestionMatch(
+      existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'mostLikelyGame'),
+      question,
+      { allowTypeMigration: overwriteExisting },
+    );
+    if (!existingMatch) {
+      imports.push(question);
+      return {
+        index,
+        question,
+        errors,
+        status: 'import',
+      };
+    }
+
+    if (!overwriteExisting) {
+      duplicates += 1;
+      return {
+        index,
+        question,
+        errors,
+        status: 'duplicate',
+        existingId: existingMatch.id,
+      };
+    }
+
+    const updatedQuestion = createQuestionTemplate({
+      ...existingMatch,
+      ...question,
+      id: existingMatch.id,
+      used: existingMatch.used,
+      timesPlayed: existingMatch.timesPlayed,
+      lastPlayedAt: existingMatch.lastPlayedAt,
+      createdAt: existingMatch.createdAt,
+      importDate: importedAt,
+    });
+
+    if (hasQuestionTemplateChanged(existingMatch, updatedQuestion)) {
+      updates.push(updatedQuestion);
+      return {
+        index,
+        question: updatedQuestion,
+        errors,
+        status: 'update',
+        existingId: existingMatch.id,
+      };
+    }
+
+    skipped += 1;
+    return {
+      index,
+      question: existingMatch,
+      errors,
+      status: 'skipped',
+      existingId: existingMatch.id,
+    };
+  });
+
+  return {
+    format: 'googleSheetMostLikelyCsv',
     preview,
     imports,
     updates,

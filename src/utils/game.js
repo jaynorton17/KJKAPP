@@ -589,6 +589,16 @@ export const normalizeQuestionBankType = (value = 'game') => {
   if (normalized === 'truefalsegame' || normalized === 'truefalse' || normalized === 'trueorfalse') {
     return 'trueFalseGame';
   }
+  if (
+    normalized === 'mostlikelygame'
+    || normalized === 'mostlikely'
+    || normalized === 'mostlikelyto'
+    || normalized === 'mostliketo'
+    || normalized === 'mostliketogame'
+    || normalized === 'whoismorelikely'
+  ) {
+    return 'mostLikelyGame';
+  }
   return 'game';
 };
 

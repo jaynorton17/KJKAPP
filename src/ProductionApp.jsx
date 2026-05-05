@@ -85,6 +85,7 @@ import {
   mergeHoldemStats,
 } from './utils/holdem.js';
 import {
+  DEFAULT_PLAYER_CHOICE_OPTIONS,
   extractEitherOrOptions,
   formatAnswerForDisplay,
   getDefaultOptionsForQuestionType,
@@ -107,6 +108,7 @@ import {
 } from './lib/gemini.js';
 import {
   parseGoogleSheetImport,
+  parseGoogleSheetMostLikelyImport,
   parseGoogleSheetQuizImport,
   parseGoogleSheetReference,
   parseGoogleSheetThisOrThatImport,
@@ -117,14 +119,48 @@ const seats = ['jay', 'kim'];
 const HOLDEM_GAME_MODE = 'holdem';
 const TRUE_FALSE_GAME_MODE = 'trueFalseGame';
 const THIS_OR_THAT_GAME_MODE = 'thisOrThatGame';
+const MOST_LIKELY_GAME_MODE = 'mostLikelyGame';
 const TRUE_FALSE_WRONG_PENALTY = 10;
 const TRUE_FALSE_UNANSWERED_PENALTY = 10;
 const TRUE_FALSE_TIMER_SECONDS = 8;
 const THIS_OR_THAT_WRONG_PENALTY = 10;
 const THIS_OR_THAT_UNANSWERED_PENALTY = 10;
+const MOST_LIKELY_DISAGREE_PENALTY = 5;
+const MOST_LIKELY_UNANSWERED_PENALTY = 10;
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
+const MOST_LIKELY_AUTO_SYNC_MIN_COUNT = 20;
 const categoryColorMap = CATEGORY_COLOR_MAP;
+const MOST_LIKELY_STARTER_QUESTIONS = [
+  'Who is most likely to turn a tiny plan into a full adventure?',
+  'Who is most likely to remember a tiny detail from weeks ago?',
+  'Who is most likely to start laughing first during a serious moment?',
+  'Who is most likely to send the risky text?',
+  'Who is most likely to pretend they are not competitive, then absolutely compete?',
+  'Who is most likely to choose the restaurant and still ask if the other one is sure?',
+  'Who is most likely to make the other person blush in public?',
+  'Who is most likely to keep a secret surprise until the perfect moment?',
+  'Who is most likely to overthink a compliment?',
+  'Who is most likely to make the first move after an argument?',
+  'Who is most likely to turn a normal night into a memory?',
+  'Who is most likely to notice when the other person is pretending to be fine?',
+  'Who is most likely to suggest one more round?',
+  'Who is most likely to get caught smiling at their phone?',
+  'Who is most likely to bring up an old inside joke at exactly the right time?',
+  'Who is most likely to say yes to a dare?',
+  'Who is most likely to secretly enjoy being teased?',
+  'Who is most likely to make the scoreboard personal?',
+  'Who is most likely to forgive quickly but remember the funny part forever?',
+  'Who is most likely to make the next date idea weirdly specific?',
+].map((question, index) => createQuestionTemplate({
+  id: `most-likely-starter-${index + 1}`,
+  question,
+  category: 'Most Likely To',
+  roundType: 'multipleChoice',
+  defaultAnswerType: 'multipleChoice',
+  multipleChoiceOptions: DEFAULT_PLAYER_CHOICE_OPTIONS,
+  bankType: MOST_LIKELY_GAME_MODE,
+}));
 const HOLDEM_READY_SESSION_STATUSES = new Set(['ready_to_deal', 'hand_complete']);
 const HOLDEM_SESSION_PROGRESS_RANK = {
   waiting_for_players: 0,
@@ -276,17 +312,21 @@ const resolveGameMode = (value = 'standard') =>
         ? TRUE_FALSE_GAME_MODE
         : value === THIS_OR_THAT_GAME_MODE
           ? THIS_OR_THAT_GAME_MODE
-        : 'standard';
+          : value === MOST_LIKELY_GAME_MODE
+            ? MOST_LIKELY_GAME_MODE
+            : 'standard';
 const isQuizGameMode = (value = 'standard') => resolveGameMode(value) === 'quiz';
 const isHoldemGameMode = (value = 'standard') => resolveGameMode(value) === HOLDEM_GAME_MODE;
 const isTrueFalseGameMode = (value = 'standard') => resolveGameMode(value) === TRUE_FALSE_GAME_MODE;
 const isThisOrThatGameMode = (value = 'standard') => resolveGameMode(value) === THIS_OR_THAT_GAME_MODE;
+const isMostLikelyGameMode = (value = 'standard') => resolveGameMode(value) === MOST_LIKELY_GAME_MODE;
 const isAutoScoredChoiceGameMode = (value = 'standard') =>
-  isTrueFalseGameMode(value) || isThisOrThatGameMode(value);
+  isTrueFalseGameMode(value) || isThisOrThatGameMode(value) || isMostLikelyGameMode(value);
 const getQuestionBankTypeForGameMode = (value = 'standard') => {
   const gameMode = resolveGameMode(value);
   if (gameMode === 'quiz') return 'quiz';
   if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThatGame';
+  if (gameMode === MOST_LIKELY_GAME_MODE) return 'mostLikelyGame';
   if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalseGame';
   return 'game';
 };
@@ -295,6 +335,7 @@ const ANALYTICS_GAME_SCORE_MODES = [
   { id: 'quiz', label: 'Quiz Score' },
   { id: 'trueFalse', label: 'True or False' },
   { id: 'thisOrThat', label: 'This or That' },
+  { id: 'mostLikely', label: 'Most Likely To' },
   { id: 'holdem', label: 'Texas Hold Em' },
 ];
 const getAnalyticsGameScoreModeId = (value = 'standard') => {
@@ -302,6 +343,7 @@ const getAnalyticsGameScoreModeId = (value = 'standard') => {
   if (gameMode === 'quiz') return 'quiz';
   if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalse';
   if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThat';
+  if (gameMode === MOST_LIKELY_GAME_MODE) return 'mostLikely';
   if (gameMode === HOLDEM_GAME_MODE) return 'holdem';
   return 'standard';
 };
@@ -1263,6 +1305,7 @@ const buildAiDiaryGenerationKey = (sourceType = '', sourceId = '') =>
 
 const getDiaryGameModeLabel = (gameMode = 'standard') => {
   if (resolveGameMode(gameMode) === 'quiz') return 'Quick Fire Quiz';
+  if (isMostLikelyGameMode(gameMode)) return 'Most Likely To';
   if (isThisOrThatGameMode(gameMode)) return 'This or That';
   if (isTrueFalseGameMode(gameMode)) return 'True or False';
   return 'Standard Game';
@@ -2038,11 +2081,13 @@ const buildAiEvidenceSnapshot = ({
       const roundLabel = round?.number ? `Round ${round.number}` : `Round ${index + 1}`;
       const createdAtMs = getRecordTime(round?.updatedAt || round?.submittedAt || game?.endedAt || game?.createdAt || 0);
       const metadataSearchText = buildAiMetadataSearchText(round);
-      const gameSourceLabel = gameMode === THIS_OR_THAT_GAME_MODE
-        ? 'This or That'
-        : gameMode === TRUE_FALSE_GAME_MODE
-          ? 'True or False'
-          : (game?.name || game?.joinCode || 'Game');
+      const gameSourceLabel = gameMode === MOST_LIKELY_GAME_MODE
+        ? 'Most Likely To'
+        : gameMode === THIS_OR_THAT_GAME_MODE
+          ? 'This or That'
+          : gameMode === TRUE_FALSE_GAME_MODE
+            ? 'True or False'
+            : (game?.name || game?.joinCode || 'Game');
       seats.forEach((seat) => {
         const ownAnswer = getAiRoundSeatOwnAnswer(round, seat);
         if (!ownAnswer) return;
@@ -3168,6 +3213,12 @@ const normalizeThisOrThatChoice = (value = '', round = {}) => {
   const matched = options.find((option) => normalizeText(option).toLowerCase() === normalized);
   return matched || '';
 };
+const getMostLikelyOptions = () => DEFAULT_PLAYER_CHOICE_OPTIONS;
+const normalizeMostLikelyChoice = (value = '') => {
+  const normalized = normalizeText(serialiseAnswerForQuestionType('multipleChoice', value)).toLowerCase();
+  if (!normalized) return '';
+  return getMostLikelyOptions().find((option) => normalizeText(option).toLowerCase() === normalized) || '';
+};
 const hasSubmittedRoundAnswer = (round = {}, seat = '') => Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''));
 const hasCompletedTrueFalseRoundAnswer = (round = {}, seat = '') =>
   Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.ownAnswer || ''))
@@ -3175,12 +3226,16 @@ const hasCompletedTrueFalseRoundAnswer = (round = {}, seat = '') =>
 const hasCompletedThisOrThatRoundAnswer = (round = {}, seat = '') =>
   Boolean(normalizeThisOrThatChoice(round?.answers?.[seat]?.ownAnswer || '', round))
   && Boolean(normalizeThisOrThatChoice(round?.answers?.[seat]?.guessedOther || '', round));
+const hasCompletedMostLikelyRoundAnswer = (round = {}, seat = '') =>
+  Boolean(normalizeMostLikelyChoice(round?.answers?.[seat]?.ownAnswer || ''));
 const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat = '') =>
   isTrueFalseGameMode(gameMode)
     ? hasCompletedTrueFalseRoundAnswer(round, seat)
     : isThisOrThatGameMode(gameMode)
       ? hasCompletedThisOrThatRoundAnswer(round, seat)
-      : hasSubmittedRoundAnswer(round, seat);
+      : isMostLikelyGameMode(gameMode)
+        ? hasCompletedMostLikelyRoundAnswer(round, seat)
+        : hasSubmittedRoundAnswer(round, seat);
 const buildTrueFalseRoundOutcome = (round = {}) => {
   const jayGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '');
   const kimGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '');
@@ -3267,6 +3322,45 @@ const buildThisOrThatRoundOutcome = (round = {}) => {
     kimMissingOwnAnswer,
     jayMissingResponse,
     kimMissingResponse,
+    jayPenalty,
+    kimPenalty,
+  };
+};
+const buildMostLikelyRoundOutcome = (round = {}) => {
+  const jayVote = normalizeMostLikelyChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
+  const kimVote = normalizeMostLikelyChoice(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '');
+  const jayMissingOwnAnswer = !Boolean(jayVote);
+  const kimMissingOwnAnswer = !Boolean(kimVote);
+  const bothVoted = Boolean(jayVote && kimVote);
+  const agreed = bothVoted && jayVote === kimVote;
+  const splitVote = bothVoted && jayVote !== kimVote;
+  const jayDefaultPenalty = jayMissingOwnAnswer
+    ? MOST_LIKELY_UNANSWERED_PENALTY
+    : splitVote
+      ? MOST_LIKELY_DISAGREE_PENALTY
+      : 0;
+  const kimDefaultPenalty = kimMissingOwnAnswer
+    ? MOST_LIKELY_UNANSWERED_PENALTY
+    : splitVote
+      ? MOST_LIKELY_DISAGREE_PENALTY
+      : 0;
+  const jayPenalty = Number.isFinite(Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay))
+    ? Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay)
+    : jayDefaultPenalty;
+  const kimPenalty = Number.isFinite(Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim))
+    ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
+    : kimDefaultPenalty;
+  return {
+    options: getMostLikelyOptions(),
+    jayVote,
+    kimVote,
+    jayMissingOwnAnswer,
+    kimMissingOwnAnswer,
+    jayMissingResponse: jayMissingOwnAnswer,
+    kimMissingResponse: kimMissingOwnAnswer,
+    bothVoted,
+    agreed,
+    splitVote,
     jayPenalty,
     kimPenalty,
   };
@@ -4189,10 +4283,12 @@ function LobbyScreen({
   onSyncQuestionBank,
   onSyncQuizBank,
   onSyncThisOrThatBank,
+  onSyncMostLikelyBank,
   onSyncTrueFalseBank,
   onImportQuestions,
   onImportQuizQuestions,
   onImportThisOrThatQuestions,
+  onImportMostLikelyQuestions,
   onImportTrueFalseQuestions,
   onResumeGame,
   onViewSummary,
@@ -4224,6 +4320,9 @@ function LobbyScreen({
   thisOrThatQuestionCount,
   usedThisOrThatQuestionCount,
   remainingThisOrThatQuestionCount,
+  mostLikelyQuestionCount,
+  usedMostLikelyQuestionCount,
+  remainingMostLikelyQuestionCount,
   trueFalseQuestionCount,
   usedTrueFalseQuestionCount,
   remainingTrueFalseQuestionCount,
@@ -4277,6 +4376,8 @@ function LobbyScreen({
   const [trueFalseQuestionCountDraft, setTrueFalseQuestionCountDraft] = useState('10');
   const [thisOrThatCreateCodeDraft, setThisOrThatCreateCodeDraft] = useState('');
   const [thisOrThatQuestionCountDraft, setThisOrThatQuestionCountDraft] = useState('10');
+  const [mostLikelyCreateCodeDraft, setMostLikelyCreateCodeDraft] = useState('');
+  const [mostLikelyQuestionCountDraft, setMostLikelyQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
   const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
   const [flippedLobbyTiles, setFlippedLobbyTiles] = useState(() => ({
@@ -4284,6 +4385,7 @@ function LobbyScreen({
     quiz: false,
     trueFalse: false,
     thisOrThat: false,
+    mostLikely: false,
     holdem: false,
   }));
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
@@ -4323,6 +4425,7 @@ function LobbyScreen({
     kim: String(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0)),
   }), [playerAccounts?.jay?.lifetimePenaltyPoints, playerAccounts?.kim?.lifetimePenaltyPoints]);
   const thisOrThatReadyCount = Number(thisOrThatQuestionCount || 0);
+  const mostLikelyReadyCount = Number(mostLikelyQuestionCount || 0);
   const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
   const lobbyChatUnreadCount = useChatUnreadCount(
     lobbyChatMessages,
@@ -4384,6 +4487,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: thisOrThatQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateMostLikelyGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: mostLikelyCreateCodeDraft,
+      gameName: 'Most Likely To',
+      mode: 'random',
+      gameMode: MOST_LIKELY_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: mostLikelyQuestionCountDraft,
       ...(sendInvite ? { sendInvite: true } : {}),
     });
 
@@ -4920,6 +5035,8 @@ function LobbyScreen({
     ? quizQuestionCount
     : questionBankSegment === 'thisOrThat'
       ? thisOrThatQuestionCount
+    : questionBankSegment === 'mostLikely'
+      ? mostLikelyQuestionCount
     : questionBankSegment === 'trueFalse'
       ? trueFalseQuestionCount
       : questionCount;
@@ -4927,6 +5044,8 @@ function LobbyScreen({
     ? usedQuizQuestionCount
     : questionBankSegment === 'thisOrThat'
       ? usedThisOrThatQuestionCount
+    : questionBankSegment === 'mostLikely'
+      ? usedMostLikelyQuestionCount
     : questionBankSegment === 'trueFalse'
       ? usedTrueFalseQuestionCount
       : usedQuestionCount;
@@ -4934,6 +5053,8 @@ function LobbyScreen({
     ? remainingQuizQuestionCount
     : questionBankSegment === 'thisOrThat'
       ? remainingThisOrThatQuestionCount
+    : questionBankSegment === 'mostLikely'
+      ? remainingMostLikelyQuestionCount
     : questionBankSegment === 'trueFalse'
       ? remainingTrueFalseQuestionCount
       : remainingQuestionCount;
@@ -4941,6 +5062,8 @@ function LobbyScreen({
     ? onSyncQuizBank
     : questionBankSegment === 'thisOrThat'
       ? onSyncThisOrThatBank
+    : questionBankSegment === 'mostLikely'
+      ? onSyncMostLikelyBank
     : questionBankSegment === 'trueFalse'
       ? onSyncTrueFalseBank
       : onSyncQuestionBank;
@@ -4948,6 +5071,8 @@ function LobbyScreen({
     ? onImportQuizQuestions
     : questionBankSegment === 'thisOrThat'
       ? onImportThisOrThatQuestions
+    : questionBankSegment === 'mostLikely'
+      ? onImportMostLikelyQuestions
     : questionBankSegment === 'trueFalse'
       ? onImportTrueFalseQuestions
       : onImportQuestions;
@@ -4955,6 +5080,8 @@ function LobbyScreen({
     ? 'Quiz Question Bank'
     : questionBankSegment === 'thisOrThat'
       ? 'This or That Bank'
+    : questionBankSegment === 'mostLikely'
+      ? 'Most Likely To Bank'
     : questionBankSegment === 'trueFalse'
       ? 'True or False Bank'
       : 'Question Bank';
@@ -4999,6 +5126,7 @@ function LobbyScreen({
     { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
     { id: 'trueFalse', label: 'True or False', image: trueOrFalseTileImage },
     { id: 'thisOrThat', label: 'This or That', image: thisOrThatTileImage },
+    { id: 'mostLikely', label: 'Most Likely To', image: thisOrThatTileImage },
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
 
@@ -5049,6 +5177,7 @@ function LobbyScreen({
   const isQuizTileFlipped = Boolean(flippedLobbyTiles.quiz);
   const isTrueFalseTileFlipped = Boolean(flippedLobbyTiles.trueFalse);
   const isThisOrThatTileFlipped = Boolean(flippedLobbyTiles.thisOrThat);
+  const isMostLikelyTileFlipped = Boolean(flippedLobbyTiles.mostLikely);
   const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
   const getLobbyTileImageStyle = (imageUrl) => ({
     '--lobby-tile-image': lobbyTileImagesEnabled && imageUrl ? `url("${imageUrl}")` : 'none',
@@ -5705,6 +5834,97 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(4) !== 'center'}
                   >
                     <section
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--most-likely"
+                      style={getLobbyTileImageStyle(thisOrThatTileImage)}
+                    >
+                      <div className={`lobby-image-tile-flip ${isMostLikelyTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'mostLikely',
+                          eyebrow: 'Vote Match',
+                          title: 'Most Likely To',
+                          statusText: `${mostLikelyReadyCount} ready`,
+                          description: 'Both players vote Jay, Kim, Both, or Neither for each prompt. Matching votes stay clear; split votes add a small automatic penalty.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={mostLikelyQuestionCountDraft}
+                                onChange={(event) => setMostLikelyQuestionCountDraft(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
+                          onCreateAndInvite: () => handleCreateMostLikelyGame(true),
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isMostLikelyTileFlipped} aria-hidden={!isMostLikelyTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('mostLikely', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Vote Match</p>
+                              <h2>Most Likely To</h2>
+                            </div>
+                            <span className="status-pill">{mostLikelyReadyCount} ready</span>
+                          </div>
+                          <p className="panel-copy">Each player locks one vote: Jay, Kim, Both, or Neither. Matching votes add 0. Split votes add +5 to both players automatically.</p>
+                          <label className="field">
+                            <span>Most Likely To Code</span>
+                            <input
+                              value={mostLikelyCreateCodeDraft}
+                              onChange={(event) => setMostLikelyCreateCodeDraft(normalizeJoinCode(event.target.value))}
+                              placeholder="Optional"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Number of Questions</span>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min="1"
+                              value={mostLikelyQuestionCountDraft}
+                              onChange={(event) => setMostLikelyQuestionCountDraft(event.target.value)}
+                              placeholder="10"
+                            />
+                          </label>
+                          <p className="field-note">The first vote locks immediately. Missing a vote adds +10.</p>
+                          <div className="button-row">
+                            <Button
+                              className="primary-button compact"
+                              onClick={() => handleCreateMostLikelyGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create Most Likely To
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateMostLikelyGame(true)}
+                              disabled={isBusy}
+                            >
+                              Create + Invite
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(5)}`}
+                    inert={getLobbyCarouselPosition(5) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(5) !== 'center'}
+                  >
+                    <section
                       className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
                       style={getLobbyTileImageStyle(pokerTileImage)}
                     >
@@ -5827,6 +6047,9 @@ function LobbyScreen({
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'thisOrThat' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('thisOrThat')}>
                   This or That
                 </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'mostLikely' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('mostLikely')}>
+                  Most Likely To
+                </button>
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('trueFalse')}>
                   True or False
                 </button>
@@ -5865,6 +6088,8 @@ function LobbyScreen({
                       ? 'True or False Questions'
                       : questionBankSegment === 'thisOrThat'
                         ? 'This or That Questions'
+                      : questionBankSegment === 'mostLikely'
+                        ? 'Most Likely To Questions'
                         : 'New Questions'
                   }`}
                 </Button>
@@ -8268,6 +8493,90 @@ const ThisOrThatAutoAnswerEntry = memo(ThisOrThatAutoAnswerEntryBase, (previous,
     && JSON.stringify(getThisOrThatOptions(previous.currentRound || {})) === JSON.stringify(getThisOrThatOptions(next.currentRound || {}));
 });
 
+function MostLikelyLiveStatus({ revealIsReady }) {
+  if (revealIsReady) return null;
+
+  return (
+    <div className="quiz-live-status true-false-live-status">
+      <div className="quiz-status-grid">
+        <article className="quiz-status-card">
+          <span>Mode</span>
+          <strong>Most Likely To</strong>
+        </article>
+        <article className="quiz-status-card">
+          <span>Scoring</span>
+          <strong>0 / +5</strong>
+        </article>
+      </div>
+      <p className="field-note true-false-answer-note">
+        Vote Jay, Kim, Both, or Neither. First tap locks your vote.
+      </p>
+    </div>
+  );
+}
+
+function MostLikelyAutoAnswerEntryBase({
+  currentRound,
+  viewerSeat,
+  onLockAnswerField,
+  isBusy = false,
+  embedded = false,
+}) {
+  const currentPlayer = viewerSeat === 'kim' ? 'kim' : 'jay';
+  const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
+  const ownAnswer = normalizeMostLikelyChoice(currentPlayerAnswer?.ownAnswer || '');
+  const options = getMostLikelyOptions();
+  const isRoundOpen = (currentRound?.status || 'open') === 'open';
+
+  return (
+    <div className={`room-answer-entry room-answer-entry--true-false room-answer-entry--most-likely ${embedded ? 'room-answer-entry--embedded' : ''}`}>
+      <div className="true-false-answer-header">
+        <p>Vote who is most likely. Your first tap locks.</p>
+        <span className="status-pill">{ownAnswer ? `Locked: ${ownAnswer}` : 'First tap locks'}</span>
+      </div>
+      <div className={`live-round-grid live-round-grid--single ${embedded ? 'live-round-grid--embedded' : ''}`}>
+        <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
+          <div className="mini-heading">
+            <div>
+              <span>Your Vote</span>
+              <h3>Who is most likely?</h3>
+            </div>
+          </div>
+          <div className={`choice-grid choice-grid--four ${embedded ? 'choice-grid--embedded' : ''}`} role="list" aria-label="Most likely vote">
+            {options.map((option) => (
+              <button
+                key={`most-likely-${option}`}
+                type="button"
+                className={`choice-button ${ownAnswer === option ? 'is-on' : ''} ${ownAnswer ? 'is-locked' : ''}`}
+                onClick={() => onLockAnswerField?.('ownAnswer', option)}
+                disabled={isBusy || !isRoundOpen || Boolean(ownAnswer)}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+          <p className="field-note true-false-answer-note">
+            {ownAnswer ? `Locked: ${ownAnswer}` : 'Choose one vote.'}
+          </p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+const MostLikelyAutoAnswerEntry = memo(MostLikelyAutoAnswerEntryBase, (previous, next) => {
+  const previousPlayer = previous.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const nextPlayer = next.viewerSeat === 'kim' ? 'kim' : 'jay';
+  const previousAnswer = previous.currentRound?.answers?.[previousPlayer] || {};
+  const nextAnswer = next.currentRound?.answers?.[nextPlayer] || {};
+  return stableRoundIdentityKey(previous.currentRound || {}) === stableRoundIdentityKey(next.currentRound || {})
+    && previous.viewerSeat === next.viewerSeat
+    && previous.isBusy === next.isBusy
+    && previous.embedded === next.embedded
+    && previousAnswer.ownAnswer === nextAnswer.ownAnswer
+    && previous.currentRound?.status === next.currentRound?.status;
+});
+
 function RoomRevealPlayerCard({
   game,
   viewerSeat,
@@ -8278,6 +8587,7 @@ function RoomRevealPlayerCard({
   isQuizGame = false,
   isTrueFalseGame = false,
   isThisOrThatGame = false,
+  isMostLikelyGame = false,
   totalQuizPoints = 0,
 }) {
   const playerSeat = seat === 'kim' ? 'kim' : 'jay';
@@ -8484,6 +8794,64 @@ function RoomRevealPlayerCard({
       </article>
     );
   }
+  if (isMostLikelyGame) {
+    const outcome = buildMostLikelyRoundOutcome(currentRound || {});
+    const playerVote = playerSeat === 'jay' ? outcome.jayVote : outcome.kimVote;
+    const otherVote = playerSeat === 'jay' ? outcome.kimVote : outcome.jayVote;
+    const missingOwnAnswer = playerSeat === 'jay' ? outcome.jayMissingOwnAnswer : outcome.kimMissingOwnAnswer;
+    const penalty = playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty;
+    const matchTone = missingOwnAnswer
+      ? 'neutral'
+      : outcome.agreed
+        ? 'success'
+        : 'warning';
+    const matchLabel = missingOwnAnswer
+      ? `No vote locked: +${formatScore(MOST_LIKELY_UNANSWERED_PENALTY)}`
+      : outcome.agreed
+        ? 'Matched vote'
+        : 'Split vote';
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>{`${playerLabel}'s vote`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{playerVote || 'No vote submitted'}</strong>
+            </div>
+          </div>
+
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>{`${oppositeLabel}'s vote`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{otherVote || 'No vote submitted'}</strong>
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
+              {matchLabel}
+            </small>
+          </div>
+        </div>
+
+        <div className="room-reveal-score-strip">
+          <div>
+            <span>Round penalty</span>
+            <strong>{formatScore(penalty || roundPenalty || 0)}</strong>
+          </div>
+          <div>
+            <span>{missingOwnAnswer ? 'Missed-vote penalty included' : 'Total penalty'}</span>
+            <strong>{formatScore(totalPenalty || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
   const actualAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
   const guessedAnswerRaw = currentRound?.answers?.[oppositeSeat]?.guessedOther || '';
   const actualAnswer = formatRoundAnswerValue(actualAnswerRaw, currentRound?.roundType);
@@ -8547,6 +8915,7 @@ function RoomActiveFrameBase({
   onSubmitAnswer,
   onLockTrueFalseAnswer,
   onLockThisOrThatAnswer,
+  onLockMostLikelyAnswer,
   onMarkReady,
   onRequestQuizOverride,
   onRespondQuizOverride,
@@ -8581,8 +8950,9 @@ function RoomActiveFrameBase({
     isTrueFalseGameMode(game?.gameMode || 'standard')
     && normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard')) === 'trueFalseGame';
   const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
+  const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
   const penaltyPreview = useMemo(
-    () => ((isTrueFalseGame || isThisOrThatGame)
+    () => ((isTrueFalseGame || isThisOrThatGame || isMostLikelyGame)
       ? {
           jay: parseNumber(currentRound?.penalties?.jay, 0),
           kim: parseNumber(currentRound?.penalties?.kim, 0),
@@ -8591,7 +8961,7 @@ function RoomActiveFrameBase({
           jay: parseNumber(penaltyDraft?.jay, 0),
           kim: parseNumber(penaltyDraft?.kim, 0),
         }),
-    [currentRound?.penalties?.jay, currentRound?.penalties?.kim, isTrueFalseGame, isThisOrThatGame, penaltyDraft?.jay, penaltyDraft?.kim],
+    [currentRound?.penalties?.jay, currentRound?.penalties?.kim, isMostLikelyGame, isTrueFalseGame, isThisOrThatGame, penaltyDraft?.jay, penaltyDraft?.kim],
   );
   const previewRoundResult = useMemo(() => {
     if (!revealIsReady || !currentRound) return null;
@@ -8632,7 +9002,7 @@ function RoomActiveFrameBase({
       ? 'Waiting'
       : 'Answering';
   const showReplayAction = (game?.gameMode || 'standard') === 'standard' && (game?.questionBankType || 'game') === 'game';
-  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame;
+  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame && !isMostLikelyGame;
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
   const viewerOverrideRequest = currentRound?.overrideRequests?.[currentPlayer] || null;
@@ -8656,6 +9026,10 @@ function RoomActiveFrameBase({
     () => (isThisOrThatGame ? buildThisOrThatRoundOutcome(currentRound || {}) : null),
     [currentRound, isThisOrThatGame],
   );
+  const mostLikelyOutcome = useMemo(
+    () => (isMostLikelyGame ? buildMostLikelyRoundOutcome(currentRound || {}) : null),
+    [currentRound, isMostLikelyGame],
+  );
   const trueFalseSummaryLabel = !trueFalseOutcome
     ? ''
     : trueFalseOutcome.jayCorrect && trueFalseOutcome.kimCorrect
@@ -8670,11 +9044,18 @@ function RoomActiveFrameBase({
       : thisOrThatOutcome.jayMissingResponse || thisOrThatOutcome.kimMissingResponse
         ? 'Missed answers triggered penalties'
         : 'Automatic penalties applied';
+  const mostLikelySummaryLabel = !mostLikelyOutcome
+    ? ''
+    : mostLikelyOutcome.agreed
+      ? 'Both players agreed'
+      : mostLikelyOutcome.jayMissingResponse || mostLikelyOutcome.kimMissingResponse
+        ? 'Missed votes triggered penalties'
+        : 'Split vote';
 
   return (
-    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''}`} aria-label="Active round scoreboard">
+    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''}`} aria-label="Active round scoreboard">
       <div className="scoreboard-sheen" aria-hidden="true" />
-      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''}`}>
+      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-stage--most-likely' : ''}`}>
         <header className="room-active-header">
           <div>
             <span className="scoreboard-kicker">{revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
@@ -8689,6 +9070,7 @@ function RoomActiveFrameBase({
         {isQuizGame ? <QuizLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isTrueFalseGame ? <TrueFalseLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isThisOrThatGame ? <ThisOrThatLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
+        {isMostLikelyGame ? <MostLikelyLiveStatus revealIsReady={revealIsReady} /> : null}
         {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer ? (
           <div className="quiz-override-strip">
             <span className={`quiz-override-status ${viewerQuizResult === 'correct' ? 'is-correct' : 'is-incorrect'}`}>
@@ -8788,6 +9170,14 @@ function RoomActiveFrameBase({
                 onLockAnswerField={onLockThisOrThatAnswer}
                 isBusy={isBusy}
               />
+            ) : isMostLikelyGame ? (
+              <MostLikelyAutoAnswerEntry
+                embedded
+                viewerSeat={currentPlayer}
+                currentRound={currentRound}
+                onLockAnswerField={onLockMostLikelyAnswer}
+                isBusy={isBusy}
+              />
             ) : (
               <QuestionAnswerEntry
                 gameId={game?.id || ''}
@@ -8856,6 +9246,7 @@ function RoomActiveFrameBase({
                 isQuizGame={isQuizGame}
                 isTrueFalseGame={isTrueFalseGame}
                 isThisOrThatGame={isThisOrThatGame}
+                isMostLikelyGame={isMostLikelyGame}
                 totalQuizPoints={quizRevealTotals[currentPlayer]}
               />
 
@@ -8925,6 +9316,24 @@ function RoomActiveFrameBase({
                       {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
                     </small>
                   </>
+                ) : isMostLikelyGame ? (
+                  <>
+                    <span>Round Result</span>
+                    <strong>{mostLikelySummaryLabel}</strong>
+                    <p>
+                      {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])}
+                      {' · '}
+                      {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
+                    </p>
+                    <small>
+                      Matching votes add 0. Split votes add {formatScore(MOST_LIKELY_DISAGREE_PENALTY)}. Missing a vote adds {formatScore(MOST_LIKELY_UNANSWERED_PENALTY)}.
+                    </small>
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
                 ) : (
                   <>
                     <span>Round Result</span>
@@ -8956,6 +9365,7 @@ function RoomActiveFrameBase({
                 isQuizGame={isQuizGame}
                 isTrueFalseGame={isTrueFalseGame}
                 isThisOrThatGame={isThisOrThatGame}
+                isMostLikelyGame={isMostLikelyGame}
                 totalQuizPoints={quizRevealTotals[otherPlayer]}
               />
             </div>
@@ -12581,6 +12991,7 @@ function GameRoomView({
   onSubmitAnswer,
   onLockTrueFalseAnswer,
   onLockThisOrThatAnswer,
+  onLockMostLikelyAnswer,
   onMarkReady,
   onAddQuestion,
   onSyncSheet,
@@ -12661,17 +13072,22 @@ function GameRoomView({
   const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
   const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
   const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
+  const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
   const bothPlayersSubmitted = isTrueFalseGame
     ? Boolean(hasCompletedTrueFalseRoundAnswer(currentRound, 'jay') && hasCompletedTrueFalseRoundAnswer(currentRound, 'kim'))
     : isThisOrThatGame
       ? Boolean(hasCompletedThisOrThatRoundAnswer(currentRound, 'jay') && hasCompletedThisOrThatRoundAnswer(currentRound, 'kim'))
-    : Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
+    : isMostLikelyGame
+      ? Boolean(hasCompletedMostLikelyRoundAnswer(currentRound, 'jay') && hasCompletedMostLikelyRoundAnswer(currentRound, 'kim'))
+      : Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
   const revealIsReady = bothPlayersSubmitted || currentRound?.status === 'reveal';
   const submissionState = isTrueFalseGame
     ? (hasCompletedTrueFalseRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
     : isThisOrThatGame
       ? (hasCompletedThisOrThatRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
-    : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
+    : isMostLikelyGame
+      ? (hasCompletedMostLikelyRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
+      : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
   const submittedBySeat = {
     jay: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'jay'),
     kim: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'kim'),
@@ -12957,8 +13373,8 @@ function GameRoomView({
     if (role !== 'host') return null;
 
     if (currentRound && revealIsReady && !isQuizGame) {
-      if (isTrueFalseGame || isThisOrThatGame) {
-        const modeLabel = isThisOrThatGame ? 'This or That' : 'True or False';
+      if (isTrueFalseGame || isThisOrThatGame || isMostLikelyGame) {
+        const modeLabel = isMostLikelyGame ? 'Most Likely To' : isThisOrThatGame ? 'This or That' : 'True or False';
         return (
           <section className="mobile-entry-panel mobile-round-panel">
             <section className="panel room-status-panel room-status-panel--host-mobile">
@@ -13183,6 +13599,7 @@ function GameRoomView({
 	                  onSubmitAnswer={onSubmitAnswer}
 	                  onLockTrueFalseAnswer={onLockTrueFalseAnswer}
                     onLockThisOrThatAnswer={onLockThisOrThatAnswer}
+                    onLockMostLikelyAnswer={onLockMostLikelyAnswer}
 	                  onMarkReady={onMarkReady}
 	                  onRequestQuizOverride={onRequestQuizOverride}
 	                  onRespondQuizOverride={onRespondQuizOverride}
@@ -13427,11 +13844,11 @@ function GameRoomView({
             </div>
             {role === 'host' ? (
               isQuizGame ? null : currentRound && revealIsReady ? (
-                isTrueFalseGame || isThisOrThatGame ? (
+                isTrueFalseGame || isThisOrThatGame || isMostLikelyGame ? (
                   <section className="panel host-queue-panel room-status-panel">
                     <div className="panel-heading">
                       <div>
-                        <p className="eyebrow">{isThisOrThatGame ? 'This or That' : 'True or False'}</p>
+                        <p className="eyebrow">{isMostLikelyGame ? 'Most Likely To' : isThisOrThatGame ? 'This or That' : 'True or False'}</p>
                         <h2>Automatic Scoring</h2>
                       </div>
                     </div>
@@ -13513,6 +13930,7 @@ function GameRoomView({
                   onSubmitAnswer={onSubmitAnswer}
                   onLockTrueFalseAnswer={onLockTrueFalseAnswer}
                   onLockThisOrThatAnswer={onLockThisOrThatAnswer}
+                  onLockMostLikelyAnswer={onLockMostLikelyAnswer}
                   onMarkReady={onMarkReady}
 	              onRequestQuizOverride={onRequestQuizOverride}
 	              onRespondQuizOverride={onRespondQuizOverride}
@@ -13685,6 +14103,7 @@ function ProductionApp() {
   const leavePendingGameRef = useRef('');
   const autoSheetImportAttemptedRef = useRef(false);
   const autoThisOrThatSheetSyncInFlightRef = useRef(false);
+  const autoMostLikelySheetSyncInFlightRef = useRef(false);
   const autoTrueFalseSheetSyncInFlightRef = useRef(false);
   const roomLoadTimeoutRef = useRef(null);
   const firestoreCooldownTimerRef = useRef(null);
@@ -14848,6 +15267,7 @@ function ProductionApp() {
     () => dedupeQuestionsById([
       ...bankQuestions,
       ...STARTER_QUESTIONS.map((question) => createQuestionTemplate(question)),
+      ...MOST_LIKELY_STARTER_QUESTIONS,
     ]),
     [bankQuestions],
   );
@@ -15014,6 +15434,10 @@ function ProductionApp() {
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'thisOrThatGame'),
     [bankQuestions],
   );
+  const mostLikelyBankQuestions = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'mostLikelyGame'),
+    [bankQuestions],
+  );
   const trueFalseBankQuestions = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
     [bankQuestions],
@@ -15021,6 +15445,10 @@ function ProductionApp() {
   const standardSelectableQuestions = useMemo(
     () => (gameBankQuestions.length ? gameBankQuestions : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))),
     [gameBankQuestions],
+  );
+  const mostLikelySelectableQuestions = useMemo(
+    () => (mostLikelyBankQuestions.length ? mostLikelyBankQuestions : MOST_LIKELY_STARTER_QUESTIONS),
+    [mostLikelyBankQuestions],
   );
   const lobbyCategoryOptions = useMemo(
     () => deriveCategories(gameBankQuestions, lobbyRounds, DEFAULT_CATEGORIES).map((category) => category.name).filter(Boolean),
@@ -15056,6 +15484,7 @@ function ProductionApp() {
   const bankCount = gameBankQuestions.length;
   const quizBankCount = quizBankQuestions.length;
   const thisOrThatBankCount = thisOrThatBankQuestions.length;
+  const mostLikelyBankCount = mostLikelySelectableQuestions.length;
   const trueFalseBankCount = trueFalseBankQuestions.length;
   const trackedGameEntries = useMemo(() => {
     if (!game?.id || isLocalTestGame(game)) return enrichedGameLibrary;
@@ -15084,6 +15513,10 @@ function ProductionApp() {
   const thisOrThatQuestionIds = useMemo(
     () => new Set(thisOrThatBankQuestions.map((question) => question.id).filter(Boolean)),
     [thisOrThatBankQuestions],
+  );
+  const mostLikelyQuestionIds = useMemo(
+    () => new Set(mostLikelySelectableQuestions.map((question) => question.id).filter(Boolean)),
+    [mostLikelySelectableQuestions],
   );
   const trueFalseQuestionIds = useMemo(
     () => new Set(trueFalseBankQuestions.map((question) => question.id).filter(Boolean)),
@@ -15186,6 +15619,14 @@ function ProductionApp() {
     if (!thisOrThatQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => thisOrThatQuestionIds.has(questionId)));
   }, [pairPlayedQuestionIds, trackedGameEntries, thisOrThatQuestionIds]);
+  const trackedUsedMostLikelyQuestionIds = useMemo(() => {
+    const trackedIds = mergeUniqueIds(
+      pairPlayedQuestionIds,
+      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!mostLikelyQuestionIds.size) return new Set(trackedIds);
+    return new Set(trackedIds.filter((questionId) => mostLikelyQuestionIds.has(questionId)));
+  }, [pairPlayedQuestionIds, trackedGameEntries, mostLikelyQuestionIds]);
   const playedThisOrThatQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -15197,6 +15638,17 @@ function ProductionApp() {
   }, [trackedGameEntries, thisOrThatQuestionIds]);
   const usedThisOrThatQuestionCount = playedThisOrThatQuestionIds.size;
   const remainingThisOrThatQuestionCount = Math.max(0, thisOrThatBankCount - usedThisOrThatQuestionCount);
+  const playedMostLikelyQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'mostLikelyGame')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!mostLikelyQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => mostLikelyQuestionIds.has(questionId)));
+  }, [trackedGameEntries, mostLikelyQuestionIds]);
+  const usedMostLikelyQuestionCount = playedMostLikelyQuestionIds.size;
+  const remainingMostLikelyQuestionCount = Math.max(0, mostLikelyBankCount - usedMostLikelyQuestionCount);
   const playedTrueFalseQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -15220,8 +15672,8 @@ function ProductionApp() {
   }, [standardSelectableQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
   const allPlayedQuestionIds = useMemo(
-    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedTrueFalseQuestionIds]),
-    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedTrueFalseQuestionIds],
+    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedMostLikelyQuestionIds, ...playedTrueFalseQuestionIds]),
+    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedMostLikelyQuestionIds, playedTrueFalseQuestionIds],
   );
   const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
@@ -15298,6 +15750,7 @@ function ProductionApp() {
     const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
     if (normalizedTargetBankType === 'quiz') return quizBankQuestions;
     if (normalizedTargetBankType === 'thisOrThatGame') return thisOrThatBankQuestions;
+    if (normalizedTargetBankType === 'mostLikelyGame') return mostLikelySelectableQuestions;
     if (normalizedTargetBankType === 'trueFalseGame') return trueFalseBankQuestions;
     return gameBankQuestions;
   };
@@ -15305,6 +15758,11 @@ function ProductionApp() {
   const ensureQuestionBankReadyForQueue = async (targetBankType = 'game') => {
     const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
     if (normalizedTargetBankType === 'game' && standardSelectableQuestions.length) return;
+    const shouldTrySheetBeforeFallback = normalizedTargetBankType === 'mostLikelyGame' && !mostLikelyBankQuestions.length;
+    if (shouldTrySheetBeforeFallback) {
+      await seedBankIfNeeded(normalizedTargetBankType);
+      return;
+    }
     if (getLocalQuestionPoolForBankType(normalizedTargetBankType).length) return;
     const seedTimeoutMarker = { timedOut: true };
     let timeoutId = 0;
@@ -15329,6 +15787,7 @@ function ProductionApp() {
     const requestedBankType = normalizeQuestionBankType(filters.bankType);
     const requestedGameMode = resolveGameMode(filters.gameMode || 'standard');
     const isThisOrThatQueue = isThisOrThatGameMode(requestedGameMode);
+    const isMostLikelyQueue = isMostLikelyGameMode(requestedGameMode);
     const questionBankPool = requestedBankType === 'game'
       ? standardSelectableQuestions
       : getLocalQuestionPoolForBankType(requestedBankType);
@@ -15336,6 +15795,8 @@ function ProductionApp() {
       ? trackedUsedQuizQuestionIds
       : requestedBankType === 'thisOrThatGame'
         ? trackedUsedThisOrThatQuestionIds
+      : requestedBankType === 'mostLikelyGame'
+        ? trackedUsedMostLikelyQuestionIds
       : requestedBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
         : effectiveRetiredQuestionIds;
@@ -15374,11 +15835,15 @@ function ProductionApp() {
           ? queue.length
             ? requestedBankType === 'trueFalseGame'
               ? `Only ${queue.length} unrepeated True or False questions are available for this player pair. This mode does not repeat questions.`
+              : isMostLikelyQueue
+                ? `Only ${queue.length} Most Likely To questions are available right now.`
               : isThisOrThatQueue
                 ? `Only ${queue.length} This or That questions with clear either/or options are available right now.`
               : `Only ${queue.length} unique questions are available for this player pair.`
             : requestedBankType === 'trueFalseGame'
               ? 'No unused True or False questions remain for this player pair. This mode does not repeat questions.'
+              : isMostLikelyQueue
+                ? 'No Most Likely To questions are available right now.'
               : isThisOrThatQueue
                 ? 'No This or That questions with clear either/or options are available right now.'
               : 'No unused questions remain for this player pair.'
@@ -17911,6 +18376,8 @@ function ProductionApp() {
       ? 'Quiz'
       : normalizedTargetBankType === 'thisOrThatGame'
         ? 'This or That'
+      : normalizedTargetBankType === 'mostLikelyGame'
+        ? 'Most Like To'
       : normalizedTargetBankType === 'trueFalseGame'
         ? 'True or False'
         : 'Questions';
@@ -17949,6 +18416,14 @@ function ProductionApp() {
               overwriteExisting,
               importedAt: new Date().toISOString(),
               sourceLabel: `${reference.id}:${target.sheetName || 'This or That'}`,
+            })
+        : normalizedTargetBankType === 'mostLikelyGame'
+          ? parseGoogleSheetMostLikelyImport({
+              rawText,
+              existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'mostLikelyGame'),
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'Most Like To'}`,
             })
         : normalizedTargetBankType === 'trueFalseGame'
           ? parseGoogleSheetTrueFalseImport({
@@ -18066,6 +18541,26 @@ function ProductionApp() {
       }
       return existingQuestions;
     }
+    if (normalizedTargetBankType === 'mostLikelyGame') {
+      const mostLikelyQuestions = existingQuestions.filter(
+        (question) => normalizeQuestionBankType(question?.bankType) === 'mostLikelyGame',
+      );
+      if (mostLikelyQuestions.length >= MOST_LIKELY_AUTO_SYNC_MIN_COUNT) return existingQuestions;
+      try {
+        const result = await syncGoogleSheetQuestions({
+          sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+          existingQuestions,
+          overwriteExisting: false,
+          targetBankType: 'mostLikelyGame',
+        });
+        if (result.imports.length || result.updates.length) {
+          await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+        }
+      } catch (error) {
+        console.warn('Most Likely To bank sync failed while topping up the dedicated sheet tab.', error);
+      }
+      return existingQuestions;
+    }
     if (normalizedTargetBankType !== 'game') return existingQuestions;
     const needsTopUp = snap.empty || isStarterOnlyQuestionBank(existingQuestions);
     if (!needsTopUp) return existingQuestions;
@@ -18135,6 +18630,29 @@ function ProductionApp() {
     }
   }, [bankQuestions, firestore, sheetInput, thisOrThatBankQuestions.length, user]);
 
+  const topUpMostLikelyBankFromDedicatedSheet = useCallback(async () => {
+    if (!user || !firestore) return false;
+    if (autoMostLikelySheetSyncInFlightRef.current) return false;
+    if (mostLikelyBankQuestions.length >= MOST_LIKELY_AUTO_SYNC_MIN_COUNT) return false;
+    autoMostLikelySheetSyncInFlightRef.current = true;
+    try {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'mostLikelyGame',
+      });
+      if (!result.imports.length && !result.updates.length) return false;
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      return true;
+    } catch (error) {
+      console.warn('Automatic Most Likely To sheet top-up failed.', error);
+      return false;
+    } finally {
+      autoMostLikelySheetSyncInFlightRef.current = false;
+    }
+  }, [bankQuestions, firestore, mostLikelyBankQuestions.length, sheetInput, user]);
+
   useEffect(() => {
     if (!shouldAutoTopUpQuestionBanks || autoSheetImportAttemptedRef.current) return;
     if (!bankQuestions.length || bankQuestions.length > STARTER_QUESTIONS.length) return;
@@ -18167,6 +18685,16 @@ function ProductionApp() {
     shouldAutoTopUpQuestionBanks,
     thisOrThatBankQuestions.length,
     topUpThisOrThatBankFromDedicatedSheet,
+  ]);
+
+  useEffect(() => {
+    if (!shouldAutoTopUpQuestionBanks) return;
+    if (mostLikelyBankQuestions.length >= MOST_LIKELY_AUTO_SYNC_MIN_COUNT) return;
+    void topUpMostLikelyBankFromDedicatedSheet();
+  }, [
+    shouldAutoTopUpQuestionBanks,
+    mostLikelyBankQuestions.length,
+    topUpMostLikelyBankFromDedicatedSheet,
   ]);
 
   useEffect(() => {
@@ -18902,6 +19430,7 @@ function ProductionApp() {
       const isHoldemGame = isHoldemGameMode(gameMode);
       const isTrueFalseGame = isTrueFalseGameMode(gameMode);
       const isThisOrThatGame = isThisOrThatGameMode(gameMode);
+      const isMostLikelyGame = isMostLikelyGameMode(gameMode);
       const requestedCreateCode = normalizeJoinCode(options.createCode ?? lobbyCode);
       const trimmedGameName = normalizeText(options.gameName ?? lobbyGameName);
       const effectiveGameName = trimmedGameName || (
@@ -18913,7 +19442,9 @@ function ProductionApp() {
               ? 'True or False'
               : isThisOrThatGame
                 ? 'This or That'
-              : 'Jay vs Kim'
+                : isMostLikelyGame
+                  ? 'Most Likely To'
+                  : 'Jay vs Kim'
       );
       console.debug('Create New Game clicked', {
         gameName: effectiveGameName || lobbyGameName,
@@ -18969,8 +19500,8 @@ function ProductionApp() {
             throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
             if (actualCount < requestedQuestionCount) {
-              if (isThisOrThatGame) {
-                console.debug('This or That local game auto-accepting shorter compatible queue', {
+              if (isThisOrThatGame || isMostLikelyGame) {
+                console.debug(`${isMostLikelyGame ? 'Most Likely To' : 'This or That'} local game auto-accepting shorter queue`, {
                   requestedQuestionCount,
                   actualCount,
                 });
@@ -19156,8 +19687,8 @@ function ProductionApp() {
             throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
           if (actualCount < requestedQuestionCount) {
-            if (isThisOrThatGame) {
-              console.debug('This or That live game auto-accepting shorter compatible queue', {
+            if (isThisOrThatGame || isMostLikelyGame) {
+              console.debug(`${isMostLikelyGame ? 'Most Likely To' : 'This or That'} live game auto-accepting shorter queue`, {
                 requestedQuestionCount,
                 actualCount,
               });
@@ -20193,6 +20724,7 @@ function ProductionApp() {
   const trueFalseRevealSettleRef = useRef('');
   const trueFalseTimeoutRevealRef = useRef('');
   const thisOrThatRevealSettleRef = useRef('');
+  const mostLikelyRevealSettleRef = useRef('');
   const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isTrueFalseGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
@@ -20248,6 +20780,13 @@ function ProductionApp() {
   }, []);
   const getThisOrThatPenaltyMap = useCallback((round = null) => {
     const outcome = buildThisOrThatRoundOutcome(round || {});
+    return {
+      jay: outcome.jayPenalty,
+      kim: outcome.kimPenalty,
+    };
+  }, []);
+  const getMostLikelyPenaltyMap = useCallback((round = null) => {
+    const outcome = buildMostLikelyRoundOutcome(round || {});
     return {
       jay: outcome.jayPenalty,
       kim: outcome.kimPenalty,
@@ -20497,11 +21036,17 @@ function ProductionApp() {
     if (!targetField) return null;
 
     const isTrueFalseMode = gameMode === TRUE_FALSE_GAME_MODE;
-    const choiceModeLabel = isTrueFalseMode ? 'True or False' : 'This or That';
+    const isMostLikelyMode = gameMode === MOST_LIKELY_GAME_MODE;
+    const choiceModeLabel = isTrueFalseMode ? 'True or False' : isMostLikelyMode ? 'Most Likely To' : 'This or That';
     const normalizeChoice = (rawValue, round) =>
-      isTrueFalseMode ? normalizeTrueFalseChoice(rawValue) : normalizeThisOrThatChoice(rawValue, round);
+      isTrueFalseMode
+        ? normalizeTrueFalseChoice(rawValue)
+        : isMostLikelyMode
+          ? normalizeMostLikelyChoice(rawValue)
+          : normalizeThisOrThatChoice(rawValue, round);
     const resolveDefaultChoices = (round) => {
       if (isTrueFalseMode) return ['True', 'False'];
+      if (isMostLikelyMode) return getMostLikelyOptions();
       const options = getThisOrThatOptions(round);
       return options.length >= 2 ? options : ['Option A', 'Option B'];
     };
@@ -20517,15 +21062,17 @@ function ProductionApp() {
 
       const rawLockedValue = isTrueFalseMode
         ? serialiseAnswerForQuestionType('trueFalse', value)
-        : serialiseAnswerForQuestionType('preference', value);
+        : isMostLikelyMode
+          ? serialiseAnswerForQuestionType('multipleChoice', value)
+          : serialiseAnswerForQuestionType('preference', value);
       const lockedValue = normalizeChoice(rawLockedValue, game.currentRound);
       if (!lockedValue) {
-        throw new Error(isTrueFalseMode ? 'Choose True or False.' : 'Choose one of the two options.');
+        throw new Error(isTrueFalseMode ? 'Choose True or False.' : isMostLikelyMode ? 'Choose Jay, Kim, Both, or Neither.' : 'Choose one of the two options.');
       }
 
       const lockedAtIso = new Date().toISOString();
       const otherField = targetField === 'ownAnswer' ? 'guessedOther' : 'ownAnswer';
-      const completedAt = normalizeChoice(currentAnswer?.[otherField] || '', game.currentRound) ? lockedAtIso : (currentAnswer?.completedAt || '');
+      const completedAt = isMostLikelyMode || normalizeChoice(currentAnswer?.[otherField] || '', game.currentRound) ? lockedAtIso : (currentAnswer?.completedAt || '');
       const displayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[currentSeat] || 'Player';
 
       if (isCurrentLocalTestGame) {
@@ -20540,18 +21087,20 @@ function ProductionApp() {
             submittedBy: user?.uid || '',
             displayName,
             [`${targetField}LockedAt`]: lockedAtIso,
-            ...(normalizeChoice(currentSeatAnswer?.[otherField] || '', current.currentRound) ? { completedAt } : {}),
+            ...(isMostLikelyMode || normalizeChoice(currentSeatAnswer?.[otherField] || '', current.currentRound) ? { completedAt } : {}),
             updatedAt: lockedAtIso,
           };
           const otherSeatAnswer = current.currentRound.answers?.[otherSeat] || {};
           const autoOtherAnswer = {
             ...otherSeatAnswer,
             ownAnswer: normalizeChoice(otherSeatAnswer?.ownAnswer || '', current.currentRound) || defaultChoices[0] || '',
-            guessedOther: normalizeChoice(otherSeatAnswer?.guessedOther || '', current.currentRound) || defaultChoices[1] || defaultChoices[0] || '',
+            guessedOther: isMostLikelyMode
+              ? (otherSeatAnswer?.guessedOther || '')
+              : normalizeChoice(otherSeatAnswer?.guessedOther || '', current.currentRound) || defaultChoices[1] || defaultChoices[0] || '',
             submittedBy: 'editing-mode',
             displayName: otherSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)',
             ownAnswerLockedAt: otherSeatAnswer?.ownAnswerLockedAt || lockedAtIso,
-            guessedOtherLockedAt: otherSeatAnswer?.guessedOtherLockedAt || lockedAtIso,
+            ...(isMostLikelyMode ? {} : { guessedOtherLockedAt: otherSeatAnswer?.guessedOtherLockedAt || lockedAtIso }),
             completedAt: otherSeatAnswer?.completedAt || lockedAtIso,
             autoSubmitted: true,
             updatedAt: lockedAtIso,
@@ -20592,7 +21141,7 @@ function ProductionApp() {
                     submittedBy: user?.uid || '',
                     displayName,
                     [`${targetField}LockedAt`]: lockedAtIso,
-                    ...(normalizeChoice((current.currentRound.answers?.[currentSeat] || {})?.[otherField] || '', current.currentRound) ? { completedAt } : {}),
+                    ...(isMostLikelyMode || normalizeChoice((current.currentRound.answers?.[currentSeat] || {})?.[otherField] || '', current.currentRound) ? { completedAt } : {}),
                     updatedAt: lockedAtIso,
                   },
                 },
@@ -20639,6 +21188,9 @@ function ProductionApp() {
 
   const lockThisOrThatAnswerField = async (fieldName = '', value = '') =>
     lockAutoChoiceAnswerField({ fieldName, value, gameMode: THIS_OR_THAT_GAME_MODE });
+
+  const lockMostLikelyAnswerField = async (_fieldName = '', value = '') =>
+    lockAutoChoiceAnswerField({ fieldName: 'ownAnswer', value, gameMode: MOST_LIKELY_GAME_MODE });
 
   const submitAnswer = async (draftOverride = null) => {
     let previousLocalAnswer;
@@ -20855,6 +21407,7 @@ function ProductionApp() {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
     const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
     const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
+    const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
     const round = game?.currentRound || null;
     const roundKey = stableRoundIdentityKey(round || {});
     const settleKey = `${game?.id || ''}:${roundKey}:standard-reveal`;
@@ -20862,6 +21415,7 @@ function ProductionApp() {
       isQuizGame
       || isTrueFalseGame
       || isThisOrThatGame
+      || isMostLikelyGame
       || !round
       || round.status !== 'open'
       || !hasSubmittedRoundAnswer(round, 'jay')
@@ -21024,6 +21578,69 @@ function ProductionApp() {
   ]);
 
   useEffect(() => {
+    const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
+    const round = game?.currentRound || null;
+    const roundKey = stableRoundIdentityKey(round || {});
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const bothPlayersCompleted = hasCompletedMostLikelyRoundAnswer(round, 'jay') && hasCompletedMostLikelyRoundAnswer(round, 'kim');
+    const settleKey = `${game?.id || ''}:${roundKey}:most-likely-reveal`;
+    if (
+      !isMostLikelyGame
+      || !round
+      || round.status !== 'open'
+      || !bothPlayersCompleted
+      || (!isCurrentLocalTestGame && currentSeat !== coordinatorSeat)
+    ) {
+      if (mostLikelyRevealSettleRef.current === settleKey) mostLikelyRevealSettleRef.current = '';
+      return undefined;
+    }
+    if (mostLikelyRevealSettleRef.current === settleKey) return undefined;
+    const penalties = getMostLikelyPenaltyMap(round);
+    mostLikelyRevealSettleRef.current = settleKey;
+    if (isCurrentLocalTestGame) {
+      setGame((current) =>
+        current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'open'
+          ? {
+              ...current,
+              currentRound: {
+                ...current.currentRound,
+                penalties,
+                status: 'reveal',
+                updatedAt: new Date().toISOString(),
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      return undefined;
+    }
+    const gameRef = makeGameRef();
+    if (!gameRef || !firestore) return undefined;
+    updateDoc(gameRef, {
+      'currentRound.penalties': penalties,
+      'currentRound.status': 'reveal',
+      'currentRound.updatedAt': serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {
+      mostLikelyRevealSettleRef.current = '';
+    });
+    return undefined;
+  }, [
+    currentSeat,
+    firestore,
+    game?.id,
+    game?.gameMode,
+    game?.hostUid,
+    game?.currentRound?.status,
+    game?.currentRound?.questionId,
+    game?.currentRound?.number,
+    game?.currentRound?.answers?.jay?.ownAnswer,
+    game?.currentRound?.answers?.kim?.ownAnswer,
+    getMostLikelyPenaltyMap,
+    isCurrentLocalTestGame,
+  ]);
+
+  useEffect(() => {
     const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
     const round = game?.currentRound || null;
     const roundKey = stableRoundIdentityKey(round || {});
@@ -21131,6 +21748,8 @@ function ProductionApp() {
       ? quizBankQuestions
       : sourceBankType === 'thisOrThatGame'
         ? thisOrThatBankQuestions
+      : sourceBankType === 'mostLikelyGame'
+        ? mostLikelySelectableQuestions
       : sourceBankType === 'trueFalseGame'
         ? trueFalseBankQuestions
         : gameBankQuestions;
@@ -21138,6 +21757,8 @@ function ProductionApp() {
       ? trackedUsedQuizQuestionIds
       : sourceBankType === 'thisOrThatGame'
         ? trackedUsedThisOrThatQuestionIds
+      : sourceBankType === 'mostLikelyGame'
+        ? trackedUsedMostLikelyQuestionIds
       : sourceBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
         : effectiveRetiredQuestionIds;
@@ -21156,7 +21777,7 @@ function ProductionApp() {
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
-    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame'
+    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame' || sourceBankType === 'mostLikelyGame'
       ? []
       : standardSelectableQuestions.filter(
           (question) =>
@@ -21198,6 +21819,7 @@ function ProductionApp() {
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
       const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
       const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
+      const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
       if (
         game.currentRound
         && game.currentRound.status !== 'reveal'
@@ -21228,7 +21850,7 @@ function ProductionApp() {
         if (game.currentRound) {
           const penalties = isQuizGame
             ? { jay: 0, kim: 0 }
-            : isTrueFalseGame || isThisOrThatGame
+            : isTrueFalseGame || isThisOrThatGame || isMostLikelyGame
               ? {
                   jay: Number(game.currentRound.penalties?.jay || 0),
                   kim: Number(game.currentRound.penalties?.kim || 0),
@@ -21353,7 +21975,7 @@ function ProductionApp() {
       if (game.currentRound) {
         const penalties = isQuizGame
           ? { jay: 0, kim: 0 }
-          : isTrueFalseGame || isThisOrThatGame
+          : isTrueFalseGame || isThisOrThatGame || isMostLikelyGame
             ? {
                 jay: Number(game.currentRound.penalties?.jay || 0),
                 kim: Number(game.currentRound.penalties?.kim || 0),
@@ -22206,6 +22828,38 @@ function ProductionApp() {
       setNotice('This or That bank synced from Google Sheet.');
     }, 'Could not sync the This or That bank.');
 
+  const importMostLikelySheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'mostLikelyGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = mostLikelyBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new Most Likely To questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. Most Likely To bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice(`Most Likely To import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import Most Likely To questions from the Google Sheet.');
+
+  const syncMostLikelySheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: true,
+        targetBankType: 'mostLikelyGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = mostLikelyBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Synced Most Likely To bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. Most Likely To bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice('Most Likely To bank synced from Google Sheet.');
+    }, 'Could not sync the Most Likely To bank.');
+
   const importTrueFalseSheet = async () =>
     withBusy(async () => {
       const result = await syncGoogleSheetQuestions({
@@ -22402,10 +23056,12 @@ function ProductionApp() {
         onSyncQuestionBank={syncSheet}
         onSyncQuizBank={syncQuizSheet}
         onSyncThisOrThatBank={syncThisOrThatSheet}
+        onSyncMostLikelyBank={syncMostLikelySheet}
         onSyncTrueFalseBank={syncTrueFalseSheet}
         onImportQuestions={importSheet}
         onImportQuizQuestions={importQuizSheet}
         onImportThisOrThatQuestions={importThisOrThatSheet}
+        onImportMostLikelyQuestions={importMostLikelySheet}
         onImportTrueFalseQuestions={importTrueFalseSheet}
         onResumeGame={resumeGame}
         onViewSummary={setSelectedGameId}
@@ -22430,6 +23086,9 @@ function ProductionApp() {
         thisOrThatQuestionCount={thisOrThatBankCount}
         usedThisOrThatQuestionCount={usedThisOrThatQuestionCount}
         remainingThisOrThatQuestionCount={remainingThisOrThatQuestionCount}
+        mostLikelyQuestionCount={mostLikelyBankCount}
+        usedMostLikelyQuestionCount={usedMostLikelyQuestionCount}
+        remainingMostLikelyQuestionCount={remainingMostLikelyQuestionCount}
         trueFalseQuestionCount={trueFalseBankCount}
         usedTrueFalseQuestionCount={usedTrueFalseQuestionCount}
         remainingTrueFalseQuestionCount={remainingTrueFalseQuestionCount}
@@ -22506,9 +23165,10 @@ function ProductionApp() {
 	      onNextQuestion={nextQuestion}
       onStartHoldemHand={startHoldemHand}
       onTakeHoldemAction={takeHoldemAction}
-	      onSubmitAnswer={submitAnswer}
+      onSubmitAnswer={submitAnswer}
       onLockTrueFalseAnswer={lockTrueFalseAnswerField}
       onLockThisOrThatAnswer={lockThisOrThatAnswerField}
+      onLockMostLikelyAnswer={lockMostLikelyAnswerField}
 	      onMarkReady={markReady}
 	      onAddQuestion={addQuestion}
       onSyncSheet={syncSheet}
