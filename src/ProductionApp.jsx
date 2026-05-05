@@ -9008,6 +9008,7 @@ function ChatPanel({
     nearBottom: true,
     lastMessageId: '',
   });
+  const chatScrollRafRef = useRef(null);
   // Guard to prevent double-send when Enter is pressed rapidly or key events fire multiple times
   const sendLockRef = useRef(false);
 
@@ -9020,6 +9021,12 @@ function ChatPanel({
     };
   };
 
+  const scrollChatLogToLatest = (node, lastMessageId = chatScrollStateRef.current.lastMessageId) => {
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+    syncChatScrollState(node, lastMessageId);
+  };
+
   useLayoutEffect(() => {
     const chatLog = chatLogRef.current;
     if (!chatLog) return;
@@ -9027,14 +9034,20 @@ function ChatPanel({
     const previousState = chatScrollStateRef.current;
     const messageAdded = Boolean(lastMessageId) && lastMessageId !== previousState.lastMessageId;
 
-    if (messageAdded && previousState.nearBottom) {
-      chatLog.scrollTop = chatLog.scrollHeight;
+    if (messageAdded) {
+      scrollChatLogToLatest(chatLog, lastMessageId);
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        if (chatScrollRafRef.current) window.cancelAnimationFrame(chatScrollRafRef.current);
+        chatScrollRafRef.current = window.requestAnimationFrame(() => {
+          chatScrollRafRef.current = null;
+          scrollChatLogToLatest(chatLog, lastMessageId);
+        });
+      }
     } else {
       const maxScrollTop = Math.max(0, chatLog.scrollHeight - chatLog.clientHeight);
       chatLog.scrollTop = Math.min(previousState.scrollTop, maxScrollTop);
+      syncChatScrollState(chatLog, lastMessageId);
     }
-
-    syncChatScrollState(chatLog, lastMessageId);
   }, [messages]);
 
   useEffect(() => {
@@ -9044,14 +9057,22 @@ function ChatPanel({
     const observer = new ResizeObserver(() => {
       const previousState = chatScrollStateRef.current;
       const maxScrollTop = Math.max(0, chatLog.scrollHeight - chatLog.clientHeight);
-      chatLog.scrollTop = previousState.nearBottom
-        ? chatLog.scrollHeight
-        : Math.min(previousState.scrollTop, maxScrollTop);
-      syncChatScrollState(chatLog);
+      if (previousState.lastMessageId) {
+        scrollChatLogToLatest(chatLog);
+      } else {
+        chatLog.scrollTop = Math.min(previousState.scrollTop, maxScrollTop);
+        syncChatScrollState(chatLog);
+      }
     });
 
     observer.observe(chatLog);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => () => {
+    if (chatScrollRafRef.current && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(chatScrollRafRef.current);
+    }
   }, []);
 
   const submitChatMessage = useCallback((textOverride = '') => {
