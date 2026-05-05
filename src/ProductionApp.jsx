@@ -1241,7 +1241,7 @@ const collectExistingDiaryChapterTitlesList = (diaryEntries = [], excludeEntryId
     if (titles.length >= limit) break;
     if (excludeEntryId && normalizeText(entry?.id || '') === normalizeText(excludeEntryId)) continue;
     if (!isDiaryBookEntry(entry)) continue;
-    const title = normalizeText(entry?.chapterTitle || '');
+    const title = stripMechanicalDiaryTitleSuffix(entry?.chapterTitle || '');
     if (!title) continue;
     const key = diaryChapterTitleKey(title);
     if (seen.has(key)) continue;
@@ -1579,24 +1579,119 @@ const buildStableDiaryHash = (seed = '') =>
     (total + (character.charCodeAt(0) * (index + 1))) % 2147483647
   ), 0);
 
+const stripMechanicalDiaryTitleSuffix = (value = '') => {
+  let title = normalizeText(value);
+  title = title.replace(/\s+[·-]\s+(?:[a-z0-9]{4,10}|\d{3,})(?:\d{1,2})?$/i, '').trim();
+  return title;
+};
+
+const isMechanicalDiaryChapterTitleVariant = (value = '') =>
+  stripMechanicalDiaryTitleSuffix(value) !== normalizeText(value);
+
+const diaryTitleVariantPrefixes = [
+  'Hidden',
+  'Sweet',
+  'Cheeky',
+  'Tender',
+  'Bright',
+  'Private',
+  'Unexpected',
+  'Playful',
+  'Little',
+  'Late',
+  'Secret',
+  'Golden',
+  'Fresh',
+  'Warm',
+  'Spicy',
+  'Quiet',
+  'Lucky',
+  'Curious',
+];
+
+const diaryTitleVariantNouns = [
+  'Afterglow',
+  'Plot Twist',
+  'Scorecard',
+  'Callback',
+  'Debrief',
+  'Revelation',
+  'Spark',
+  'Wink',
+  'Turn',
+  'Snapshot',
+  'Confession',
+  'Detour',
+  'Rematch',
+  'Memory',
+  'Secret',
+  'Question',
+  'Answer',
+  'Banter',
+  'Moment',
+  'Chapter',
+  'Finish',
+  'Replay',
+  'Surprise',
+  'Edge',
+];
+
+const buildDistinctDiaryTitleCandidates = (rawTitle = '', seed = '') => {
+  const stem = stripMechanicalDiaryTitleSuffix(rawTitle).slice(0, 44).trim();
+  const stemWords = stem.split(/\s+/).filter(Boolean);
+  const shortStem = stemWords.slice(0, 4).join(' ');
+  const hasUsableStem = shortStem.length >= 4 && shortStem.length <= 44;
+  const candidates = [];
+
+  if (hasUsableStem) {
+    candidates.push(
+      `${shortStem} Revisited`,
+      `${shortStem} After Dark`,
+      `${shortStem} With a Twist`,
+      `${shortStem} Reloaded`,
+      `The Other ${shortStem}`,
+      `A Fresh ${shortStem}`,
+    );
+  }
+
+  const offset = buildStableDiaryHash(seed || stem || 'diary-title');
+  for (let index = 0; index < diaryTitleVariantPrefixes.length * diaryTitleVariantNouns.length; index += 1) {
+    const prefix = diaryTitleVariantPrefixes[(offset + index) % diaryTitleVariantPrefixes.length];
+    const noun = diaryTitleVariantNouns[(Math.floor((offset + index) / diaryTitleVariantPrefixes.length) + index) % diaryTitleVariantNouns.length];
+    candidates.push(`The ${prefix} ${noun}`);
+  }
+
+  return candidates;
+};
+
 const polishUniqueDiaryChapterTitle = (rawHeadline = '', reservedKeys = null, disambiguatorSeed = '') => {
   const seed = normalizeText(disambiguatorSeed) || 'chapter';
-  let title = normalizeText(rawHeadline);
+  let title = stripMechanicalDiaryTitleSuffix(rawHeadline);
   if (!title) title = 'A chapter worth keeping';
   if (!(reservedKeys instanceof Set) || !reservedKeys.size || !reservedKeys.has(diaryChapterTitleKey(title))) {
     return title.slice(0, 96);
   }
-  const stem = title.slice(0, 52).trim() || 'Chapter';
-  const tag = seed.replace(/[^a-z0-9]+/gi, '').slice(-6) || 'more';
-  for (let attempt = 2; attempt < 80; attempt += 1) {
-    const suffix = attempt === 2 ? tag : `${tag}${attempt}`;
-    const candidate = `${stem} · ${suffix}`.trim();
+  const candidates = buildDistinctDiaryTitleCandidates(title, seed);
+  for (const candidate of candidates) {
     if (!reservedKeys.has(diaryChapterTitleKey(candidate))) {
       return candidate.slice(0, 96);
     }
   }
-  const hashSuffix = String(buildStableDiaryHash(`${seed}-title`) % 100000);
-  return `${stem} · ${hashSuffix}`.slice(0, 96);
+  const stem = title.slice(0, 36).trim() || 'Diary Page';
+  for (let attempt = 2; attempt < 80; attempt += 1) {
+    const candidate = `${stem} Part ${attempt}`;
+    if (!reservedKeys.has(diaryChapterTitleKey(candidate))) {
+      return candidate.slice(0, 96);
+    }
+  }
+  return `Another ${stem}`.slice(0, 96);
+};
+
+const diaryChapterTitleNeedsRefresh = (entry = null, diaryEntries = [], excludeEntryId = '') => {
+  const title = normalizeText(entry?.chapterTitle || '');
+  if (!title) return false;
+  if (isMechanicalDiaryChapterTitleVariant(title)) return true;
+  return collectReservedDiaryChapterTitleKeys(diaryEntries, excludeEntryId || entry?.id || '').has(diaryChapterTitleKey(title));
 };
 
 const applyReservedDiaryHeadlinePolish = (draft, factsBundle = {}) => {
@@ -15667,10 +15762,11 @@ function ProductionApp() {
     const needsPromptRefresh = normalizeText(existingEntry?.promptVersion || '') !== AI_DIARY_PROMPT_VERSION;
     const usesLegacyTitle = normalizeText(existingEntry?.chapterTitle || '')
       && normalizeText(existingEntry?.chapterTitle || '') === normalizeText(buildLegacyGameDiaryChapterTitle(existingEntry, scoreContext));
+    const titleNeedsRefresh = diaryChapterTitleNeedsRefresh(existingEntry, diaryEntries, entryId);
     if (existingEntry?.aiGenerated && existingStatus === 'ready') {
       const createdAtChanged = getRecordTime(existingEntry?.createdAt || 0) !== getRecordTime(canonicalCreatedAt || 0);
       const endedAtChanged = getRecordTime(existingEntry?.endedAt || 0) !== getRecordTime(canonicalEndedAt || 0);
-      if (!needsPromptRefresh && !usesLegacyTitle && (createdAtChanged || endedAtChanged)) {
+      if (!needsPromptRefresh && !usesLegacyTitle && !titleNeedsRefresh && (createdAtChanged || endedAtChanged)) {
         await setDoc(entryRef, {
           createdAt: canonicalCreatedAt,
           endedAt: canonicalEndedAt,
@@ -15678,7 +15774,7 @@ function ProductionApp() {
         }, { merge: true }).catch(() => null);
         return { status: 'updated', entryId };
       }
-      if (!needsPromptRefresh && !usesLegacyTitle) {
+      if (!needsPromptRefresh && !usesLegacyTitle && !titleNeedsRefresh) {
         return { status: 'skipped', entryId };
       }
     }
@@ -15843,7 +15939,8 @@ function ProductionApp() {
     const existingEntry = entrySnapshot?.exists?.()
       ? { id: entrySnapshot.id, ...entrySnapshot.data() }
       : null;
-    if (existingEntry?.aiGenerated && normalizeIdentity(existingEntry?.aiDiaryStatus || 'ready') === 'ready') {
+    const titleNeedsRefresh = diaryChapterTitleNeedsRefresh(existingEntry, diaryEntries, diaryEntryId);
+    if (existingEntry?.aiGenerated && normalizeIdentity(existingEntry?.aiDiaryStatus || 'ready') === 'ready' && !titleNeedsRefresh) {
       return { status: 'skipped', entryId: diaryEntryId };
     }
     if (normalizeIdentity(existingEntry?.aiDiaryStatus || '') === 'generating') {

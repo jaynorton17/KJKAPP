@@ -4349,7 +4349,9 @@ button:disabled {
   display: grid;
   grid-template-columns: minmax(240px, 0.34fr) minmax(0, 1fr);
   gap: 14px;
-  min-height: 620px;
+  height: clamp(560px, calc(100dvh - 260px), 780px);
+  min-height: 0;
+  max-height: clamp(560px, calc(100dvh - 260px), 780px);
 }
 
 .shared-diary-sidebar,
@@ -4389,6 +4391,8 @@ button:disabled {
   display: grid;
   gap: 8px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding-right: 4px;
   align-content: start;
 }
@@ -4456,16 +4460,26 @@ button:disabled {
 
 .shared-diary-content {
   display: grid;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .shared-diary-spread {
   align-items: start;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .shared-diary-page {
   display: grid;
   gap: 12px;
   align-content: start;
+  max-height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   background:
     linear-gradient(135deg, rgba(255, 241, 221, 0.08), rgba(255, 241, 221, 0.02)),
     rgba(48, 26, 16, 0.24);
@@ -4630,7 +4644,9 @@ button:disabled {
 @media (max-width: 980px) {
   .shared-diary-layout {
     grid-template-columns: 1fr;
-    min-height: auto;
+    height: auto;
+    min-height: 0;
+    max-height: none;
   }
 
   .shared-diary-sidebar {
@@ -4639,6 +4655,11 @@ button:disabled {
 
   .shared-diary-spread {
     grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .shared-diary-page {
+    max-height: min(70dvh, 680px);
   }
 }
 
