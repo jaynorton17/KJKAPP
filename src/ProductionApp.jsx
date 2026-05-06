@@ -132,9 +132,9 @@ const MOST_LIKELY_DISAGREE_PENALTY = 10;
 const MOST_LIKELY_UNANSWERED_PENALTY = 20;
 const PUT_YOUR_POINTS_STAKE_MIN = 1;
 const PUT_YOUR_POINTS_STAKE_MAX = 200;
-const PUT_YOUR_POINTS_STAKE_FLICK_COUNT = 32;
-const PUT_YOUR_POINTS_STAKE_FLICK_INTERVAL_MS = 42;
-const PUT_YOUR_POINTS_STAKE_FINAL_HOLD_MS = 520;
+const PUT_YOUR_POINTS_STAKE_RANDOM_COUNT = 20;
+const PUT_YOUR_POINTS_STAKE_RANDOM_DURATION_MS = 3000;
+const PUT_YOUR_POINTS_STAKE_FINAL_HOLD_MS = 2000;
 const PUT_YOUR_POINTS_STAKE_DOCK_MS = 720;
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
@@ -3479,7 +3479,7 @@ const makePutYourPointsStakeValue = () =>
   Math.floor(Math.random() * (PUT_YOUR_POINTS_STAKE_MAX - PUT_YOUR_POINTS_STAKE_MIN + 1)) + PUT_YOUR_POINTS_STAKE_MIN;
 const buildPutYourPointsStakeSnapshot = () => {
   const finalStake = makePutYourPointsStakeValue();
-  const sequence = Array.from({ length: PUT_YOUR_POINTS_STAKE_FLICK_COUNT - 1 }, makePutYourPointsStakeValue);
+  const sequence = Array.from({ length: PUT_YOUR_POINTS_STAKE_RANDOM_COUNT }, makePutYourPointsStakeValue);
   return {
     putYourPointsStake: finalStake,
     putYourPointsStakeSequence: [...sequence, finalStake],
@@ -8246,12 +8246,14 @@ function PutYourPointsStakeTicker({ currentRound }) {
       return undefined;
     }
     setAnimationPhase('summoning');
+    const randomStepCount = Math.max(1, values.length - 1);
+    const flickIntervalMs = PUT_YOUR_POINTS_STAKE_RANDOM_DURATION_MS / randomStepCount;
     values.slice(1).forEach((value, index) => {
       timers.push(window.setTimeout(() => {
         if (!cancelled) setDisplayStake(value);
-      }, PUT_YOUR_POINTS_STAKE_FLICK_INTERVAL_MS * (index + 1)));
+      }, flickIntervalMs * (index + 1)));
     });
-    const settleDelay = (PUT_YOUR_POINTS_STAKE_FLICK_INTERVAL_MS * values.length) + PUT_YOUR_POINTS_STAKE_FINAL_HOLD_MS;
+    const settleDelay = PUT_YOUR_POINTS_STAKE_RANDOM_DURATION_MS + PUT_YOUR_POINTS_STAKE_FINAL_HOLD_MS;
     timers.push(window.setTimeout(() => {
       if (cancelled) return;
       setDisplayStake(finalStake);
