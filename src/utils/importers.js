@@ -102,16 +102,27 @@ const isGenericPlayerChoiceOptionList = (options = []) => {
   return hasFirstPlayer && hasSecondPlayer && hasSharedChoice;
 };
 
-const isPutYourPointsPlayerChoicePrompt = (questionText = '') =>
-  /\bwho\b.*\b(more|most)\s+likely\b/i.test(questionText)
+const isPutYourPointsPlayerChoiceType = (typeText = '') =>
+  [
+    'whoismorelikely',
+    'whoismorelikelyto',
+    'whoismostlikely',
+    'whoismostlikelyto',
+    'mostlikely',
+    'mostlikelyto',
+  ].includes(normalizeHeader(typeText));
+
+const isPutYourPointsPlayerChoicePrompt = (questionText = '', typeText = '') =>
+  isPutYourPointsPlayerChoiceType(typeText)
+  || /\bwho\b.*\b(more|most)\s+likely\b/i.test(questionText)
   || /\bwhich\s+(?:player|one\s+of\s+you|of\s+you|of\s+us)\b/i.test(questionText)
   || /\b(jay|kim|player\s*1|player\s*2)\b.*\b(jay|kim|player\s*1|player\s*2)\b/i.test(questionText);
 
-const inferPutYourPointsQuestionType = (questionText = '', fallbackType = 'text', options = []) => {
+const inferPutYourPointsQuestionType = (questionText = '', fallbackType = 'text', options = [], typeText = '') => {
   const normalizedQuestion = normalizeText(questionText);
   if (!normalizedQuestion) return fallbackType;
   if (/\btrue\s+or\s+false\b|\btrue\/false\b/i.test(normalizedQuestion)) return 'trueFalse';
-  if (isPutYourPointsPlayerChoicePrompt(normalizedQuestion)) return 'multipleChoice';
+  if (isPutYourPointsPlayerChoicePrompt(normalizedQuestion, typeText)) return 'multipleChoice';
   if (/\b(would\s+you\s+rather|which\s+would\s+you\s+choose|do\s+you\s+prefer|prefer|this\s+or\s+that|either\s+or)\b/i.test(normalizedQuestion)) {
     return 'preference';
   }
@@ -126,7 +137,9 @@ const inferPutYourPointsQuestionType = (questionText = '', fallbackType = 'text'
   }
   if (/\bfavou?rite\b/i.test(normalizedQuestion)) return 'favourite';
   if (/\b(pet\s+peeve|annoy|irritat|turns?\s+you\s+off)\b/i.test(normalizedQuestion)) return 'petPeeve';
-  if (options.length >= 2 && !isGenericPlayerChoiceOptionList(options)) return fallbackType;
+  if (options.length >= 2 && !isGenericPlayerChoiceOptionList(options)) {
+    return fallbackType === 'text' ? 'multipleChoice' : fallbackType;
+  }
   return fallbackType === 'multipleChoice' ? 'text' : fallbackType;
 };
 
@@ -135,7 +148,7 @@ const normalizePutYourPointsSheetRow = (row = {}) => {
   const providedOptions = parseImportedOptionList(row.multipleChoiceOptions);
   const roundType = normalizeQuestionType(row.roundType, 'text');
   const hasGenericPlayerOptions = isGenericPlayerChoiceOptionList(providedOptions);
-  const inferredType = inferPutYourPointsQuestionType(questionText, roundType, providedOptions);
+  const inferredType = inferPutYourPointsQuestionType(questionText, roundType, providedOptions, row.roundType);
   const nextRow = { ...row };
   nextRow.roundType = inferredType;
 
@@ -144,7 +157,7 @@ const normalizePutYourPointsSheetRow = (row = {}) => {
     return nextRow;
   }
 
-  if (inferredType === 'multipleChoice' && isPutYourPointsPlayerChoicePrompt(questionText)) {
+  if (inferredType === 'multipleChoice' && isPutYourPointsPlayerChoicePrompt(questionText, row.roundType)) {
     const optionKeys = providedOptions.map((option) => normalizeHeader(option));
     if (optionKeys[0] === 'player1' && optionKeys[1] === 'player2') {
       nextRow.multipleChoiceOptions = DEFAULT_PLAYER_CHOICE_OPTIONS.join('\n');

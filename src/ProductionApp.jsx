@@ -1150,6 +1150,67 @@ const isStarterOnlyQuestionBank = (questions = []) =>
   questions.length <= STARTER_QUESTIONS.length &&
   questions.every((question) => starterQuestionIds.has(question.id) || question.source === 'starter');
 
+const normalizePlayerChoiceKey = (value = '') =>
+  String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const isGenericPlayerChoiceOptionList = (options = []) => {
+  const optionKeys = options.map(normalizePlayerChoiceKey);
+  const hasFirstPlayer = optionKeys.includes('jay') || optionKeys.includes('player1') || optionKeys.includes('p1');
+  const hasSecondPlayer = optionKeys.includes('kim') || optionKeys.includes('player2') || optionKeys.includes('p2');
+  const hasSharedChoice = optionKeys.includes('both') || optionKeys.includes('neither') || optionKeys.includes('either');
+  return hasFirstPlayer && hasSecondPlayer && hasSharedChoice;
+};
+
+const isPutYourPointsPlayerChoicePrompt = (questionText = '') =>
+  /\bwho\b.*\b(more|most)\s+likely\b/i.test(normalizeText(questionText))
+  || /\bwhich\s+(?:player|one\s+of\s+you|of\s+you|of\s+us)\b/i.test(normalizeText(questionText));
+
+const inferPutYourPointsAnswerRoundType = (round = {}) => {
+  const rawRoundType = normalizeQuestionType(round?.roundType, 'text');
+  const questionText = normalizeText(round?.question || '');
+  const providedOptions = parseAnswerList(round?.multipleChoiceOptions || round?.options || []);
+  const hasGenericPlayerOptions = isGenericPlayerChoiceOptionList(providedOptions);
+  if (/\btrue\s+or\s+false\b|\btrue\/false\b/i.test(questionText)) return 'trueFalse';
+  if (isPutYourPointsPlayerChoicePrompt(questionText)) return 'multipleChoice';
+  if (/\b(would\s+you\s+rather|which\s+would\s+you\s+choose|do\s+you\s+prefer|prefer|this\s+or\s+that|either\s+or)\b/i.test(questionText)) return 'preference';
+  if (/\b(top\s*\d+|top\s+three|name\s+(?:your\s+)?(?:top\s+)?three|list\s+three|three\s+.+memories|rank(?:ed|ing)?|sort|put\s+.+\s+in\s+order|order\s+(?:these|the|them))\b/i.test(questionText)) return 'ranked';
+  if (/\b(1\s*(?:-|to)\s*10|one\s*(?:-|to)\s*ten|out\s+of\s+10|rate|rating|scale)\b/i.test(questionText)) return 'rating';
+  if (/\b(how\s+many|how\s+much|what\s+(?:number|age|year|percentage|percent|amount)|age\b|year\b|percentage|percent|amount|count)\b/i.test(questionText)) return 'numeric';
+  if (/\bfavou?rite\b/i.test(questionText)) return 'favourite';
+  if (/\b(pet\s+peeve|annoy|irritat|turns?\s+you\s+off)\b/i.test(questionText)) return 'petPeeve';
+  if (rawRoundType === 'multipleChoice') {
+    return providedOptions.length && !hasGenericPlayerOptions ? 'multipleChoice' : 'text';
+  }
+  return rawRoundType;
+};
+
+const getEffectiveAnswerRoundType = (game = null, round = {}) =>
+  isPutYourPointsGameMode(game?.gameMode || 'standard')
+    ? inferPutYourPointsAnswerRoundType(round)
+    : normalizeQuestionType(round?.roundType, 'text');
+
+const shouldHideGenericPutYourPointsOptions = (game = null, round = {}, roundType = '') => {
+  if (!isPutYourPointsGameMode(game?.gameMode || 'standard')) return false;
+  const providedOptions = parseAnswerList(round?.multipleChoiceOptions || round?.options || []);
+  return Boolean(
+    providedOptions.length
+    && isGenericPlayerChoiceOptionList(providedOptions)
+    && !isPutYourPointsPlayerChoicePrompt(round?.question || '')
+    && roundType !== 'multipleChoice',
+  );
+};
+
+const getAnswerInputRound = (game = null, round = {}) => {
+  const roundType = getEffectiveAnswerRoundType(game, round);
+  const hideGenericOptions = shouldHideGenericPutYourPointsOptions(game, round, roundType);
+  return {
+    ...(round || {}),
+    roundType,
+    multipleChoiceOptions: hideGenericOptions ? [] : round?.multipleChoiceOptions || [],
+    options: hideGenericOptions ? [] : round?.options || [],
+  };
+};
+
 const inferChoiceOptions = (round = {}) => {
   const roundType = normalizeQuestionType(round?.roundType, 'text');
   return getDefaultOptionsForQuestionType(roundType, {
@@ -1157,9 +1218,6 @@ const inferChoiceOptions = (round = {}) => {
     options: round?.multipleChoiceOptions || [],
   });
 };
-
-const normalizePlayerChoiceKey = (value = '') =>
-  String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const getPlayerChoiceDisplayNames = (game = null, round = null) => ({
   jay: gameSeatDisplayName(game, 'jay', round),
@@ -1175,8 +1233,7 @@ const shouldUseRoomPlayerNamesForChoices = (options = [], round = {}, game = nul
   const optionKeys = options.map(normalizePlayerChoiceKey);
   return optionKeys.includes('player1')
     || optionKeys.includes('player2')
-    || /\bwho\b.*\b(more|most)\s+likely\b/i.test(normalizeText(round?.question || ''))
-    || /\bwhich\s+(?:player|one\s+of\s+you|of\s+you|of\s+us)\b/i.test(normalizeText(round?.question || ''));
+    || isPutYourPointsPlayerChoicePrompt(round?.question || '');
 };
 
 const resolvePlayerChoiceLabel = (value = '', playerNames = {}) => {
@@ -8435,8 +8492,9 @@ function QuestionAnswerEntryBase({
   embedded = false,
 }) {
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
-  const roundType = normalizeQuestionType(currentRound?.roundType, 'text');
-  const choiceOptions = resolvePlayerChoiceOptionsForRound(inferChoiceOptions(currentRound), game, currentRound);
+  const inputRound = getAnswerInputRound(game, currentRound || {});
+  const roundType = inputRound.roundType;
+  const choiceOptions = resolvePlayerChoiceOptionsForRound(inferChoiceOptions(inputRound), game, inputRound);
   const otherPlayer = currentPlayer === 'jay' ? 'kim' : 'jay';
   const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const currentPlayerGuessForOther = currentPlayerAnswer?.guessedOther || '';
@@ -8447,7 +8505,7 @@ function QuestionAnswerEntryBase({
   const isChoiceRound = usesChoiceInputForQuestionType(roundType);
   const isListRound = usesListInputForQuestionType(roundType);
   const isRatingRound = usesRatingInputForQuestionType(roundType);
-  const listCount = getQuestionTypeListCount(roundType, currentRound?.multipleChoiceOptions || []);
+  const listCount = getQuestionTypeListCount(roundType, inputRound?.multipleChoiceOptions || []);
   const isRoundOpen = (currentRound?.status || 'open') === 'open';
   const hasServerSubmittedAnswer = submissionState === 'submitted' || Boolean(normalizeText(currentPlayerAnswer?.ownAnswer || ''));
   // IMPORTANT: This must not flip during Firestore snapshots (e.g. when a field
@@ -8576,16 +8634,21 @@ function QuestionAnswerEntryBase({
   const updateLocalDraft = (patch) => {
     draftTouchedRef.current = true;
     markAnswerDraftTouched(draftStorageKey);
-    setLocalDraft((current) => {
-      const next = typeof patch === 'function' ? patch(current) : { ...current, ...patch };
-      localDraftRef.current = next;
-      if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, next);
-      return next;
-    });
+    const currentDraft = localDraftRef.current || defaultDraft;
+    const next = typeof patch === 'function' ? patch(currentDraft) : { ...currentDraft, ...patch };
+    localDraftRef.current = next;
+    if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, next);
+    setLocalDraft(next);
+    return next;
   };
 
   const handleAnswerAction = async (draftToSubmit = localDraftRef.current) => {
     if (!isRoundOpen || isSubmittingAnswer) return;
+    const isAnswerDraft =
+      draftToSubmit
+      && typeof draftToSubmit === 'object'
+      && ('ownAnswer' in draftToSubmit || 'guessedOther' in draftToSubmit);
+    const safeDraftToSubmit = isAnswerDraft ? draftToSubmit : localDraftRef.current;
     if (canEditSubmittedAnswer && hasSubmittedAnswer && !isEditingSubmittedAnswer) {
       setIsEditingSubmittedAnswer(true);
       const restoredDraft = (draftStorageKey ? readStoredAnswerDraft(draftStorageKey) : null) || buildSavedDraft();
@@ -8593,10 +8656,10 @@ function QuestionAnswerEntryBase({
       localDraftRef.current = restoredDraft;
       return;
     }
-    if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, draftToSubmit);
+    if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, safeDraftToSubmit);
     setIsSubmittingAnswer(true);
     try {
-      const result = await onSubmitAnswer(draftToSubmit);
+      const result = await onSubmitAnswer(safeDraftToSubmit);
       if (result !== null) {
         draftTouchedRef.current = false;
         clearAnswerDraftTouched(draftStorageKey);
@@ -8609,8 +8672,7 @@ function QuestionAnswerEntryBase({
   };
 
   const chooseFieldOption = (fieldName, option, setter) => {
-    const nextDraft = { ...localDraft, [fieldName]: option };
-    setter(option);
+    const nextDraft = setter(option) || { ...localDraftRef.current, [fieldName]: option };
     if (
       isQuizRound
       && fieldName === 'ownAnswer'
@@ -8687,10 +8749,10 @@ function QuestionAnswerEntryBase({
     }
 
     if (isListRound) {
-      const labels = getQuestionTypeListLabels(roundType, currentRound?.multipleChoiceOptions || []);
+      const labels = getQuestionTypeListLabels(roundType, inputRound?.multipleChoiceOptions || []);
       const values = decodeRankedAnswer(value, listCount);
-      const listHint = Array.isArray(currentRound?.multipleChoiceOptions) && currentRound.multipleChoiceOptions.length
-        ? currentRound.multipleChoiceOptions.join(' • ')
+      const listHint = Array.isArray(inputRound?.multipleChoiceOptions) && inputRound.multipleChoiceOptions.length
+        ? inputRound.multipleChoiceOptions.join(' • ')
         : '';
       return (
         <>
@@ -8767,7 +8829,7 @@ function QuestionAnswerEntryBase({
         <div className={`button-row live-round-actions ${embedded ? 'live-round-actions--embedded' : ''}`}>
           <Button
             className={`primary-button compact next-question-button ${hasSubmittedAnswer && !isEditingSubmittedAnswer ? 'next-question-button--edit' : ''}`}
-            onClick={handleAnswerAction}
+            onClick={() => handleAnswerAction()}
             disabled={isSubmittingAnswer || (!isRoundOpen && !hasSubmittedAnswer) || (isQuizRound && hasSubmittedAnswer)}
           >
             {hasSubmittedAnswer && !isEditingSubmittedAnswer && !isQuizRound ? (
@@ -8828,15 +8890,17 @@ const QuestionAnswerEntry = memo(QuestionAnswerEntryBase, (previous, next) => {
   const nextAnswer = next.currentRound?.answers?.[nextPlayer] || {};
   const previousRoundKey = stableRoundIdentityKey(previous.currentRound || {});
   const nextRoundKey = stableRoundIdentityKey(next.currentRound || {});
+  const previousInputRound = getAnswerInputRound(previous.game, previous.currentRound || {});
+  const nextInputRound = getAnswerInputRound(next.game, next.currentRound || {});
   return previous.gameId === next.gameId
     && previous.game?.id === next.game?.id
     && previousPlayer === nextPlayer
     && previousRoundKey === nextRoundKey
-    && previous.currentRound?.roundType === next.currentRound?.roundType
+    && previousInputRound.roundType === nextInputRound.roundType
     && previous.currentRound?.questionId === next.currentRound?.questionId
     && previous.currentRound?.question === next.currentRound?.question
     && previous.currentRound?.category === next.currentRound?.category
-    && JSON.stringify(resolvePlayerChoiceOptionsForRound(inferChoiceOptions(previous.currentRound), previous.game, previous.currentRound)) === JSON.stringify(resolvePlayerChoiceOptionsForRound(inferChoiceOptions(next.currentRound), next.game, next.currentRound))
+    && JSON.stringify(resolvePlayerChoiceOptionsForRound(inferChoiceOptions(previousInputRound), previous.game, previousInputRound)) === JSON.stringify(resolvePlayerChoiceOptionsForRound(inferChoiceOptions(nextInputRound), next.game, nextInputRound))
     && gameSeatDisplayName(previous.game, 'jay', previous.currentRound) === gameSeatDisplayName(next.game, 'jay', next.currentRound)
     && gameSeatDisplayName(previous.game, 'kim', previous.currentRound) === gameSeatDisplayName(next.game, 'kim', next.currentRound)
     && previous.answerLabel === next.answerLabel
@@ -16814,7 +16878,6 @@ function ProductionApp() {
   const lobbyRounds = useMemo(
     () =>
       enrichedGameLibrary
-        .filter((entry) => !isTrueFalseGameMode(entry?.gameMode || 'standard'))
         .flatMap((entry) => entry.rounds || []),
     [enrichedGameLibrary],
   );
@@ -17183,13 +17246,12 @@ function ProductionApp() {
     () =>
       persistedPreviousGames.filter(
         (entry) =>
-          (entry.status === 'completed' || entry.status === 'ended')
-          && !isHoldemGameMode(entry?.gameMode || 'standard'),
+          entry.status === 'completed' || entry.status === 'ended',
       ),
     [persistedPreviousGames],
   );
   const analyticsActiveGames = useMemo(
-    () => activeGames.filter((entry) => !isHoldemGameMode(entry?.gameMode || 'standard')),
+    () => activeGames,
     [activeGames],
   );
   useEffect(() => {
@@ -23173,7 +23235,7 @@ function ProductionApp() {
       };
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
       const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
-      const roundType = normalizeQuestionType(game.currentRound?.roundType, 'text');
+      const roundType = getEffectiveAnswerRoundType(game, game.currentRound || {});
       const serialisedOwnAnswer = resolvePlayerChoiceAnswerForRound(
         serialiseAnswerForQuestionType(roundType, draft.ownAnswer),
         game,
