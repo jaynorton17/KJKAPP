@@ -5993,12 +5993,104 @@ function LobbyScreen({
   const getLobbyTileImageStyle = (imageUrl) => ({
     '--lobby-tile-image': lobbyTileImagesEnabled && imageUrl ? `url("${imageUrl}")` : 'none',
   });
+  const lobbyGameDetails = {
+    standard: {
+      name: 'Normal Game',
+      howItWorks: 'Players answer for themselves and guess the other person. The reveal compares answers and adds penalty points through the normal round scoring flow.',
+      questionTypes: ['Text Answer', 'True or False', 'Multiple Choice', 'Who Is More Likely', 'Fill in the Blank', 'Would You Rather', 'Open Answer', 'Rating', 'Ranking', 'Ranked / Top 3', 'Preference', 'Favourite', 'Numeric', 'Pet Peeve'],
+      categories: ['Sexual', 'Personality', 'Lifestyle', 'Relationships', 'Food & Drink', 'Travel', 'Films & TV', 'Hypotheticals', 'Romance', 'Childhood', 'Memories', 'Music', 'Future / Goals', 'Random / Wildcard'],
+    },
+    quiz: {
+      name: 'Quick Fire Quiz',
+      howItWorks: 'A timed quiz where faster correct answers score more. The host marks answers correct or incorrect, and quiz points are tracked separately from normal penalty scoring.',
+      questionTypes: ['Text Answer', 'Multiple Choice', 'True or False'],
+      categories: ['Geography', 'Capitals', 'Cities', 'Language', 'Science', 'Technology', 'Animals', 'Literature', 'Film', 'Food', 'Maths', 'Sport', 'History', 'Nature', 'Space', 'World Culture'],
+    },
+    trueFalse: {
+      name: 'True or False',
+      howItWorks: 'Both players lock their own True/False answer and guess the other person. Wrong guesses add +10 and missing locked answers add +10 automatically.',
+      questionTypes: ['True or False'],
+      categories: ['Relationships', 'Sexual', 'Personality', 'Lifestyle', 'Hypotheticals', 'Memories', 'Childhood', 'Films & TV', 'Romance', 'Travel', 'Food & Drink', 'Music'],
+    },
+    thisOrThat: {
+      name: 'This or That',
+      howItWorks: 'Each player chooses their own side and predicts the other person’s side. Your answer is shown on the left, your guess on the right, and wrong or missing guesses add automatic penalties.',
+      questionTypes: ['This or That'],
+      categories: ['Sexual', 'Food & Drink', 'Romance', 'Travel', 'Films & TV', 'Habits', 'Lifestyle', 'Personality', 'Random / Wildcard'],
+    },
+    mostLikely: {
+      name: 'Most Likely To',
+      howItWorks: 'Both players vote Jay, Kim, Both, or Neither. Matching votes add 0, split votes add +10, and missing votes add +20.',
+      questionTypes: ['Who is More Likely To'],
+      categories: ['Connection', 'Fun', 'Personality', 'Romance', 'Competition'],
+    },
+    putYourPoints: {
+      name: 'Put Your Points Where Your Mouth Is',
+      howItWorks: 'Each round generates a random 1-200 point stake. Players answer for themselves and guess the other person, then the host marks Match or Miss for each player. A Miss adds the stake as that player’s penalty.',
+      questionTypes: ['Text Answer', 'Multiple Choice', 'True or False', 'Who is More Likely To', 'Would You Rather', 'Rating'],
+      categories: ['Food', 'Lifestyle', 'Entertainment', 'Romance', 'Travel', 'Technology', 'Home', 'Funny', 'Games', 'Personality', 'Communication', 'Social', 'Fashion', 'Future', 'Habits', 'Music', 'Money', 'Wellbeing', 'Fitness'],
+    },
+    holdem: {
+      name: "Texas Hold'em",
+      howItWorks: 'A heads-up poker table using Jay and Kim’s live penalty-point balances as bankrolls. Hands follow poker actions rather than question rounds.',
+      questionTypes: ['Poker actions'],
+      categories: ['Cards', 'Bankroll', 'Heads-up play'],
+    },
+  };
+
+  const renderLobbyDetailChips = (items = [], className = '') => (
+    <div className={`lobby-game-detail-chip-grid ${className}`.trim()}>
+      {items.map((item) => <span className="lobby-game-detail-chip" key={item}>{item}</span>)}
+    </div>
+  );
+
+  const renderLobbyTileDetails = (cardId) => {
+    const details = lobbyGameDetails[cardId];
+    if (!details) return null;
+    return (
+      <section className="lobby-game-detail-panel" aria-label={`${details.name} details`}>
+        <div className="mini-heading">
+          <div>
+            <span>Game</span>
+            <h3>{details.name}</h3>
+          </div>
+        </div>
+        <p className="panel-copy lobby-game-detail-copy">{details.howItWorks}</p>
+        <div className="lobby-game-detail-section">
+          <strong>Question types</strong>
+          {renderLobbyDetailChips(details.questionTypes)}
+        </div>
+        <div className="lobby-game-detail-section">
+          <strong>Categories</strong>
+          {renderLobbyDetailChips(details.categories, 'lobby-game-detail-chip-grid--categories')}
+        </div>
+      </section>
+    );
+  };
 
   const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, description, footerMeta, onCreateAndInvite }) => {
     const isFlipped = Boolean(flippedLobbyTiles?.[cardId]);
     const isInfoOpen = openLobbyTileInfoId === cardId;
+    const handleFrontClick = (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('input, textarea, select, button, label, a')) return;
+      setLobbyTileFlipped(cardId, true);
+    };
     return (
-      <div className="lobby-image-tile-face lobby-image-tile-face--front" inert={isFlipped} aria-hidden={isFlipped}>
+      <div
+        className="lobby-image-tile-face lobby-image-tile-face--front"
+        inert={isFlipped}
+        aria-hidden={isFlipped}
+        onClick={handleFrontClick}
+        role="button"
+        tabIndex={isFlipped ? -1 : 0}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setLobbyTileFlipped(cardId, true);
+          }
+        }}
+      >
         <div className="lobby-image-tile-front-copy">
           <div className="panel-heading lobby-image-tile-front-heading">
             <div>
@@ -6032,7 +6124,7 @@ function LobbyScreen({
               onClick={() => setLobbyTileFlipped(cardId, true)}
               disabled={isBusy}
             >
-              Create New Game
+              Details
             </Button>
             <Button
               type="button"
@@ -6245,6 +6337,7 @@ function LobbyScreen({
                             </div>
                             <span className="status-pill">{questionCount} ready</span>
                           </div>
+                          {renderLobbyTileDetails('standard')}
 
                           <div className="create-mode-row">
                             <Button className={`ghost-button compact ${createMode === 'random' ? 'is-on' : ''}`} onClick={() => setCreateMode('random')}>
@@ -6393,6 +6486,7 @@ function LobbyScreen({
                             </div>
                             <span className="status-pill">{putYourPointsReadyCount} ready</span>
                           </div>
+                          {renderLobbyTileDetails('putYourPoints')}
                           <p className="panel-copy">Each round flicks through a few stake numbers, then lands on the final amount. Players submit their own answer and their guess. The host marks Match or Miss for Jay and Kim separately.</p>
                           <label className="field">
                             <span>Put Your Points Code</span>
@@ -6483,7 +6577,8 @@ function LobbyScreen({
 	                            <h2>Quiz Mode</h2>
 	                          </div>
 	                        </div>
-	                        <p className="panel-copy">Start a speed quiz game from the Quiz sheet question set.</p>
+                          {renderLobbyTileDetails('quiz')}
+	                        <p className="panel-copy">Start a speed quiz game with timer-based scoring and host judgement.</p>
                           <div className="quiz-card-hero" aria-hidden="true">
                             <div className="quiz-card-hero-main">
                               <svg viewBox="0 0 120 120" role="img" aria-hidden="true">
@@ -6563,7 +6658,7 @@ function LobbyScreen({
                           eyebrow: 'Mirror Match',
                           title: 'True or False',
                           statusText: `${trueFalseQuestionCount} ready`,
-                          description: 'Eight-second True or False rounds. Pick what you think the other person will answer, then lock your own answer too. Your first choice for each side is final.',
+                          description: 'True or False rounds where you guess the other person, then lock your own answer too. Your first choice for each side is final.',
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
                               <span>Questions</span>
@@ -6597,7 +6692,8 @@ function LobbyScreen({
                             </div>
                             <span className="status-pill">{trueFalseQuestionCount} ready</span>
                           </div>
-                          <p className="panel-copy">Every round gives both players 8 seconds. Pick what you think the other person will answer, then lock your own answer. The first tap for each answer sticks.</p>
+                          {renderLobbyTileDetails('trueFalse')}
+                          <p className="panel-copy">Pick what you think the other person will answer, then lock your own answer. The first tap for each answer sticks.</p>
                           <label className="field">
                             <span>True or False Code</span>
                             <input
@@ -6688,6 +6784,7 @@ function LobbyScreen({
                             </div>
                             <span className="status-pill">{thisOrThatReadyCount} ready</span>
                           </div>
+                          {renderLobbyTileDetails('thisOrThat')}
                           <p className="panel-copy">Each player locks what they think the other person will pick and what they would really choose. Wrong guesses add +10 penalty automatically.</p>
                           <label className="field">
                             <span>This or That Code</span>
@@ -6779,6 +6876,7 @@ function LobbyScreen({
                             </div>
                             <span className="status-pill">{mostLikelyReadyCount} ready</span>
                           </div>
+                          {renderLobbyTileDetails('mostLikely')}
                           <p className="panel-copy">Each player locks one vote: Jay, Kim, Both, or Neither. Matching votes add 0. Split votes add +10 to both players automatically.</p>
                           <label className="field">
                             <span>Most Likely To Code</span>
@@ -6858,6 +6956,7 @@ function LobbyScreen({
                             </div>
                             <span className="status-pill">{formatScore(HOLDEM_SMALL_BLIND)} / {formatScore(HOLDEM_BIG_BLIND)}</span>
                           </div>
+                          {renderLobbyTileDetails('holdem')}
                           <p className="panel-copy">Open a heads-up Texas Hold'em table where Jay and Kim use their live penalty-point totals as the poker bankroll.</p>
                           <div className="hold-em-card-hero" aria-hidden="true">
                             <span className="hold-em-card-chip">A♠</span>
