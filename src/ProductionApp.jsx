@@ -363,20 +363,22 @@ const buildGameInviteId = (targetGameId = '', invitedForUserId = '') =>
   targetGameId && invitedForUserId ? `game-invite-${targetGameId}-${invitedForUserId}` : '';
 const buildGameRoomInviteKey = (targetGameId = '', invitedForUserId = '', invitedForSeat = '') =>
   [targetGameId, invitedForUserId || invitedForSeat || 'pending'].filter(Boolean).join(':');
-const resolveGameMode = (value = 'standard') =>
-  value === 'quiz'
+const resolveGameMode = (value = 'standard') => {
+  const normalizedBankType = normalizeQuestionBankType(value);
+  return value === 'quiz' || normalizedBankType === 'quiz'
     ? 'quiz'
     : value === HOLDEM_GAME_MODE
       ? HOLDEM_GAME_MODE
-      : value === TRUE_FALSE_GAME_MODE
+      : value === TRUE_FALSE_GAME_MODE || normalizedBankType === TRUE_FALSE_GAME_MODE
         ? TRUE_FALSE_GAME_MODE
-      : value === THIS_OR_THAT_GAME_MODE
+      : value === THIS_OR_THAT_GAME_MODE || normalizedBankType === THIS_OR_THAT_GAME_MODE
         ? THIS_OR_THAT_GAME_MODE
-        : value === MOST_LIKELY_GAME_MODE
+        : value === MOST_LIKELY_GAME_MODE || normalizedBankType === MOST_LIKELY_GAME_MODE
           ? MOST_LIKELY_GAME_MODE
-          : value === PUT_YOUR_POINTS_GAME_MODE
+          : value === PUT_YOUR_POINTS_GAME_MODE || normalizedBankType === PUT_YOUR_POINTS_GAME_MODE
             ? PUT_YOUR_POINTS_GAME_MODE
             : 'standard';
+};
 const isQuizGameMode = (value = 'standard') => resolveGameMode(value) === 'quiz';
 const isHoldemGameMode = (value = 'standard') => resolveGameMode(value) === HOLDEM_GAME_MODE;
 const isTrueFalseGameMode = (value = 'standard') => resolveGameMode(value) === TRUE_FALSE_GAME_MODE;
@@ -4127,7 +4129,7 @@ const getGameQuestionGoal = (game, rounds = []) => {
 
 const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
   const status = data.status || 'active';
-  const gameMode = resolveGameMode(data.gameMode || 'standard');
+  const gameMode = resolveGameMode(data.gameMode || data.questionBankType || 'standard');
   const isHoldemGame = isHoldemGameMode(gameMode);
   const holdemStats = data.holdemStats || defaultHoldemStats();
   const holdemState = data.holdemState || null;
@@ -4153,6 +4155,26 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
   const finalScores = isHoldemGame
     ? (data.finalScores || data.totals || defaultHoldemFinals)
     : (data.finalScores || data.totals || (roundsData.length ? roundsData.at(-1)?.totalsAfterRound || { jay: 0, kim: 0 } : { jay: 0, kim: 0 }));
+  const penaltyScoreWinner = Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
+    ? 'tie'
+    : Number(finalScores.jay || 0) < Number(finalScores.kim || 0)
+      ? 'jay'
+      : 'kim';
+  const quizTotals = data.quizTotals || { jay: 0, kim: 0 };
+  const quizScoreWinner = Number(quizTotals.jay || 0) === Number(quizTotals.kim || 0)
+    ? 'tie'
+    : Number(quizTotals.jay || 0) > Number(quizTotals.kim || 0)
+      ? 'jay'
+      : 'kim';
+  const storedWinner = ['jay', 'kim', 'tie'].includes(data.winner) ? data.winner : '';
+  const storedQuizWinner = ['jay', 'kim', 'tie'].includes(data.quizWinner) ? data.quizWinner : '';
+  const normalizedQuizWinner = storedQuizWinner && !(storedQuizWinner === 'tie' && quizScoreWinner !== 'tie')
+    ? storedQuizWinner
+    : quizScoreWinner;
+  const derivedWinner = gameMode === 'quiz' ? normalizedQuizWinner : penaltyScoreWinner;
+  const normalizedWinner = storedWinner && !(storedWinner === 'tie' && derivedWinner !== 'tie')
+    ? storedWinner
+    : derivedWinner;
   const currentPlayerList = [
     data.playerProfiles?.[data.seats?.jay]?.displayName || 'Jay',
     data.playerProfiles?.[data.seats?.kim]?.displayName || 'Kim',
@@ -4175,11 +4197,9 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     endedAt: data.endedAt || null,
     endedBy: data.endedBy || '',
     finalScores,
-    winner: isHoldemGame
-      ? holdemWinner
-      : (data.winner || (finalScores ? (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim') : 'tie')),
-    quizTotals: data.quizTotals || { jay: 0, kim: 0 },
-    quizWinner: data.quizWinner || '',
+    winner: isHoldemGame ? holdemWinner : normalizedWinner,
+    quizTotals,
+    quizWinner: gameMode === 'quiz' ? normalizedQuizWinner : data.quizWinner || '',
     wagerSettlement: data.wagerSettlement || null,
     roundsPlayed: isHoldemGame ? Number(holdemStats?.handsPlayed || data.roundsPlayed || 0) : (data.roundsPlayed || roundsData.length),
     rounds: roundsData,
@@ -4189,7 +4209,7 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     seats: data.seats || {},
     playerProfiles: data.playerProfiles || {},
     gameMode,
-    questionBankType: data.questionBankType || 'game',
+    questionBankType: data.questionBankType || getQuestionBankTypeForGameMode(gameMode),
     requestedQuestionCount: Number(data.requestedQuestionCount || 0),
     actualQuestionCount: displayedQuestionCount,
     displayedQuestionCount,
@@ -17164,13 +17184,12 @@ function ProductionApp() {
       persistedPreviousGames.filter(
         (entry) =>
           (entry.status === 'completed' || entry.status === 'ended')
-          && !isHoldemGameMode(entry?.gameMode || 'standard')
-          && !isTrueFalseGameMode(entry?.gameMode || 'standard'),
+          && !isHoldemGameMode(entry?.gameMode || 'standard'),
       ),
     [persistedPreviousGames],
   );
   const analyticsActiveGames = useMemo(
-    () => activeGames.filter((entry) => !isHoldemGameMode(entry?.gameMode || 'standard') && !isTrueFalseGameMode(entry?.gameMode || 'standard')),
+    () => activeGames.filter((entry) => !isHoldemGameMode(entry?.gameMode || 'standard')),
     [activeGames],
   );
   useEffect(() => {
