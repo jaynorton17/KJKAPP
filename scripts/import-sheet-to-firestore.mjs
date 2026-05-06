@@ -6,6 +6,7 @@ import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import { arrayRemove, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, getFirestore, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore';
 import {
   parseGoogleSheetImport,
+  parseGoogleSheetMostLikelyImport,
   parseGoogleSheetQuizImport,
   parseGoogleSheetReference,
   parseGoogleSheetThisOrThatImport,
@@ -119,9 +120,11 @@ const syncGoogleSheetQuestions = async ({ sheetValue: nextSheetValue, existingQu
     ? 'Quiz'
     : normalizedTargetBankType === 'thisOrThatGame'
       ? 'This or That'
-      : normalizedTargetBankType === 'trueFalseGame'
-        ? 'True or False'
-        : 'Questions';
+      : normalizedTargetBankType === 'mostLikelyGame'
+        ? 'Most Like To'
+        : normalizedTargetBankType === 'trueFalseGame'
+          ? 'True or False'
+          : 'Questions';
   const targets = [{
     gid: '',
     csvUrl: `https://docs.google.com/spreadsheets/d/${reference.id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`,
@@ -171,13 +174,21 @@ const syncGoogleSheetQuestions = async ({ sheetValue: nextSheetValue, existingQu
               importedAt: new Date().toISOString(),
               sourceLabel: `${reference.id}:${target.sheetName || 'True or False'}`,
             })
-          : parseGoogleSheetImport({
-              rawText,
-              existingQuestions: nextExistingQuestions,
-              overwriteExisting: false,
-              importedAt: new Date().toISOString(),
-              sourceLabel: `${reference.id}:${target.sheetName || 'Questions'}`,
-            });
+          : normalizedTargetBankType === 'mostLikelyGame'
+            ? parseGoogleSheetMostLikelyImport({
+                rawText,
+                existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'mostLikelyGame'),
+                overwriteExisting: false,
+                importedAt: new Date().toISOString(),
+                sourceLabel: `${reference.id}:${target.sheetName || 'Most Like To'}`,
+              })
+            : parseGoogleSheetImport({
+                rawText,
+                existingQuestions: nextExistingQuestions,
+                overwriteExisting: false,
+                importedAt: new Date().toISOString(),
+                sourceLabel: `${reference.id}:${target.sheetName || 'Questions'}`,
+              });
     imports.push(...result.imports);
     updates.push(...result.updates);
     nextExistingQuestions.push(...result.imports, ...result.updates);

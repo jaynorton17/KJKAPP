@@ -168,7 +168,7 @@ const QUESTION_BANK_SYNC_TARGETS = [
     gameName: 'Most Likely To',
     label: 'Most Likely To Bank',
     importLabel: 'Most Likely To Questions',
-    sheetName: 'Most Likely To',
+    sheetName: 'Most Like To',
   },
   {
     bankType: PUT_YOUR_POINTS_GAME_MODE,
@@ -1161,9 +1161,16 @@ const isGenericPlayerChoiceOptionList = (options = []) => {
   return hasFirstPlayer && hasSecondPlayer && hasSharedChoice;
 };
 
-const isPutYourPointsPlayerChoicePrompt = (questionText = '') =>
+const isPlayerChoicePrompt = (questionText = '') =>
   /\bwho\b.*\b(more|most)\s+likely\b/i.test(normalizeText(questionText))
   || /\bwhich\s+(?:player|one\s+of\s+you|of\s+you|of\s+us)\b/i.test(normalizeText(questionText));
+
+const isPutYourPointsPlayerChoicePrompt = (questionText = '') => isPlayerChoicePrompt(questionText);
+
+const isMostLikelyVoteRound = (round = {}) => {
+  const providedOptions = parseAnswerList(round?.multipleChoiceOptions || round?.options || []);
+  return isPlayerChoicePrompt(round?.question || '') || isGenericPlayerChoiceOptionList(providedOptions);
+};
 
 const isPutYourPointsOrderingPrompt = (questionText = '') =>
   /\b(sort|sequence|arrange)\b/i.test(normalizeText(questionText))
@@ -1744,8 +1751,11 @@ const buildDiaryMostLikelySummary = (rounds = []) => {
     jay: Object.fromEntries(voteOptions.map((option) => [option, 0])),
     kim: Object.fromEntries(voteOptions.map((option) => [option, 0])),
   };
+  const voteRounds = normalizedRounds.filter((round) => isMostLikelyVoteRound(round));
+  if (!voteRounds.length) return null;
+
   const summary = {
-    totalQuestions: normalizedRounds.length,
+    totalQuestions: voteRounds.length,
     matchedVotes: 0,
     splitVotes: 0,
     missedVotes: 0,
@@ -1756,7 +1766,7 @@ const buildDiaryMostLikelySummary = (rounds = []) => {
     missedHighlights: [],
   };
 
-  normalizedRounds.forEach((round, index) => {
+  voteRounds.forEach((round, index) => {
     const outcome = buildMostLikelyRoundOutcome(round, { useStoredPenalties: false });
     const row = {
       round: Number(round?.number || index + 1),
@@ -3617,10 +3627,12 @@ const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat 
     ? hasSubmittedOrJudgedQuizRoundAnswer(round, seat)
     : isTrueFalseGameMode(gameMode)
     ? hasCompletedTrueFalseRoundAnswer(round, seat)
-    : isThisOrThatGameMode(gameMode)
-      ? hasCompletedThisOrThatRoundAnswer(round, seat)
-      : isMostLikelyGameMode(gameMode)
-        ? hasCompletedMostLikelyRoundAnswer(round, seat)
+      : isThisOrThatGameMode(gameMode)
+        ? hasCompletedThisOrThatRoundAnswer(round, seat)
+        : isMostLikelyGameMode(gameMode)
+        ? isMostLikelyVoteRound(round)
+          ? hasCompletedMostLikelyRoundAnswer(round, seat)
+          : hasSubmittedRoundAnswer(round, seat)
         : isPutYourPointsGameMode(gameMode)
           ? hasCompletedPutYourPointsRoundAnswer(round, seat)
           : hasSubmittedRoundAnswer(round, seat);
@@ -3792,7 +3804,7 @@ const buildAutoScoredRoundPenaltyMap = (gameMode = 'standard', round = {}, optio
     const outcome = buildThisOrThatRoundOutcome(round, options);
     return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
   }
-  if (isMostLikelyGameMode(gameMode)) {
+  if (isMostLikelyGameMode(gameMode) && isMostLikelyVoteRound(round)) {
     const outcome = buildMostLikelyRoundOutcome(round, options);
     return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
   }
@@ -5655,6 +5667,7 @@ function LobbyScreen({
         gameName: entry.name || entry.gameName || entry.joinCode || 'Most Likely To',
       })),
     );
+    const voteRoundsData = roundsData.filter((round) => isMostLikelyVoteRound(round));
     const voteOptions = getMostLikelyOptions();
     const voteCounts = {
       jay: Object.fromEntries(voteOptions.map((option) => [option, 0])),
@@ -5665,7 +5678,7 @@ function LobbyScreen({
       sessionsTracked: sessions.length,
       totalGamesPlayed: completedSessions.length,
       activeGames: activeSessions.length,
-      totalQuestionsAnswered: roundsData.length,
+      totalQuestionsAnswered: voteRoundsData.length,
       matchedVotes: 0,
       splitVotes: 0,
       missedVotes: 0,
@@ -5673,7 +5686,7 @@ function LobbyScreen({
       kimPenaltyPoints: 0,
     };
 
-    roundsData.forEach((round) => {
+    voteRoundsData.forEach((round) => {
       const outcome = buildMostLikelyRoundOutcome(round, { useStoredPenalties: false });
       const categoryKey = normalizeText(round?.category) || 'uncategorised';
       const categoryEntry = categoryStats.get(categoryKey) || {
@@ -10264,6 +10277,7 @@ function RoomActiveFrameBase({
     && normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard')) === 'trueFalseGame';
   const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
   const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
+  const isMostLikelyVoteGame = isMostLikelyGame && isMostLikelyVoteRound(currentRound || {});
   const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
   const penaltyPreview = useMemo(
     () => (
@@ -10316,7 +10330,7 @@ function RoomActiveFrameBase({
       ? 'Waiting'
       : 'Answering';
   const showReplayAction = false;
-  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame && !isMostLikelyGame && !isPutYourPointsGame;
+  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame && !isMostLikelyVoteGame && !isPutYourPointsGame;
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
   const viewerOverrideRequest = currentRound?.overrideRequests?.[currentPlayer] || null;
@@ -10337,8 +10351,8 @@ function RoomActiveFrameBase({
     [currentRound, isThisOrThatGame],
   );
   const mostLikelyOutcome = useMemo(
-    () => (isMostLikelyGame ? buildMostLikelyRoundOutcome(currentRound || {}) : null),
-    [currentRound, isMostLikelyGame],
+    () => (isMostLikelyVoteGame ? buildMostLikelyRoundOutcome(currentRound || {}) : null),
+    [currentRound, isMostLikelyVoteGame],
   );
   const putYourPointsOutcome = useMemo(
     () => (isPutYourPointsGame ? buildPutYourPointsRoundOutcome(currentRound || {}) : null),
@@ -10390,7 +10404,7 @@ function RoomActiveFrameBase({
         {isQuizGame ? <QuizLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isTrueFalseGame ? <TrueFalseLiveStatus revealIsReady={revealIsReady} /> : null}
         {isThisOrThatGame ? <ThisOrThatLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
-        {isMostLikelyGame ? <MostLikelyLiveStatus revealIsReady={revealIsReady} /> : null}
+        {isMostLikelyVoteGame ? <MostLikelyLiveStatus revealIsReady={revealIsReady} /> : null}
         {isPutYourPointsGame ? <PutYourPointsStakeTicker currentRound={currentRound} /> : null}
         {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer && viewerQuizResult ? (
           <div className="quiz-override-strip">
@@ -10491,7 +10505,7 @@ function RoomActiveFrameBase({
                 onLockAnswerField={onLockThisOrThatAnswer}
                 isBusy={isBusy}
               />
-            ) : isMostLikelyGame ? (
+            ) : isMostLikelyVoteGame ? (
               <MostLikelyAutoAnswerEntry
                 embedded
                 viewerSeat={currentPlayer}
@@ -10568,7 +10582,7 @@ function RoomActiveFrameBase({
                 isQuizGame={isQuizGame}
                 isTrueFalseGame={isTrueFalseGame}
                 isThisOrThatGame={isThisOrThatGame}
-                isMostLikelyGame={isMostLikelyGame}
+                isMostLikelyGame={isMostLikelyVoteGame}
                 isPutYourPointsGame={isPutYourPointsGame}
                 totalQuizPoints={quizRevealTotals[currentPlayer]}
               />
@@ -10666,7 +10680,7 @@ function RoomActiveFrameBase({
                       {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
                     </small>
                   </>
-                ) : isMostLikelyGame ? (
+                ) : isMostLikelyVoteGame ? (
                   <>
                     <span>Round Result</span>
                     <strong>{mostLikelySummaryLabel}</strong>
@@ -10747,7 +10761,7 @@ function RoomActiveFrameBase({
                 isQuizGame={isQuizGame}
                 isTrueFalseGame={isTrueFalseGame}
                 isThisOrThatGame={isThisOrThatGame}
-                isMostLikelyGame={isMostLikelyGame}
+                isMostLikelyGame={isMostLikelyVoteGame}
                 isPutYourPointsGame={isPutYourPointsGame}
                 totalQuizPoints={quizRevealTotals[otherPlayer]}
               />
@@ -14495,12 +14509,13 @@ function GameRoomView({
   const isTrueFalseGame = isTrueFalseGameMode(currentGameMode);
   const isThisOrThatGame = isThisOrThatGameMode(currentGameMode);
   const isMostLikelyGame = isMostLikelyGameMode(currentGameMode);
+  const isMostLikelyVoteGame = isMostLikelyGame && isMostLikelyVoteRound(currentRound || {});
   const isPutYourPointsGame = isPutYourPointsGameMode(currentGameMode);
   const bothPlayersSubmitted = isTrueFalseGame
     ? Boolean(hasCompletedTrueFalseRoundAnswer(currentRound, 'jay') && hasCompletedTrueFalseRoundAnswer(currentRound, 'kim'))
     : isThisOrThatGame
       ? Boolean(hasCompletedThisOrThatRoundAnswer(currentRound, 'jay') && hasCompletedThisOrThatRoundAnswer(currentRound, 'kim'))
-    : isMostLikelyGame
+    : isMostLikelyVoteGame
       ? Boolean(hasCompletedMostLikelyRoundAnswer(currentRound, 'jay') && hasCompletedMostLikelyRoundAnswer(currentRound, 'kim'))
     : isPutYourPointsGame
       ? Boolean(hasCompletedPutYourPointsRoundAnswer(currentRound, 'jay') && hasCompletedPutYourPointsRoundAnswer(currentRound, 'kim'))
@@ -14510,7 +14525,7 @@ function GameRoomView({
     ? (hasCompletedTrueFalseRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
     : isThisOrThatGame
       ? (hasCompletedThisOrThatRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
-    : isMostLikelyGame
+    : isMostLikelyVoteGame
       ? (hasCompletedMostLikelyRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
     : isPutYourPointsGame
       ? (hasCompletedPutYourPointsRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
@@ -14816,8 +14831,8 @@ function GameRoomView({
           </section>
         );
       }
-      if (isTrueFalseGame || isThisOrThatGame || isMostLikelyGame) {
-        const modeLabel = isMostLikelyGame ? 'Most Likely To' : isThisOrThatGame ? 'This or That' : 'True or False';
+      if (isTrueFalseGame || isThisOrThatGame || isMostLikelyVoteGame) {
+        const modeLabel = isMostLikelyVoteGame ? 'Most Likely To' : isThisOrThatGame ? 'This or That' : 'True or False';
         return (
           <section className="mobile-entry-panel mobile-round-panel">
             <section className="panel room-status-panel room-status-panel--host-mobile">
@@ -15301,11 +15316,11 @@ function GameRoomView({
                     isBusy={isBusy}
                   />
                 ) :
-                isTrueFalseGame || isThisOrThatGame || isMostLikelyGame ? (
+                isTrueFalseGame || isThisOrThatGame || isMostLikelyVoteGame ? (
                   <section className="panel host-queue-panel host-queue-panel--auto-scoring room-status-panel">
                     <div className="panel-heading">
                       <div>
-                        <p className="eyebrow">{isMostLikelyGame ? 'Most Likely To' : isThisOrThatGame ? 'This or That' : 'True or False'}</p>
+                        <p className="eyebrow">{isMostLikelyVoteGame ? 'Most Likely To' : isThisOrThatGame ? 'This or That' : 'True or False'}</p>
                         <h2>Automatic Scoring</h2>
                       </div>
                     </div>
@@ -20174,7 +20189,7 @@ function ProductionApp() {
               existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'mostLikelyGame'),
               overwriteExisting,
               importedAt: new Date().toISOString(),
-              sourceLabel: `${reference.id}:${target.sheetName || 'Most Likely To'}`,
+              sourceLabel: `${reference.id}:${target.sheetName || 'Most Like To'}`,
             })
         : normalizedTargetBankType === 'putYourPointsGame'
           ? parseGoogleSheetPutYourPointsImport({
@@ -23510,13 +23525,14 @@ function ProductionApp() {
     const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
     const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
     const round = game?.currentRound || null;
+    const isMostLikelyVoteGame = isMostLikelyGame && isMostLikelyVoteRound(round || {});
     const roundKey = stableRoundIdentityKey(round || {});
     const settleKey = `${game?.id || ''}:${roundKey}:standard-reveal`;
     if (
       isQuizGame
       || isTrueFalseGame
       || isThisOrThatGame
-      || isMostLikelyGame
+      || isMostLikelyVoteGame
       || !round
       || round.status !== 'open'
       || !hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', round, 'jay')
@@ -23683,12 +23699,13 @@ function ProductionApp() {
   useEffect(() => {
     const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
     const round = game?.currentRound || null;
+    const isMostLikelyVoteGame = isMostLikelyGame && isMostLikelyVoteRound(round || {});
     const roundKey = stableRoundIdentityKey(round || {});
     const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
     const bothPlayersCompleted = hasCompletedMostLikelyRoundAnswer(round, 'jay') && hasCompletedMostLikelyRoundAnswer(round, 'kim');
     const settleKey = `${game?.id || ''}:${roundKey}:most-likely-reveal`;
     if (
-      !isMostLikelyGame
+      !isMostLikelyVoteGame
       || !round
       || round.status !== 'open'
       || !bothPlayersCompleted
