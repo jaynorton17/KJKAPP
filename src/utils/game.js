@@ -898,6 +898,10 @@ export const createRoundResult = (input, nextNumber = 1, priorTotals = emptyTota
     normalizedCorrectAnswer,
     penaltyAdded,
     scores,
+    quizPoints: {
+      jay: toScore(input.quizPoints?.jay ?? input.pointsAwarded?.jay ?? 0),
+      kim: toScore(input.quizPoints?.kim ?? input.pointsAwarded?.kim ?? 0),
+    },
     manualScores: Boolean(input.manualScores),
     scoringMode: normalizeScoringMode(input.scoringMode, roundType),
     scoringOutcomeType: normalizeScoringOutcomeType(input.scoringOutcomeType, roundType),

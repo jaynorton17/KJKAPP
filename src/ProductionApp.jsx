@@ -886,6 +886,7 @@ const collectGameQuestionIds = (games = [], { includeQueued = true } = {}) =>
   mergeUniqueIds(
     ...(games || []).map((entry) =>
       mergeUniqueIds(
+        entry?.retiredQuestionIds || [],
         entry?.usedQuestionIds || [],
         (entry?.rounds || []).map((round) => round?.questionId),
         entry?.currentRound?.questionId ? [entry.currentRound.questionId] : [],
@@ -1322,13 +1323,13 @@ const buildGameDiaryScoreContext = (gameSummary = {}) => {
       kim: Number(gameSummary?.quizTotals?.kim || 0),
     };
     const summary = winnerSeat
-      ? `${winnerLabel} won the Quick Fire Quiz ${quizTotals.jay}-${quizTotals.kim} on quiz points.`
+      ? `${winnerLabel} won the Quick Fire Quiz ${quizTotals.jay}-${quizTotals.kim} on manual quiz points.`
       : `The Quick Fire Quiz finished level at ${quizTotals.jay}-${quizTotals.kim}.`;
     return {
       gameMode,
       winnerSeat,
       winnerLabel,
-      scoreLabel: 'Quiz points',
+      scoreLabel: 'Manual quiz points',
       scoreStyle: 'Higher quiz points wins.',
       scoreDisplay: `Jay ${quizTotals.jay} · Kim ${quizTotals.kim}`,
       summary,
@@ -1444,7 +1445,7 @@ const buildDiaryReplaySummary = (questionReplays = [], gameId = '') => {
     .slice(0, AI_DIARY_SIGNAL_LIMIT);
 };
 
-const buildDiaryQuizSummary = (quizAnswers = [], gameId = '') => {
+const buildDiaryQuizSummary = (quizAnswers = [], gameId = '', gameSummary = {}) => {
   const rows = (quizAnswers || []).filter(
     (entry) => normalizeText(entry?.quizSessionId || entry?.gameId || '') === normalizeText(gameId),
   );
@@ -1484,6 +1485,11 @@ const buildDiaryQuizSummary = (quizAnswers = [], gameId = '') => {
     categoryRow.bySeat[seat].points += pointsAwarded;
     categoryMap.set(categoryKey, categoryRow);
   });
+
+  if (gameSummary?.quizTotals) {
+    bySeat.jay.points = Number(gameSummary.quizTotals.jay || 0);
+    bySeat.kim.points = Number(gameSummary.quizTotals.kim || 0);
+  }
 
   const strongestCategoryForSeat = (seat = 'jay') =>
     [...categoryMap.values()]
@@ -1909,7 +1915,7 @@ const buildAiGameDiaryFacts = ({
   const analytics = gameMode === 'quiz' ? null : calculateAnalytics(rounds);
   const feedbackSummary = buildDiaryFeedbackSummary(questionFeedback, gameSummary?.id || '');
   const replaySummary = buildDiaryReplaySummary(questionReplays, gameSummary?.id || '');
-  const quizSummary = gameMode === 'quiz' ? buildDiaryQuizSummary(quizAnswers, gameSummary?.id || '') : null;
+  const quizSummary = gameMode === 'quiz' ? buildDiaryQuizSummary(quizAnswers, gameSummary?.id || '', gameSummary) : null;
   const mostLikelySummary = isMostLikelyGameMode(gameMode) ? buildDiaryMostLikelySummary(rounds) : null;
   const chatSummary = buildDiaryChatSummary(chatMessages);
   const topCategories = collectDiaryTopCategories(rounds);
@@ -3473,16 +3479,7 @@ const buildPendingRoundPenaltyMapForFinalize = (gameMode = 'standard', round = {
     jay: toScore(pendingRoundPenaltyOverride?.jay ?? round?.penalties?.jay ?? 0),
     kim: toScore(pendingRoundPenaltyOverride?.kim ?? round?.penalties?.kim ?? 0),
   };
-const getTrueFalseRetiredQuestionIdsForGame = (game = {}) => {
-  const playedQuestionIds = getPlayedQuestionIdsForGame(game);
-  const bankType = normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard'));
-  if (bankType !== 'trueFalseGame') return playedQuestionIds;
-  return mergeUniqueIds(
-    playedQuestionIds,
-    game?.currentRound?.questionId ? [game.currentRound.questionId] : [],
-    game?.questionQueueIds || [],
-  );
-};
+const getRetiredQuestionIdsForGame = (game = {}) => collectGameQuestionIds([game]);
 const getLifetimeRollbackForGame = (game = {}) => {
   const gameMode = game?.gameMode || 'standard';
   if (isHoldemGameMode(gameMode)) {
@@ -3619,6 +3616,7 @@ const stableRoomSnapshotValue = (game = {}) => {
     requestedQuestionCount: Number(game.requestedQuestionCount || 0),
     actualQuestionCount: Number(game.actualQuestionCount || 0),
     questionQueueIds: game.questionQueueIds || [],
+    retiredQuestionIds: game.retiredQuestionIds || [],
     usedQuestionIds: game.usedQuestionIds || [],
     currentRound: round
       ? {
@@ -3839,6 +3837,7 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
   const holdemStats = data.holdemStats || defaultHoldemStats();
   const holdemState = data.holdemState || null;
   const selectedQuestionsLength = Array.isArray(data.questionQueueIds) ? data.questionQueueIds.filter(Boolean).length : 0;
+  const retiredQuestionIds = Array.isArray(data.retiredQuestionIds) ? data.retiredQuestionIds.filter(Boolean) : [];
   const usedQuestionIds = Array.isArray(data.usedQuestionIds) ? data.usedQuestionIds.filter(Boolean) : [];
   const answeredRoundsLength = isHoldemGame ? 0 : roundsData.length;
   const displayedQuestionCount = isHoldemGame
@@ -3890,6 +3889,7 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
     roundsPlayed: isHoldemGame ? Number(holdemStats?.handsPlayed || data.roundsPlayed || 0) : (data.roundsPlayed || roundsData.length),
     rounds: roundsData,
     questionQueueIds: data.questionQueueIds || [],
+    retiredQuestionIds,
     usedQuestionIds,
     seats: data.seats || {},
     playerProfiles: data.playerProfiles || {},
@@ -7624,7 +7624,6 @@ function QuestionAnswerEntryBase({
   const hasSubmittedAnswer = localSubmittedAnswer || hasServerSubmittedAnswer;
   const canEditSubmittedAnswer = !isQuizRound;
   const isLocked = hasSubmittedAnswer && (!canEditSubmittedAnswer || !isEditingSubmittedAnswer);
-  const lockedQuizPoints = Number(currentPlayerAnswer?.pointsAwarded || 0);
 
   useEffect(() => {
     if (!draftStorageKey) return;
@@ -7746,7 +7745,7 @@ function QuestionAnswerEntryBase({
   };
 
   const primaryButtonLabel = hasSubmittedAnswer
-    ? (isQuizRound ? `Locked · +${formatScore(lockedQuizPoints)}` : isEditingSubmittedAnswer ? 'Save Changes' : 'Edit Answer')
+    ? (isQuizRound ? 'Locked' : isEditingSubmittedAnswer ? 'Save Changes' : 'Edit Answer')
     : isQuizRound ? 'Submit Answer' : 'Submit Round';
 
   const renderField = (fieldName, value, setter, placeholder) => {
@@ -8563,7 +8562,6 @@ function QuizLiveStatus({ currentRound, revealIsReady }) {
   const quizMsLeft = Number.isFinite(quizEndsAtMs) ? Math.max(0, quizEndsAtMs - nowMs) : QUIZ_TIMER_SECONDS * 1000;
   const quizSecondsLeft = Math.max(0, quizMsLeft / 1000);
   const quizDisplaySeconds = Math.ceil(quizSecondsLeft);
-  const quizPossiblePoints = pointsFromTimerMilliseconds(quizMsLeft);
   const quizTimerProgress = Math.max(0, Math.min(1, quizMsLeft / (QUIZ_TIMER_SECONDS * 1000)));
 
   if (revealIsReady) return null;
@@ -8577,8 +8575,8 @@ function QuizLiveStatus({ currentRound, revealIsReady }) {
             <strong>{quizDisplaySeconds}s</strong>
           </article>
           <article className="quiz-status-card">
-            <span>Points</span>
-            <strong>{formatScore(quizPossiblePoints)}</strong>
+            <span>Scoring</span>
+            <strong>Manual</strong>
           </article>
         </div>
         <div className="quiz-timer-bar" aria-hidden="true">
@@ -8915,7 +8913,7 @@ function RoomRevealPlayerCard({
     const playerAnswer = formatRoundAnswerValue(playerAnswerRaw, currentRound?.roundType);
     const finalResult = normalizeText(answer?.finalResult || answer?.originalSystemResult || (answer?.wasCorrect ? 'correct' : 'incorrect')) || 'incorrect';
     const wasCorrect = finalResult === 'correct';
-    const lockedPoints = Number(answer?.pointsAwarded || 0);
+    const lockedPoints = Number(roundPenalty ?? answer?.quizPoints ?? answer?.pointsAwarded ?? 0);
     const lockedTimerValue = Number(answer?.timerValue || 0);
     const resultClass = quizRevealResolved
       ? wasCorrect
@@ -8946,7 +8944,7 @@ function RoomRevealPlayerCard({
               <strong>{quizRevealResolved ? (wasCorrect ? 'Correct' : 'Incorrect') : 'Revealing...'}</strong>
             </div>
             <small className={`room-reveal-match room-reveal-match--${wasCorrect ? 'success' : 'warning'}`}>
-              {quizRevealResolved ? (wasCorrect ? `+${formatScore(lockedPoints)} locked` : '0 points') : 'Result pending'}
+              {quizRevealResolved ? `Manual score +${formatScore(lockedPoints)}` : 'Result pending'}
             </small>
           </div>
         </div>
@@ -9304,7 +9302,7 @@ function RoomActiveFrameBase({
     : submissionState === 'submitted'
       ? 'Waiting'
       : 'Answering';
-  const showReplayAction = (game?.gameMode || 'standard') === 'standard' && (game?.questionBankType || 'game') === 'game';
+  const showReplayAction = false;
   const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame && !isMostLikelyGame;
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
@@ -9312,14 +9310,18 @@ function RoomActiveFrameBase({
   const viewerQuizResult = normalizeText(viewerAnswer?.finalResult || viewerAnswer?.originalSystemResult || (viewerAnswer?.wasCorrect ? 'correct' : 'incorrect'));
   const quizRevealTotals = useMemo(
     () => ({
-      jay: Number(game?.quizTotals?.jay || 0) + Number(currentRound?.answers?.jay?.pointsAwarded || 0),
-      kim: Number(game?.quizTotals?.kim || 0) + Number(currentRound?.answers?.kim?.pointsAwarded || 0),
+      jay: Number(game?.quizTotals?.jay || 0) + Number(penaltyPreview?.jay || 0),
+      kim: Number(game?.quizTotals?.kim || 0) + Number(penaltyPreview?.kim || 0),
     }),
-    [game?.quizTotals?.jay, game?.quizTotals?.kim, currentRound?.answers?.jay?.pointsAwarded, currentRound?.answers?.kim?.pointsAwarded],
+    [game?.quizTotals?.jay, game?.quizTotals?.kim, penaltyPreview?.jay, penaltyPreview?.kim],
   );
-  const nextReadyBySeat = {
-    jay: hasNextReadySeat(currentRound, 'jay'),
-    kim: hasNextReadySeat(currentRound, 'kim'),
+  const setQuizManualScore = (seatToScore = 'jay', value = '') => {
+    if (!setPenaltyDraft) return;
+    const normalizedSeat = seatToScore === 'kim' ? 'kim' : 'jay';
+    setPenaltyDraft({
+      jay: normalizedSeat === 'jay' ? value : (penaltyDraft?.jay ?? ''),
+      kim: normalizedSeat === 'kim' ? value : (penaltyDraft?.kim ?? ''),
+    });
   };
   const trueFalseOutcome = useMemo(
     () => (isTrueFalseGame ? buildTrueFalseRoundOutcome(currentRound || {}) : null),
@@ -9560,28 +9562,37 @@ function RoomActiveFrameBase({
                     <strong>{formatRoundAnswerValue(currentRound?.correctAnswer || currentRound?.normalizedCorrectAnswer || 'No answer provided', currentRound?.roundType)}</strong>
                     <p>
                       {viewerLabel} {normalizeText(currentRound?.answers?.[currentPlayer]?.finalResult || currentRound?.answers?.[currentPlayer]?.originalSystemResult || (currentRound?.answers?.[currentPlayer]?.wasCorrect ? 'correct' : 'incorrect')) === 'correct'
-                        ? `+${formatScore(Number(currentRound?.answers?.[currentPlayer]?.pointsAwarded || 0))}`
-                        : '+0'}
+                        ? 'correct'
+                        : 'incorrect'}
                       {' · '}
                       {oppositeLabel} {normalizeText(currentRound?.answers?.[otherPlayer]?.finalResult || currentRound?.answers?.[otherPlayer]?.originalSystemResult || (currentRound?.answers?.[otherPlayer]?.wasCorrect ? 'correct' : 'incorrect')) === 'correct'
-                        ? `+${formatScore(Number(currentRound?.answers?.[otherPlayer]?.pointsAwarded || 0))}`
-                        : '+0'}
+                        ? 'correct'
+                        : 'incorrect'}
                     </p>
                     <small>
                       Quiz totals {viewerLabel} {formatScore(quizRevealTotals[currentPlayer])}
                       {' · '}
                       {oppositeLabel} {formatScore(quizRevealTotals[otherPlayer])}
                     </small>
-                    <div className="ready-gate-row ready-gate-row--reveal" role="status" aria-live="polite">
-                      <Button className="primary-button compact" onClick={() => onMarkReady?.(currentPlayer)} disabled={isBusy || nextReadyBySeat[currentPlayer]}>
-                        Ready for Next Question
-                      </Button>
-                      <span className="ready-gate-copy">
-                        {nextReadyBySeat[currentPlayer]
-                          ? 'Waiting for the other player to get ready for the next question…'
-                          : 'Both players must click Ready for Next Question before the next quiz question appears.'}
-                      </span>
-                    </div>
+                    {role === 'host' ? (
+                      <div className="quiz-manual-score-entry">
+                        <label className="field">
+                          <span>{viewerLabel} score</span>
+                          <input type="number" inputMode="decimal" step="any" value={penaltyDraft?.[currentPlayer] ?? ''} onChange={(event) => setQuizManualScore(currentPlayer, event.target.value)} placeholder="0" />
+                        </label>
+                        <label className="field">
+                          <span>{oppositeLabel} score</span>
+                          <input type="number" inputMode="decimal" step="any" value={penaltyDraft?.[otherPlayer] ?? ''} onChange={(event) => setQuizManualScore(otherPlayer, event.target.value)} placeholder="0" />
+                        </label>
+                        <Button className="primary-button compact" onClick={onNextQuestion} disabled={isBusy}>
+                          Next Question
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="ready-gate-row ready-gate-row--reveal" role="status" aria-live="polite">
+                        <span className="ready-gate-copy">Waiting for the host to enter the quiz score and load the next question.</span>
+                      </div>
+                    )}
                   </>
                 ) : isTrueFalseGame ? (
                   <>
@@ -13374,13 +13385,21 @@ function GameRoomView({
         roundType: currentRound.roundType,
       }
     : null;
+  const currentGameMode = game?.gameMode || 'standard';
+  const currentRoundPenaltyPreview = currentRound
+    ? buildAutoScoredRoundPenaltyMap(currentGameMode, currentRound, { useStoredPenalties: false })
+      || {
+        jay: parseNumber(penaltyDraft.jay || currentRound.penalties?.jay || 0, 0),
+        kim: parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0),
+      }
+    : null;
   const boardForm = currentRound
     ? {
         question: currentRound.question,
         category: currentRound.category,
         roundType: currentRound.roundType,
-        jayScore: penaltyDraft.jay,
-        kimScore: penaltyDraft.kim,
+        jayScore: currentRoundPenaltyPreview?.jay ?? penaltyDraft.jay,
+        kimScore: currentRoundPenaltyPreview?.kim ?? penaltyDraft.kim,
       }
     : { question: '', category: '', roundType: 'numeric', jayScore: '', kimScore: '' };
   const baseTotals = game?.totals || { jay: 0, kim: 0 };
@@ -13391,15 +13410,15 @@ function GameRoomView({
   const viewerLabel = gameSeatDisplayName(game, resolvedViewerSeat, currentRound);
   const liveTotals = currentRound
     ? {
-        jay: addScores(baseTotals.jay, parseNumber(penaltyDraft.jay || currentRound.penalties?.jay || 0, 0)),
-        kim: addScores(baseTotals.kim, parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0)),
+        jay: addScores(baseTotals.jay, Number(currentRoundPenaltyPreview?.jay || 0)),
+        kim: addScores(baseTotals.kim, Number(currentRoundPenaltyPreview?.kim || 0)),
       }
     : baseTotals;
-  const isHoldemGame = isHoldemGameMode(game?.gameMode || 'standard');
-  const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-  const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
-  const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
-  const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
+  const isHoldemGame = isHoldemGameMode(currentGameMode);
+  const isQuizGame = isQuizGameMode(currentGameMode);
+  const isTrueFalseGame = isTrueFalseGameMode(currentGameMode);
+  const isThisOrThatGame = isThisOrThatGameMode(currentGameMode);
+  const isMostLikelyGame = isMostLikelyGameMode(currentGameMode);
   const bothPlayersSubmitted = isTrueFalseGame
     ? Boolean(hasCompletedTrueFalseRoundAnswer(currentRound, 'jay') && hasCompletedTrueFalseRoundAnswer(currentRound, 'kim'))
     : isThisOrThatGame
@@ -15818,6 +15837,11 @@ function ProductionApp() {
     const currentGameSummary = {
       ...game,
       rounds: rounds.length ? rounds : game.rounds || [],
+      retiredQuestionIds: mergeUniqueIds(
+        game.retiredQuestionIds || [],
+        game.currentRound?.questionId ? [game.currentRound.questionId] : [],
+        game.questionQueueIds || [],
+      ),
       usedQuestionIds: mergeUniqueIds(
         game.usedQuestionIds || [],
         (rounds || []).map((round) => round.questionId),
@@ -15873,28 +15897,16 @@ function ProductionApp() {
     () => {
       const trackedIds = mergeUniqueIds(
         pairPlayedQuestionIds,
-        ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+        ...trackedGameEntries.map((entry) => getRetiredQuestionIdsForGame(entry)),
       );
       if (!bankQuestionIds.size) return new Set(trackedIds);
       return new Set(trackedIds.filter((questionId) => bankQuestionIds.has(questionId)));
     },
     [pairPlayedQuestionIds, trackedGameEntries, bankQuestionIds],
   );
-  const replayEligibleQuestionIds = useMemo(
-    () =>
-      new Set(
-        (questionReplays || [])
-          .filter((entry) => Boolean(entry?.replayRequested))
-          .map((entry) => normalizeText(entry.questionId || sanitizeNoteKey(entry.questionText || '')))
-          .filter(Boolean),
-      ),
-    [questionReplays],
-  );
   const effectiveRetiredQuestionIds = useMemo(() => {
-    const next = new Set(trackedUsedQuestionIds);
-    replayEligibleQuestionIds.forEach((questionId) => next.delete(questionId));
-    return next;
-  }, [trackedUsedQuestionIds, replayEligibleQuestionIds]);
+    return new Set(trackedUsedQuestionIds);
+  }, [trackedUsedQuestionIds]);
   const playedStandardQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -15905,16 +15917,14 @@ function ProductionApp() {
     return new Set(playedIds.filter((questionId) => bankQuestionIds.has(questionId)));
   }, [trackedGameEntries, bankQuestionIds]);
   const displayUsedStandardQuestionIds = useMemo(() => {
-    const next = new Set(playedStandardQuestionIds);
-    replayEligibleQuestionIds.forEach((questionId) => next.delete(questionId));
-    return next;
-  }, [playedStandardQuestionIds, replayEligibleQuestionIds]);
+    return new Set(playedStandardQuestionIds);
+  }, [playedStandardQuestionIds]);
   const usedQuestionCount = displayUsedStandardQuestionIds.size;
   const remainingQuestionCount = Math.max(0, bankCount - usedQuestionCount);
   const trackedUsedQuizQuestionIds = useMemo(() => {
     const trackedIds = mergeUniqueIds(
       pairPlayedQuestionIds,
-      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+      ...trackedGameEntries.map((entry) => getRetiredQuestionIdsForGame(entry)),
     );
     if (!quizQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => quizQuestionIds.has(questionId)));
@@ -15933,7 +15943,7 @@ function ProductionApp() {
   const trackedUsedTrueFalseQuestionIds = useMemo(() => {
     const trackedIds = mergeUniqueIds(
       pairPlayedQuestionIds,
-      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+      ...trackedGameEntries.map((entry) => getRetiredQuestionIdsForGame(entry)),
     );
     if (!trueFalseQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => trueFalseQuestionIds.has(questionId)));
@@ -15941,7 +15951,7 @@ function ProductionApp() {
   const trackedUsedThisOrThatQuestionIds = useMemo(() => {
     const trackedIds = mergeUniqueIds(
       pairPlayedQuestionIds,
-      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+      ...trackedGameEntries.map((entry) => getRetiredQuestionIdsForGame(entry)),
     );
     if (!thisOrThatQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => thisOrThatQuestionIds.has(questionId)));
@@ -15949,7 +15959,7 @@ function ProductionApp() {
   const trackedUsedMostLikelyQuestionIds = useMemo(() => {
     const trackedIds = mergeUniqueIds(
       pairPlayedQuestionIds,
-      ...trackedGameEntries.map((entry) => getPlayedQuestionIdsForGame(entry)),
+      ...trackedGameEntries.map((entry) => getRetiredQuestionIdsForGame(entry)),
     );
     if (!mostLikelyQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => mostLikelyQuestionIds.has(questionId)));
@@ -16956,29 +16966,28 @@ function ProductionApp() {
   const archivePairHistory = async (gameDoc, endedGameId = gameDoc?.id) => {
     if (!firestore || !gameDoc) return;
     const pairRef = doc(firestore, 'playerPairs', gameDoc.pairId || buildPairKey());
-    const playedQuestionIds = getPlayedQuestionIdsForGame(gameDoc);
+    const retiredQuestionIds = getRetiredQuestionIdsForGame(gameDoc);
     const roundsPlayed = Number(gameDoc.roundsPlayed || gameDoc.rounds?.length || 0);
     const finalScores = gameDoc.finalScores || gameDoc.totals || { jay: 0, kim: 0 };
     const winner = isHoldemGameMode(gameDoc?.gameMode || 'standard')
       ? getHoldemSessionWinner(gameDoc?.holdemStats || defaultHoldemStats(), finalScores)
       : (gameDoc.winner || (Number(finalScores.jay || 0) === Number(finalScores.kim || 0) ? 'tie' : Number(finalScores.jay || 0) < Number(finalScores.kim || 0) ? 'jay' : 'kim'));
-    await setDoc(
-      pairRef,
-      {
-        pairId: gameDoc.pairId || buildPairKey(),
-        playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
-        playedQuestionIds: arrayUnion(...playedQuestionIds),
-        completedGameIds: arrayUnion(endedGameId),
-        updatedAt: serverTimestamp(),
-        stats: {
-          completedGames: Number(gameDoc.status === 'ended' || gameDoc.status === 'completed' ? 1 : 0),
-          lastWinner: winner,
-          lastFinalScores: finalScores,
-          roundsPlayed,
-        },
+    const historyPatch = {
+      pairId: gameDoc.pairId || buildPairKey(),
+      playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
+      completedGameIds: arrayUnion(endedGameId),
+      updatedAt: serverTimestamp(),
+      stats: {
+        completedGames: Number(gameDoc.status === 'ended' || gameDoc.status === 'completed' ? 1 : 0),
+        lastWinner: winner,
+        lastFinalScores: finalScores,
+        roundsPlayed,
       },
-      { merge: true },
-    );
+    };
+    if (retiredQuestionIds.length) {
+      historyPatch.playedQuestionIds = arrayUnion(...retiredQuestionIds);
+    }
+    await setDoc(pairRef, historyPatch, { merge: true });
   };
 
   async function loadGameSummaryById(targetGameId, fallbackData = null) {
@@ -16998,6 +17007,38 @@ function ProductionApp() {
     setLocalEndedGameSummary(gameSummary);
   };
 
+  const addQuizManualScoreWritesToBatch = (batch, sourceGame = {}, round = {}, quizScores = {}) => {
+    if (!firestore || !batch || !sourceGame?.id || !round) return 0;
+    const roundQuestionId = normalizeText(round?.questionId || '') || sanitizeNoteKey(round?.question || '');
+    if (!roundQuestionId) return 0;
+    let writeCount = 0;
+    seats.forEach((seat) => {
+      const playerUid = round?.answers?.[seat]?.submittedBy || sourceGame?.seats?.[seat] || '';
+      if (!playerUid) return;
+      const score = toScore(quizScores?.[seat] || 0);
+      const quizAnswerId = `${sourceGame.id}-${roundQuestionId}-${playerUid}`;
+      batch.set(
+        doc(firestore, 'quizAnswers', quizAnswerId),
+        {
+          pointsAwarded: score,
+          manualScore: score,
+          scoringMode: 'manual',
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      writeCount += 1;
+    });
+    return writeCount;
+  };
+
+  const syncQuizManualScoresForRound = async (sourceGame = {}, round = {}, quizScores = {}) => {
+    if (!firestore) return;
+    const batch = writeBatch(firestore);
+    const writeCount = addQuizManualScoreWritesToBatch(batch, sourceGame, round, quizScores);
+    if (writeCount) await batch.commit();
+  };
+
   const finalizeGameLifecycle = async (targetGameId, endedByUid = user?.uid || '', finalStatus = 'ended', options = {}) => {
     if (!firestore || !targetGameId) return null;
     const pendingRoundPenaltyOverride = options.pendingRoundPenaltyOverride || null;
@@ -17008,8 +17049,9 @@ function ProductionApp() {
     if (!snapshot.exists()) throw new Error('Game not found.');
     const gameDoc = { id: snapshot.id, ...snapshot.data() };
     const loadedSummary = gameLibrary.find((entry) => entry.id === targetGameId) || null;
-    const isQuizGame = (gameDoc?.gameMode || 'standard') === 'quiz';
-    const isHoldemGame = isHoldemGameMode(gameDoc?.gameMode || 'standard');
+    const gameMode = gameDoc?.gameMode || 'standard';
+    const isQuizGame = isQuizGameMode(gameMode);
+    const isHoldemGame = isHoldemGameMode(gameMode);
     if (isHoldemGame) {
       const holdemState = gameDoc?.holdemState || null;
       const holdemStats = gameDoc?.holdemStats || defaultHoldemStats();
@@ -17101,7 +17143,7 @@ function ProductionApp() {
     let nextKimLifetime = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
     const pendingRound = gameDoc.currentRound || null;
     const pendingRoundPenaltyMap = pendingRound
-      ? buildPendingRoundPenaltyMapForFinalize(gameDoc?.gameMode || 'standard', pendingRound, pendingRoundPenaltyOverride)
+      ? buildPendingRoundPenaltyMapForFinalize(gameMode, pendingRound, pendingRoundPenaltyOverride)
       : null;
     const effectivePendingRound = pendingRound
       ? {
@@ -17145,6 +17187,16 @@ function ProductionApp() {
               jay: parseAnswerList(effectivePendingRound.answers?.jay?.guessedOther || ''),
               kim: parseAnswerList(effectivePendingRound.answers?.kim?.guessedOther || ''),
             },
+            quizPoints: isQuizGame
+              ? {
+                  jay: toScore(effectivePendingRound.penalties?.jay || 0),
+                  kim: toScore(effectivePendingRound.penalties?.kim || 0),
+                }
+              : {
+                  jay: Number(effectivePendingRound.answers?.jay?.pointsAwarded || 0),
+                  kim: Number(effectivePendingRound.answers?.kim?.pointsAwarded || 0),
+                },
+            manualScores: isQuizGame,
           },
           effectivePendingRound.number || (loadedSummary?.roundsPlayed || gameDoc.roundsPlayed || 0) + 1,
           gameDoc.totals || gameDoc.finalScores || nextFinalScores,
@@ -17154,7 +17206,21 @@ function ProductionApp() {
       ? getRoundPenaltyTotals(archivedRoundResult)
       : gameDoc.totals || gameDoc.finalScores || nextFinalScores;
     nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
-    nextQuizTotals = gameDoc.quizTotals || nextQuizTotals;
+    const archivedQuizPoints = isQuizGame && archivedRoundResult
+      ? {
+          jay: Number(archivedRoundResult.quizPoints?.jay || 0),
+          kim: Number(archivedRoundResult.quizPoints?.kim || 0),
+        }
+      : { jay: 0, kim: 0 };
+    if (isQuizGame) {
+      const persistedQuizTotals = gameDoc.quizTotals || nextQuizTotals;
+      nextQuizTotals = {
+        jay: Number(persistedQuizTotals.jay || 0) + archivedQuizPoints.jay,
+        kim: Number(persistedQuizTotals.kim || 0) + archivedQuizPoints.kim,
+      };
+    } else {
+      nextQuizTotals = gameDoc.quizTotals || nextQuizTotals;
+    }
     nextQuizWinner = Number(nextQuizTotals.jay || 0) === Number(nextQuizTotals.kim || 0) ? 'tie' : Number(nextQuizTotals.jay || 0) > Number(nextQuizTotals.kim || 0) ? 'jay' : 'kim';
     const finalizedRoundsPlayed = persistedRoundsPlayed + (effectivePendingRound && !alreadyArchivedCurrentRound ? 1 : 0);
     const finalizedUsedQuestionIds = mergeUniqueIds(
@@ -17192,6 +17258,9 @@ function ProductionApp() {
     const batch = writeBatch(firestore);
     if (archivedRoundRef && archivedRoundResult) {
       batch.set(archivedRoundRef, archivedRoundResult);
+    }
+    if (isQuizGame && archivedRoundResult) {
+      addQuizManualScoreWritesToBatch(batch, gameDoc, effectivePendingRound, archivedRoundResult.quizPoints || {});
     }
     if (!gameDoc.lifetimePointsApplied) {
       nextJayLifetime = isQuizGame
@@ -17337,7 +17406,7 @@ function ProductionApp() {
         console.warn('Background game diary generation failed after game finalization.', error);
       });
     }
-    return { appliedLifetimePoints, finalScores: nextFinalScores, winner: nextWinner, gameSummary };
+    return { appliedLifetimePoints, finalScores: nextFinalScores, winner: isQuizGame ? nextQuizWinner : nextWinner, gameSummary };
   };
 
   const recordPairQuestionUsage = async (questionIds = []) => {
@@ -17386,9 +17455,11 @@ function ProductionApp() {
     const sourceRounds = normalizeStoredRounds(rounds);
     const sourceGame = game;
     const pendingRoundPenaltyOverride = options.pendingRoundPenaltyOverride || null;
+    const sourceGameMode = sourceGame?.gameMode || 'standard';
+    const isQuizGame = isQuizGameMode(sourceGameMode);
     const pendingRound = sourceGame.currentRound || null;
     const pendingRoundPenaltyMap = pendingRound
-      ? buildPendingRoundPenaltyMapForFinalize(sourceGame?.gameMode || 'standard', pendingRound, pendingRoundPenaltyOverride)
+      ? buildPendingRoundPenaltyMapForFinalize(sourceGameMode, pendingRound, pendingRoundPenaltyOverride)
       : null;
     const alreadyArchivedCurrentRound = pendingRound
       ? sourceRounds.some((round) => round.id === pendingRound.id || (round.number === pendingRound.number && round.questionId === pendingRound.questionId))
@@ -17396,6 +17467,7 @@ function ProductionApp() {
 
     let nextRounds = sourceRounds;
     let nextTotals = sourceGame.totals || sourceGame.finalScores || { jay: 0, kim: 0 };
+    let nextQuizTotals = sourceGame.quizTotals || { jay: 0, kim: 0 };
 
     if (pendingRound && !alreadyArchivedCurrentRound) {
       const archivedRoundResult = createRoundResult(
@@ -17425,6 +17497,16 @@ function ProductionApp() {
             jay: parseAnswerList(pendingRound.answers?.jay?.guessedOther || ''),
             kim: parseAnswerList(pendingRound.answers?.kim?.guessedOther || ''),
           },
+          quizPoints: isQuizGame
+            ? {
+                jay: toScore(pendingRoundPenaltyMap?.jay ?? 0),
+                kim: toScore(pendingRoundPenaltyMap?.kim ?? 0),
+              }
+            : {
+                jay: Number(pendingRound.answers?.jay?.pointsAwarded || 0),
+                kim: Number(pendingRound.answers?.kim?.pointsAwarded || 0),
+              },
+          manualScores: isQuizGame,
         },
         pendingRound.number || sourceRounds.length + 1,
         nextTotals,
@@ -17432,19 +17514,33 @@ function ProductionApp() {
 
       nextRounds = normalizeStoredRounds([...sourceRounds, archivedRoundResult]);
       nextTotals = getRoundPenaltyTotals(archivedRoundResult);
+      if (isQuizGame) {
+        nextQuizTotals = {
+          jay: Number(nextQuizTotals.jay || 0) + Number(archivedRoundResult.quizPoints?.jay || 0),
+          kim: Number(nextQuizTotals.kim || 0) + Number(archivedRoundResult.quizPoints?.kim || 0),
+        };
+      }
     }
 
-    const nextWinner = Number(nextTotals.jay || 0) === Number(nextTotals.kim || 0)
+    const nextPenaltyWinner = Number(nextTotals.jay || 0) === Number(nextTotals.kim || 0)
       ? 'tie'
       : Number(nextTotals.jay || 0) < Number(nextTotals.kim || 0)
         ? 'jay'
         : 'kim';
+    const nextQuizWinner = Number(nextQuizTotals.jay || 0) === Number(nextQuizTotals.kim || 0)
+      ? 'tie'
+      : Number(nextQuizTotals.jay || 0) > Number(nextQuizTotals.kim || 0)
+        ? 'jay'
+        : 'kim';
+    const nextWinner = isQuizGame ? nextQuizWinner : nextPenaltyWinner;
     const finalizedGameState = {
       ...sourceGame,
       status: finalStatus,
       totals: nextTotals,
       finalScores: nextTotals,
       winner: nextWinner,
+      quizTotals: nextQuizTotals,
+      quizWinner: nextQuizWinner,
       currentRound: null,
       roundsPlayed: nextRounds.length,
       actualQuestionCount: nextRounds.length,
@@ -17481,7 +17577,7 @@ function ProductionApp() {
     const pairId = gameDoc.pairId || buildPairKey();
     const rollback = getLifetimeRollbackForGame(gameDoc);
     const shouldRollbackLifetimePoints = Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0;
-    const deletedPlayedQuestionIds = getPlayedQuestionIdsForGame(gameDoc);
+    const deletedRetiredQuestionIds = getRetiredQuestionIdsForGame(gameDoc);
     const cachedPairGames = gameLibrary
       .filter((entry) => entry?.id && !isLocalTestGameId(entry.id))
       .map((entry) => ({ ...entry }));
@@ -17492,17 +17588,17 @@ function ProductionApp() {
     const remainingGames = pairGames
       .filter((entry) => entry.id !== targetGameId);
     const remainingPairPlayedQuestionIds = mergeUniqueIds(
-      ...remainingGames.map((entry) => getTrueFalseRetiredQuestionIdsForGame(entry)),
+      ...remainingGames.map((entry) => getRetiredQuestionIdsForGame(entry)),
     );
     const remainingCompletedGames = remainingGames
       .filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || '') || Boolean(entry?.endedAt))
       .sort(sortByNewestGameSession);
     const latestCompletedGame = remainingCompletedGames[0] || null;
     const remainingCompletedGameIds = remainingCompletedGames.map((entry) => entry.id).filter(Boolean);
-    const deletedQuestionRestoreIds = deletedPlayedQuestionIds.filter(
+    const deletedQuestionRestoreIds = deletedRetiredQuestionIds.filter(
       (questionId) => questionId && !remainingPairPlayedQuestionIds.includes(questionId),
     );
-    const questionsToRestore = bankQuestions.filter((question) => deletedQuestionRestoreIds.includes(question.id));
+    const questionsToRestoreById = new Map(bankQuestions.filter((question) => deletedQuestionRestoreIds.includes(question.id)).map((question) => [question.id, question]));
     const currentJayBalance = Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0);
     const currentKimBalance = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
     const nextJayBalance = Math.max(0, currentJayBalance + Number(rollback.jay || 0));
@@ -17510,9 +17606,10 @@ function ProductionApp() {
     await deleteDoc(gameRef);
 
     const cleanupBatch = writeBatch(firestore);
-    if (questionsToRestore.length) {
-      questionsToRestore.forEach((question) => {
-        cleanupBatch.set(doc(firestore, 'questionBank', question.id), setQuestionUsed(question, false), { merge: true });
+    if (deletedQuestionRestoreIds.length) {
+      deletedQuestionRestoreIds.forEach((questionId) => {
+        const question = questionsToRestoreById.get(questionId) || { id: questionId };
+        cleanupBatch.set(doc(firestore, 'questionBank', questionId), setQuestionUsed(question, false), { merge: true });
       });
     }
     if (shouldRollbackLifetimePoints) {
@@ -19898,6 +19995,7 @@ function ProductionApp() {
             categories: selectedCategories,
           },
           questionQueueIds: queue.map((question) => question.id),
+          retiredQuestionIds: queue.map((question) => question.id),
           requestedQuestionCount,
           actualQuestionCount: actualCount,
           usedQuestionIds: [],
@@ -19978,6 +20076,7 @@ function ProductionApp() {
           categories: selectedCategories,
         },
         questionQueueIds: [],
+        retiredQuestionIds: [],
         requestedQuestionCount,
         actualQuestionCount: 0,
         usedQuestionIds: [],
@@ -20058,6 +20157,7 @@ function ProductionApp() {
                 categories: selectedCategories,
               },
               questionQueueIds: queue.map((question) => question.id),
+              retiredQuestionIds: queue.map((question) => question.id),
               actualQuestionCount: actualCount,
             };
         if (!isHoldemGame) {
@@ -20104,9 +20204,15 @@ function ProductionApp() {
               sourceGame: createdGameState,
             })
           : null;
-        const trueFalseQueueIds = isTrueFalseGame ? mergeUniqueIds(queue.map((question) => question.id)) : [];
+        const retiredQueueIds = isHoldemGame ? [] : mergeUniqueIds(queue.map((question) => question.id));
         const batch = writeBatch(firestore);
         batch.set(gameRef, createdGameDoc, { merge: true });
+        if (retiredQueueIds.length) {
+          queue.forEach((question) => {
+            if (!question?.id) return;
+            batch.set(doc(firestore, 'questionBank', question.id), setQuestionUsed(question, true), { merge: true });
+          });
+        }
         if (inviteRecord) {
           batch.set(inviteRecord.inviteRef, inviteRecord.inviteDoc, { merge: true });
         }
@@ -20127,15 +20233,13 @@ function ProductionApp() {
           buildActiveGameProfilePatch(gameRef.id),
           { merge: true },
         );
-        if (isTrueFalseGame && trueFalseQueueIds.length) {
+        if (retiredQueueIds.length) {
           batch.set(
             doc(firestore, 'playerPairs', buildPairKey()),
             {
               pairId: buildPairKey(),
               playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
-              // True or False questions are retired as soon as they are queued
-              // into a live session so this mode never repeats statements later.
-              playedQuestionIds: arrayUnion(...trueFalseQueueIds),
+              playedQuestionIds: arrayUnion(...retiredQueueIds),
               updatedAt: serverTimestamp(),
             },
             { merge: true },
@@ -20970,7 +21074,8 @@ function ProductionApp() {
 
   useEffect(() => {
     if (!game?.currentRound || inferredRole !== 'host') return undefined;
-    if ((game?.gameMode || 'standard') === 'quiz') return undefined;
+    const gameMode = game?.gameMode || 'standard';
+    if (isAutoScoredChoiceGameMode(gameMode)) return undefined;
     if (game.currentRound.status !== 'reveal') return undefined;
     const nextPenalties = {
       jay: normalizePenaltyDraftValue(penaltyDraft.jay),
@@ -22170,9 +22275,13 @@ function ProductionApp() {
         let savedCurrentRound = false;
 
         if (game.currentRound) {
-          const penalties = isQuizGame
-            ? { jay: 0, kim: 0 }
-            : buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
+          const penalties = buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
+          const quizPoints = isQuizGame
+            ? penalties
+            : {
+                jay: Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
+                kim: Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
+              };
           const roundResult = createRoundResult(
             {
               ...game.currentRound,
@@ -22194,10 +22303,8 @@ function ProductionApp() {
                 jay: parseAnswerList(game.currentRound.answers?.jay?.guessedOther || ''),
                 kim: parseAnswerList(game.currentRound.answers?.kim?.guessedOther || ''),
               },
-              quizPoints: {
-                jay: Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
-                kim: Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
-              },
+              quizPoints,
+              manualScores: isQuizGame,
             },
             game.currentRound.number || rounds.length + 1,
             nextTotals,
@@ -22207,8 +22314,8 @@ function ProductionApp() {
           nextTotals = getRoundPenaltyTotals(roundResult);
           if (isQuizGame) {
             nextQuizTotals = {
-              jay: Number(nextQuizTotals.jay || 0) + Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
-              kim: Number(nextQuizTotals.kim || 0) + Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
+              jay: Number(nextQuizTotals.jay || 0) + Number(quizPoints.jay || 0),
+              kim: Number(nextQuizTotals.kim || 0) + Number(quizPoints.kim || 0),
             };
           }
           nextRoundsPlayed = nextRounds.length;
@@ -22260,6 +22367,7 @@ function ProductionApp() {
             roundsPlayed: nextRoundsPlayed,
             usedQuestionIds: nextUsedQuestionIds,
             currentRound: nextRound,
+            retiredQuestionIds: mergeUniqueIds(nextGameState.retiredQuestionIds || [], nextRound.questionId ? [nextRound.questionId] : []),
             quizReadyState: null,
             questionQueueIds: drawn.remainingQueueIds,
             status: 'active',
@@ -22290,9 +22398,13 @@ function ProductionApp() {
       let savedCurrentRound = false;
 
       if (game.currentRound) {
-        const penalties = isQuizGame
-          ? { jay: 0, kim: 0 }
-          : buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
+        const penalties = buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
+        const quizPoints = isQuizGame
+          ? penalties
+          : {
+              jay: Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
+              kim: Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
+            };
 
         const roundResult = createRoundResult(
           {
@@ -22315,21 +22427,24 @@ function ProductionApp() {
               jay: parseAnswerList(game.currentRound.answers?.jay?.guessedOther || ''),
               kim: parseAnswerList(game.currentRound.answers?.kim?.guessedOther || ''),
             },
-            quizPoints: {
-              jay: Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
-              kim: Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
-            },
+            quizPoints,
+            manualScores: isQuizGame,
           },
           game.currentRound.number || rounds.length + 1,
           totalsBefore,
         );
 
         await setDoc(doc(firestore, 'games', gameId, 'rounds', roundResult.id), roundResult);
+        if (isQuizGame) {
+          await syncQuizManualScoresForRound(game, game.currentRound, quizPoints).catch((error) => {
+            console.warn('Quiz manual score analytics write failed.', error);
+          });
+        }
         totalsAfterSave = getRoundPenaltyTotals(roundResult);
         if (isQuizGame) {
           nextQuizTotals = {
-            jay: Number(nextQuizTotals.jay || 0) + Number(game.currentRound.answers?.jay?.pointsAwarded || 0),
-            kim: Number(nextQuizTotals.kim || 0) + Number(game.currentRound.answers?.kim?.pointsAwarded || 0),
+            jay: Number(nextQuizTotals.jay || 0) + Number(quizPoints.jay || 0),
+            kim: Number(nextQuizTotals.kim || 0) + Number(quizPoints.kim || 0),
           };
         }
         completedRoundsAfterSave = completedRoundsBefore + 1;
@@ -22414,12 +22529,23 @@ function ProductionApp() {
               }
             : {}),
           currentRound: nextRound,
+          ...(nextQuestionItem.id ? { retiredQuestionIds: arrayUnion(nextQuestionItem.id) } : {}),
           quizReadyState: null,
           questionQueueIds: nextRemainingQueueIds,
           status: 'active',
           updatedAt: serverTimestamp(),
         };
         await setDoc(gameRef, gamePatch, { merge: true });
+        if (nextQuestionItem.id) {
+          await Promise.all([
+            recordPairQuestionUsage([nextQuestionItem.id]).catch((error) => {
+              console.warn('Question retirement history write failed.', error);
+            }),
+            setDoc(doc(firestore, 'questionBank', nextQuestionItem.id), setQuestionUsed(nextQuestionItem, true), { merge: true }).catch((error) => {
+              console.warn('Question retirement bank write failed.', error);
+            }),
+          ]);
+        }
         if (savedCurrentRound) setNotice('Saved and loaded the next question.');
         else setNotice('Question loaded.');
       }
@@ -22527,6 +22653,7 @@ function ProductionApp() {
           ? {
               ...current,
               currentRound: nextRound,
+              retiredQuestionIds: mergeUniqueIds(current.retiredQuestionIds || [], nextRound.questionId ? [nextRound.questionId] : []),
               questionQueueIds: drawn.remainingQueueIds,
               quizReadyState: null,
               status: 'active',
@@ -22591,14 +22718,30 @@ function ProductionApp() {
         }
       : current);
     try {
-      await updateDoc(gameRef, {
+      const batch = writeBatch(firestore);
+      batch.set(gameRef, {
         ...(lockPatch || {}),
         currentRound: nextRound,
+        ...(nextQuestionItem.id ? { retiredQuestionIds: arrayUnion(nextQuestionItem.id) } : {}),
         quizReadyState: null,
         questionQueueIds: nextRemainingQueueIds,
         status: 'active',
         updatedAt: serverTimestamp(),
-      });
+      }, { merge: true });
+      if (nextQuestionItem.id) {
+        batch.set(
+          doc(firestore, 'playerPairs', buildPairKey()),
+          {
+            pairId: buildPairKey(),
+            playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
+            playedQuestionIds: arrayUnion(nextQuestionItem.id),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+        batch.set(doc(firestore, 'questionBank', nextQuestionItem.id), setQuestionUsed(nextQuestionItem, true), { merge: true });
+      }
+      await batch.commit();
     } catch (error) {
       setGame((current) => current && stableRoundIdentityKey(current.currentRound || {}) === stableRoundIdentityKey(nextRound)
         ? {
@@ -22740,28 +22883,8 @@ function ProductionApp() {
 
   useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
-    const roundKey = stableRoundIdentityKey(game?.currentRound || {});
-    const ready = game?.currentRound?.nextReady || {};
-    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
-    const advanceKey = `${game?.id || ''}:${roundKey}:${Boolean(ready.jay)}:${Boolean(ready.kim)}`;
-    if (
-      !isQuizGame
-      || currentSeat !== coordinatorSeat
-      || !game?.currentRound
-      || game.currentRound.status !== 'reveal'
-      || !ready.jay
-      || !ready.kim
-    ) {
-      if (quizAdvanceRef.current === advanceKey) quizAdvanceRef.current = '';
-      return;
-    }
-    if (quizAdvanceRef.current === advanceKey || isBusy) return;
-    quizAdvanceRef.current = advanceKey;
-    nextQuestion()
-      .catch(() => null)
-      .finally(() => {
-        quizAdvanceRef.current = '';
-      });
+    if (isQuizGame) quizAdvanceRef.current = '';
+    return undefined;
   }, [
     game?.id,
     game?.gameMode,
