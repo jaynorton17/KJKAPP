@@ -14830,7 +14830,7 @@ function GameRoomView({
                   />
                 ) :
                 isTrueFalseGame || isThisOrThatGame || isMostLikelyGame ? (
-                  <section className="panel host-queue-panel room-status-panel">
+                  <section className="panel host-queue-panel host-queue-panel--auto-scoring room-status-panel">
                     <div className="panel-heading">
                       <div>
                         <p className="eyebrow">{isMostLikelyGame ? 'Most Likely To' : isThisOrThatGame ? 'This or That' : 'True or False'}</p>

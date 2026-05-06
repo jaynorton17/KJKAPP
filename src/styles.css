@@ -8024,6 +8024,10 @@ button:disabled {
   grid-template-columns: minmax(168px, 0.76fr) minmax(220px, 1fr) minmax(168px, 0.76fr);
 }
 
+.room-active-frame--true-false .room-reveal-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.5fr) minmax(0, 1fr);
+}
+
 .room-reveal-player-card,
 .room-reveal-center-card {
   min-width: 0;
@@ -8209,6 +8213,14 @@ button:disabled {
   overflow-wrap: anywhere;
   text-wrap: balance;
   text-transform: uppercase;
+}
+
+.room-active-frame--true-false .room-reveal-center-card strong {
+  max-width: 12ch;
+  font-size: clamp(1.35rem, 1.75vw, 1.9rem);
+  line-height: 1.04;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .room-reveal-center-card p,
@@ -8399,6 +8411,7 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  .room-active-frame--true-false .room-reveal-layout,
   .room-reveal-layout--quiz {
     grid-template-columns: 1fr;
   }
@@ -8434,6 +8447,24 @@ button:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+.host-queue-panel--auto-scoring .room-host-sidebar-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+}
+
+.host-queue-panel--auto-scoring .room-host-sidebar-actions .next-question-button {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+}
+
+.host-queue-panel--auto-scoring .room-host-sidebar-actions .quick-desk-status {
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
 }
 
 @keyframes roomStageSwap {
