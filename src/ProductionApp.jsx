@@ -9161,15 +9161,14 @@ function TrueFalseAutoAnswerEntryBase({
   const isRoundOpen = (currentRound?.status || 'open') === 'open';
   const lockedChoiceLabel = ownAnswer && guessedOther ? 'Both picks locked' : 'First tap locks each choice';
 
-  const renderChoiceField = (fieldName, value, heading, subheading) => (
+  const renderChoiceField = (fieldName, value, title) => (
     <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
       <div className="mini-heading">
         <div>
-          <span>{heading}</span>
-          <h3>{subheading}</h3>
+          <h3>{title}</h3>
         </div>
       </div>
-      <div className={`choice-grid ${embedded ? 'choice-grid--embedded' : ''}`} role="list" aria-label={subheading}>
+      <div className={`choice-grid ${embedded ? 'choice-grid--embedded' : ''}`} role="list" aria-label={title}>
         {options.map((option) => (
           <button
             key={`${fieldName}-${option}`}
@@ -9191,12 +9190,12 @@ function TrueFalseAutoAnswerEntryBase({
   return (
     <div className={`room-answer-entry room-answer-entry--true-false ${embedded ? 'room-answer-entry--embedded' : ''}`}>
       <div className="true-false-answer-header">
-        <p>Guess their answer, then lock your own.</p>
+        <p>Lock your answer, then guess theirs.</p>
         <span className="status-pill">{lockedChoiceLabel}</span>
       </div>
       <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''}`}>
-        {renderChoiceField('guessedOther', guessedOther, 'Their Answer', `What I think ${oppositeLabel} will say`)}
-        {renderChoiceField('ownAnswer', ownAnswer, 'Your Answer', 'What I will actually answer')}
+        {renderChoiceField('ownAnswer', ownAnswer, 'Your Answer')}
+        {renderChoiceField('guessedOther', guessedOther, `${oppositeLabel} Will Say`)}
       </div>
     </div>
   );

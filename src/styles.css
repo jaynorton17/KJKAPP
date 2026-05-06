@@ -7813,6 +7813,10 @@ button:disabled {
   min-height: 56px;
 }
 
+.room-active-frame--true-false .answer-section--embedded .mini-heading {
+  min-height: 32px;
+}
+
 .room-active-frame--true-false .choice-grid--embedded,
 .room-active-frame--this-or-that .choice-grid--embedded,
 .room-active-frame--most-likely .choice-grid--embedded {
