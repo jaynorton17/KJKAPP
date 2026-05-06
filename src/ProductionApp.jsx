@@ -126,7 +126,6 @@ const MOST_LIKELY_GAME_MODE = 'mostLikelyGame';
 const PUT_YOUR_POINTS_GAME_MODE = 'putYourPointsGame';
 const TRUE_FALSE_WRONG_PENALTY = 10;
 const TRUE_FALSE_UNANSWERED_PENALTY = 10;
-const TRUE_FALSE_TIMER_SECONDS = 8;
 const THIS_OR_THAT_WRONG_PENALTY = 10;
 const THIS_OR_THAT_UNANSWERED_PENALTY = 10;
 const MOST_LIKELY_DISAGREE_PENALTY = 10;
@@ -9101,38 +9100,20 @@ function QuizLiveStatus({ currentRound, revealIsReady }) {
   );
 }
 
-function TrueFalseLiveStatus({ currentRound, revealIsReady }) {
-  const [nowMs, setNowMs] = useState(Date.now());
-  const isRoundOpen = (currentRound?.status || 'open') === 'open';
-
-  useEffect(() => {
-    if (revealIsReady || !isRoundOpen) return undefined;
-    const timer = window.setInterval(() => setNowMs(Date.now()), 250);
-    return () => window.clearInterval(timer);
-  }, [revealIsReady, isRoundOpen, stableRoundIdentityKey(currentRound || {})]);
-
-  const endsAtMs = Date.parse(currentRound?.trueFalseTimerEndsAt || '');
-  const msLeft = Number.isFinite(endsAtMs) ? Math.max(0, endsAtMs - nowMs) : TRUE_FALSE_TIMER_SECONDS * 1000;
-  const secondsLeft = Math.max(0, msLeft / 1000);
-  const displaySeconds = Math.ceil(secondsLeft);
-  const timerProgress = Math.max(0, Math.min(1, msLeft / (TRUE_FALSE_TIMER_SECONDS * 1000)));
-
+function TrueFalseLiveStatus({ revealIsReady }) {
   if (revealIsReady) return null;
 
   return (
     <div className="quiz-live-status true-false-live-status">
       <div className="quiz-status-grid">
         <article className="quiz-status-card">
-          <span>Timer</span>
-          <strong>{displaySeconds}s</strong>
+          <span>Mode</span>
+          <strong>True or False</strong>
         </article>
         <article className="quiz-status-card">
           <span>Scoring</span>
           <strong>0 / +10</strong>
         </article>
-      </div>
-      <div className="quiz-timer-bar" aria-hidden="true">
-        <div className="quiz-timer-bar-fill true-false-timer-bar-fill" style={{ transform: `scaleX(${timerProgress})` }} />
       </div>
     </div>
   );
@@ -9958,7 +9939,7 @@ function RoomActiveFrameBase({
           </div>
         </header>
         {isQuizGame ? <QuizLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
-        {isTrueFalseGame ? <TrueFalseLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
+        {isTrueFalseGame ? <TrueFalseLiveStatus revealIsReady={revealIsReady} /> : null}
         {isThisOrThatGame ? <ThisOrThatLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isMostLikelyGame ? <MostLikelyLiveStatus revealIsReady={revealIsReady} /> : null}
         {isPutYourPointsGame ? <PutYourPointsStakeTicker currentRound={currentRound} /> : null}
@@ -16842,7 +16823,9 @@ function ProductionApp() {
     if (normalizedTargetBankType === 'quiz') return quizBankQuestions;
     if (normalizedTargetBankType === 'thisOrThatGame') return thisOrThatBankQuestions;
     if (normalizedTargetBankType === 'mostLikelyGame') return mostLikelySelectableQuestions;
-    if (normalizedTargetBankType === 'putYourPointsGame') return putYourPointsSelectableQuestions;
+    if (normalizedTargetBankType === 'putYourPointsGame') {
+      return mergeQuestionBankRecords(putYourPointsSelectableQuestions, standardSelectableQuestions);
+    }
     if (normalizedTargetBankType === 'trueFalseGame') return trueFalseBankQuestions;
     return gameBankQuestions;
   };
@@ -16894,7 +16877,11 @@ function ProductionApp() {
     const isMostLikelyQueue = isMostLikelyGameMode(requestedGameMode);
     const isPutYourPointsQueue = isPutYourPointsGameMode(requestedGameMode);
     const overrideQuestionPool = Array.isArray(filters.questionPool)
-      ? filters.questionPool.filter((question) => normalizeQuestionBankType(question?.bankType) === requestedBankType)
+      ? filters.questionPool.filter((question) => {
+          const questionBankType = normalizeQuestionBankType(question?.bankType);
+          return questionBankType === requestedBankType
+            || (isPutYourPointsQueue && questionBankType === 'game');
+        })
       : [];
     const questionBankPool = overrideQuestionPool.length
       ? overrideQuestionPool
@@ -22023,10 +22010,9 @@ function ProductionApp() {
   const quizTimeoutRevealRef = useRef('');
   const standardRevealSettleRef = useRef('');
   const trueFalseRevealSettleRef = useRef('');
-  const trueFalseTimeoutRevealRef = useRef('');
   const thisOrThatRevealSettleRef = useRef('');
   const mostLikelyRevealSettleRef = useRef('');
-  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isTrueFalseGame = false, isPutYourPointsGame = false, startOpen = false } = {}) => {
+  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isPutYourPointsGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
     const quizRoundKey = sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question';
@@ -22066,9 +22052,6 @@ function ProductionApp() {
       quizTimerSeconds: isQuizGame && startOpen ? QUIZ_TIMER_SECONDS : 0,
       quizTimerStartedAt: isQuizGame && startOpen ? nowIso : '',
       quizTimerEndsAt: isQuizGame && startOpen ? new Date(now + (QUIZ_TIMER_SECONDS * 1000)).toISOString() : '',
-      trueFalseTimerSeconds: isTrueFalseGame && startOpen ? TRUE_FALSE_TIMER_SECONDS : 0,
-      trueFalseTimerStartedAt: isTrueFalseGame && startOpen ? nowIso : '',
-      trueFalseTimerEndsAt: isTrueFalseGame && startOpen ? new Date(now + (TRUE_FALSE_TIMER_SECONDS * 1000)).toISOString() : '',
       ...(isPutYourPointsGame ? { ...buildPutYourPointsStakeSnapshot(), putYourPointsResults: { jay: '', kim: '' } } : {}),
       createdAt: nowIso,
     };
@@ -23006,65 +22989,6 @@ function ProductionApp() {
   ]);
 
   useEffect(() => {
-    const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
-    const round = game?.currentRound || null;
-    const roundKey = stableRoundIdentityKey(round || {});
-    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
-    if (!isTrueFalseGame || !round || round.status !== 'open' || (!isCurrentLocalTestGame && currentSeat !== coordinatorSeat)) {
-      trueFalseTimeoutRevealRef.current = '';
-      return undefined;
-    }
-    const endsAtMs = Date.parse(round?.trueFalseTimerEndsAt || '');
-    if (!Number.isFinite(endsAtMs)) return undefined;
-    const timeoutKey = `${game?.id || ''}:${roundKey}:${round?.trueFalseTimerEndsAt || ''}`;
-    const remainingMs = Math.max(0, endsAtMs - Date.now());
-    const timeout = window.setTimeout(() => {
-      if (trueFalseTimeoutRevealRef.current === timeoutKey) return;
-      trueFalseTimeoutRevealRef.current = timeoutKey;
-      const penalties = getTrueFalsePenaltyMap(game?.currentRound || round || {});
-      if (isCurrentLocalTestGame) {
-        setGame((current) =>
-          current?.currentRound && stableRoundIdentityKey(current.currentRound) === roundKey && current.currentRound.status === 'open'
-            ? {
-                ...current,
-                currentRound: {
-                  ...current.currentRound,
-                  penalties,
-                  status: 'reveal',
-                  updatedAt: new Date().toISOString(),
-                },
-                updatedAt: new Date().toISOString(),
-              }
-            : current,
-        );
-        return;
-      }
-      const gameRef = makeGameRef();
-      if (!gameRef || !firestore) return;
-      updateDoc(gameRef, {
-        'currentRound.penalties': penalties,
-        'currentRound.status': 'reveal',
-        'currentRound.updatedAt': serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }).catch(() => null);
-    }, remainingMs + 10);
-    return () => window.clearTimeout(timeout);
-  }, [
-    currentSeat,
-    firestore,
-    game,
-    game?.id,
-    game?.gameMode,
-    game?.hostUid,
-    game?.currentRound?.status,
-    game?.currentRound?.questionId,
-    game?.currentRound?.number,
-    game?.currentRound?.trueFalseTimerEndsAt,
-    getTrueFalsePenaltyMap,
-    isCurrentLocalTestGame,
-  ]);
-
-  useEffect(() => {
     const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
     const round = game?.currentRound || null;
     const roundKey = stableRoundIdentityKey(round || {});
@@ -23116,7 +23040,7 @@ function ProductionApp() {
       : sourceBankType === 'mostLikelyGame'
         ? mostLikelySelectableQuestions
       : sourceBankType === 'putYourPointsGame'
-        ? putYourPointsSelectableQuestions
+        ? mergeQuestionBankRecords(putYourPointsSelectableQuestions, standardSelectableQuestions)
       : sourceBankType === 'trueFalseGame'
         ? trueFalseBankQuestions
         : gameBankQuestions;
@@ -23306,7 +23230,7 @@ function ProductionApp() {
             Number(nextGameState.currentRound?.number || 0) + 1,
             1,
           );
-          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, isPutYourPointsGame, startOpen: true });
+          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, startOpen: true });
           nextGameState = {
             ...nextGameState,
             totals: nextTotals,
@@ -23464,7 +23388,7 @@ function ProductionApp() {
           Number(game.currentRound?.number || 0) + 1,
           1,
         );
-        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, isPutYourPointsGame, startOpen: true });
+        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, startOpen: true });
         const gamePatch = {
           ...(savedCurrentRound
             ? {

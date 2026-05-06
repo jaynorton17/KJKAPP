@@ -6024,10 +6024,6 @@ button:disabled {
   color: #fff2cc;
 }
 
-.true-false-timer-bar-fill {
-  background: linear-gradient(90deg, rgba(120, 220, 255, 0.88), rgba(255, 210, 92, 0.82), rgba(255, 104, 104, 0.82));
-}
-
 .quiz-points-strip {
   display: flex;
   align-items: center;
