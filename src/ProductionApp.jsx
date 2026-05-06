@@ -39,6 +39,7 @@ import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
 import normalGameTileImage from './assets/lobby-normal-game.webp';
 import mostLikelyTileImage from './assets/lobby-most-likely.png';
 import pokerTileImage from './assets/lobby-poker.webp';
+import putYourPointsTileImage from './assets/lobby-put-your-points.png';
 import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
 import thisOrThatTileImage from './assets/lobby-this-or-that.webp';
 import trueOrFalseTileImage from './assets/lobby-true-or-false.webp';
@@ -110,6 +111,7 @@ import {
 import {
   parseGoogleSheetImport,
   parseGoogleSheetMostLikelyImport,
+  parseGoogleSheetPutYourPointsImport,
   parseGoogleSheetQuizImport,
   parseGoogleSheetReference,
   parseGoogleSheetThisOrThatImport,
@@ -121,6 +123,7 @@ const HOLDEM_GAME_MODE = 'holdem';
 const TRUE_FALSE_GAME_MODE = 'trueFalseGame';
 const THIS_OR_THAT_GAME_MODE = 'thisOrThatGame';
 const MOST_LIKELY_GAME_MODE = 'mostLikelyGame';
+const PUT_YOUR_POINTS_GAME_MODE = 'putYourPointsGame';
 const TRUE_FALSE_WRONG_PENALTY = 10;
 const TRUE_FALSE_UNANSWERED_PENALTY = 10;
 const TRUE_FALSE_TIMER_SECONDS = 8;
@@ -128,9 +131,13 @@ const THIS_OR_THAT_WRONG_PENALTY = 10;
 const THIS_OR_THAT_UNANSWERED_PENALTY = 10;
 const MOST_LIKELY_DISAGREE_PENALTY = 10;
 const MOST_LIKELY_UNANSWERED_PENALTY = 20;
+const PUT_YOUR_POINTS_STAKE_MIN = 1;
+const PUT_YOUR_POINTS_STAKE_MAX = 200;
+const PUT_YOUR_POINTS_STAKE_FLICK_COUNT = 5;
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
 const MOST_LIKELY_AUTO_SYNC_MIN_COUNT = 20;
+const PUT_YOUR_POINTS_AUTO_SYNC_MIN_COUNT = 20;
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const MOST_LIKELY_STARTER_QUESTIONS = [
   'Who is most likely to turn a tiny plan into a full adventure?',
@@ -311,23 +318,27 @@ const resolveGameMode = (value = 'standard') =>
       ? HOLDEM_GAME_MODE
       : value === TRUE_FALSE_GAME_MODE
         ? TRUE_FALSE_GAME_MODE
-        : value === THIS_OR_THAT_GAME_MODE
-          ? THIS_OR_THAT_GAME_MODE
-          : value === MOST_LIKELY_GAME_MODE
-            ? MOST_LIKELY_GAME_MODE
+      : value === THIS_OR_THAT_GAME_MODE
+        ? THIS_OR_THAT_GAME_MODE
+        : value === MOST_LIKELY_GAME_MODE
+          ? MOST_LIKELY_GAME_MODE
+          : value === PUT_YOUR_POINTS_GAME_MODE
+            ? PUT_YOUR_POINTS_GAME_MODE
             : 'standard';
 const isQuizGameMode = (value = 'standard') => resolveGameMode(value) === 'quiz';
 const isHoldemGameMode = (value = 'standard') => resolveGameMode(value) === HOLDEM_GAME_MODE;
 const isTrueFalseGameMode = (value = 'standard') => resolveGameMode(value) === TRUE_FALSE_GAME_MODE;
 const isThisOrThatGameMode = (value = 'standard') => resolveGameMode(value) === THIS_OR_THAT_GAME_MODE;
 const isMostLikelyGameMode = (value = 'standard') => resolveGameMode(value) === MOST_LIKELY_GAME_MODE;
+const isPutYourPointsGameMode = (value = 'standard') => resolveGameMode(value) === PUT_YOUR_POINTS_GAME_MODE;
 const isAutoScoredChoiceGameMode = (value = 'standard') =>
-  isTrueFalseGameMode(value) || isThisOrThatGameMode(value) || isMostLikelyGameMode(value);
+  isTrueFalseGameMode(value) || isThisOrThatGameMode(value) || isMostLikelyGameMode(value) || isPutYourPointsGameMode(value);
 const getQuestionBankTypeForGameMode = (value = 'standard') => {
   const gameMode = resolveGameMode(value);
   if (gameMode === 'quiz') return 'quiz';
   if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThatGame';
   if (gameMode === MOST_LIKELY_GAME_MODE) return 'mostLikelyGame';
+  if (gameMode === PUT_YOUR_POINTS_GAME_MODE) return 'putYourPointsGame';
   if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalseGame';
   return 'game';
 };
@@ -337,6 +348,7 @@ const ANALYTICS_GAME_SCORE_MODES = [
   { id: 'trueFalse', label: 'True or False' },
   { id: 'thisOrThat', label: 'This or That' },
   { id: 'mostLikely', label: 'Most Likely To' },
+  { id: 'putYourPoints', label: 'Put Your Points' },
   { id: 'holdem', label: 'Texas Hold Em' },
 ];
 const getAnalyticsGameScoreModeId = (value = 'standard') => {
@@ -345,6 +357,7 @@ const getAnalyticsGameScoreModeId = (value = 'standard') => {
   if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalse';
   if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThat';
   if (gameMode === MOST_LIKELY_GAME_MODE) return 'mostLikely';
+  if (gameMode === PUT_YOUR_POINTS_GAME_MODE) return 'putYourPoints';
   if (gameMode === HOLDEM_GAME_MODE) return 'holdem';
   return 'standard';
 };
@@ -1308,6 +1321,7 @@ const buildAiDiaryGenerationKey = (sourceType = '', sourceId = '') =>
 const getDiaryGameModeLabel = (gameMode = 'standard') => {
   if (resolveGameMode(gameMode) === 'quiz') return 'Quick Fire Quiz';
   if (isMostLikelyGameMode(gameMode)) return 'Most Likely To';
+  if (isPutYourPointsGameMode(gameMode)) return 'Put Your Points';
   if (isThisOrThatGameMode(gameMode)) return 'This or That';
   if (isTrueFalseGameMode(gameMode)) return 'True or False';
   return 'Standard Game';
@@ -1651,6 +1665,11 @@ const buildGameDiaryRoundHighlights = (gameSummary = {}) => {
       winner: round?.winner ? PLAYER_LABEL[round.winner] || round.winner : 'Tie',
       jayPenalty: Number(round?.penaltyAdded?.jay ?? round?.scores?.jay ?? 0),
       kimPenalty: Number(round?.penaltyAdded?.kim ?? round?.scores?.kim ?? 0),
+      roundStake: gameMode === PUT_YOUR_POINTS_GAME_MODE ? Number(round?.putYourPointsStake || 0) : 0,
+      putYourPointsResults: gameMode === PUT_YOUR_POINTS_GAME_MODE ? {
+        jay: normalizePutYourPointsResult(round?.putYourPointsResults?.jay),
+        kim: normalizePutYourPointsResult(round?.putYourPointsResults?.kim),
+      } : null,
     }));
 };
 
@@ -1880,6 +1899,12 @@ const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = nul
     if (winnerLabel) specificCandidates.push(`${winnerLabel}'s Most Likely Edge`, `${winnerLabel} Dodged the Split`);
     if (categoryLabel) specificCandidates.push(`${categoryLabel} Took the Vote`, `A ${categoryLabel} Vote Split`);
     generalCandidates.push('Votes, Blushes, and Plot Twists', 'A Most Likely Scorecard', 'The Vote Said Everything');
+  } else if (gameMode === PUT_YOUR_POINTS_GAME_MODE) {
+    if (wasTie) specificCandidates.push('No Points Left Behind', 'A Perfect Points Deadlock');
+    if (wasClose && winnerLabel) specificCandidates.push(`${winnerLabel} by a Point`, `${winnerLabel}'s Narrow Stake Escape`);
+    if (winnerLabel) specificCandidates.push(`${winnerLabel} Dodged the Stake`, `${winnerLabel}'s Points Night`);
+    if (categoryLabel) specificCandidates.push(`${categoryLabel} Raised the Stakes`, `${categoryLabel} on the Line`);
+    generalCandidates.push('Points, Guesses, and Close Calls', 'Stakes on the Table', 'A Put Your Points Scorecard');
   } else {
     if (wasTie) specificCandidates.push('Too Close to Call', 'A Perfect Little Deadlock');
     if (wasClose && winnerLabel) specificCandidates.push(`${winnerLabel} by a Whisper`, `${winnerLabel}'s Narrow Escape`);
@@ -2015,6 +2040,7 @@ const buildAiDiarySystemInstruction = (sourceType = 'game') => [
   'Mention the result and winner if the facts include one.',
   'Explain what Jay and Kim learned about each other, what went well, and who struggled where, while staying kind and playful.',
   'For Most Likely To chapters, use facts.mostLikely to preserve matched votes, split votes, missed votes, and the exact Jay/Kim vote contrast on key split rounds.',
+  'For Put Your Points chapters, mention the round stakes and whether the host marked each player as matched or missed when those facts are present.',
   'Do not sound clinical, robotic, mean, or generic.',
   'Keep quiz scoring and penalty-point scoring separate: quiz points are higher-is-better, penalty points are lower-is-better.',
   'Do not mention private notes, prompts, raw JSON, Firestore, databases, or internal tooling.',
@@ -2165,6 +2191,8 @@ const buildAiEvidenceSnapshot = ({
       const metadataSearchText = buildAiMetadataSearchText(round);
       const gameSourceLabel = gameMode === MOST_LIKELY_GAME_MODE
         ? 'Most Likely To'
+        : gameMode === PUT_YOUR_POINTS_GAME_MODE
+          ? 'Put Your Points'
         : gameMode === THIS_OR_THAT_GAME_MODE
           ? 'This or That'
           : gameMode === TRUE_FALSE_GAME_MODE
@@ -3301,6 +3329,30 @@ const normalizeMostLikelyChoice = (value = '') => {
   if (!normalized) return '';
   return getMostLikelyOptions().find((option) => normalizeText(option).toLowerCase() === normalized) || '';
 };
+const clampPutYourPointsStake = (value = 0) => {
+  const numericValue = Math.round(Number(value || 0));
+  if (!Number.isFinite(numericValue)) return PUT_YOUR_POINTS_STAKE_MIN;
+  return Math.min(PUT_YOUR_POINTS_STAKE_MAX, Math.max(PUT_YOUR_POINTS_STAKE_MIN, numericValue));
+};
+const makePutYourPointsStakeValue = () =>
+  Math.floor(Math.random() * (PUT_YOUR_POINTS_STAKE_MAX - PUT_YOUR_POINTS_STAKE_MIN + 1)) + PUT_YOUR_POINTS_STAKE_MIN;
+const buildPutYourPointsStakeSnapshot = () => {
+  const finalStake = makePutYourPointsStakeValue();
+  const sequence = Array.from({ length: PUT_YOUR_POINTS_STAKE_FLICK_COUNT - 1 }, makePutYourPointsStakeValue);
+  return {
+    putYourPointsStake: finalStake,
+    putYourPointsStakeSequence: [...sequence, finalStake],
+    putYourPointsStakeGeneratedAt: new Date().toISOString(),
+  };
+};
+const getPutYourPointsStake = (round = {}) =>
+  clampPutYourPointsStake(round?.putYourPointsStake ?? round?.roundStake ?? round?.stake);
+const normalizePutYourPointsResult = (value = '') => {
+  const normalized = normalizeText(value).toLowerCase();
+  if (normalized === 'match' || normalized === 'matched' || normalized === 'correct') return 'matched';
+  if (normalized === 'miss' || normalized === 'missed' || normalized === 'wrong' || normalized === 'incorrect') return 'missed';
+  return '';
+};
 const hasSubmittedRoundAnswer = (round = {}, seat = '') => Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''));
 const hasCompletedTrueFalseRoundAnswer = (round = {}, seat = '') =>
   Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.ownAnswer || ''))
@@ -3310,6 +3362,12 @@ const hasCompletedThisOrThatRoundAnswer = (round = {}, seat = '') =>
   && Boolean(normalizeThisOrThatChoice(round?.answers?.[seat]?.guessedOther || '', round));
 const hasCompletedMostLikelyRoundAnswer = (round = {}, seat = '') =>
   Boolean(normalizeMostLikelyChoice(round?.answers?.[seat]?.ownAnswer || ''));
+const hasCompletedPutYourPointsRoundAnswer = (round = {}, seat = '') =>
+  Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''))
+  && Boolean(normalizeText(round?.answers?.[seat]?.guessedOther || ''));
+const hasCompletedPutYourPointsJudgement = (round = {}) =>
+  Boolean(normalizePutYourPointsResult(round?.putYourPointsResults?.jay))
+  && Boolean(normalizePutYourPointsResult(round?.putYourPointsResults?.kim));
 const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat = '') =>
   isTrueFalseGameMode(gameMode)
     ? hasCompletedTrueFalseRoundAnswer(round, seat)
@@ -3317,7 +3375,9 @@ const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat 
       ? hasCompletedThisOrThatRoundAnswer(round, seat)
       : isMostLikelyGameMode(gameMode)
         ? hasCompletedMostLikelyRoundAnswer(round, seat)
-        : hasSubmittedRoundAnswer(round, seat);
+        : isPutYourPointsGameMode(gameMode)
+          ? hasCompletedPutYourPointsRoundAnswer(round, seat)
+          : hasSubmittedRoundAnswer(round, seat);
 
 const getStoredPenaltyOverride = (...values) => {
   for (const value of values) {
@@ -3455,6 +3515,28 @@ const buildMostLikelyRoundOutcome = (round = {}, outcomeOptions = {}) => {
     kimPenalty,
   };
 };
+const buildPutYourPointsRoundOutcome = (round = {}, outcomeOptions = {}) => {
+  const useStoredPenalties = outcomeOptions.useStoredPenalties !== false;
+  const stake = getPutYourPointsStake(round);
+  const jayResult = normalizePutYourPointsResult(round?.putYourPointsResults?.jay);
+  const kimResult = normalizePutYourPointsResult(round?.putYourPointsResults?.kim);
+  const jayDefaultPenalty = jayResult === 'missed' ? stake : 0;
+  const kimDefaultPenalty = kimResult === 'missed' ? stake : 0;
+  const jayStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.jay, round?.penalties?.jay) : null;
+  const kimStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.kim, round?.penalties?.kim) : null;
+  return {
+    stake,
+    jayResult,
+    kimResult,
+    jayMatched: jayResult === 'matched',
+    kimMatched: kimResult === 'matched',
+    jayMissed: jayResult === 'missed',
+    kimMissed: kimResult === 'missed',
+    jayPenalty: jayStoredPenalty ?? jayDefaultPenalty,
+    kimPenalty: kimStoredPenalty ?? kimDefaultPenalty,
+    complete: Boolean(jayResult && kimResult),
+  };
+};
 const buildAutoScoredRoundPenaltyMap = (gameMode = 'standard', round = {}, options = {}) => {
   if (isTrueFalseGameMode(gameMode)) {
     const outcome = buildTrueFalseRoundOutcome(round, options);
@@ -3466,6 +3548,10 @@ const buildAutoScoredRoundPenaltyMap = (gameMode = 'standard', round = {}, optio
   }
   if (isMostLikelyGameMode(gameMode)) {
     const outcome = buildMostLikelyRoundOutcome(round, options);
+    return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
+  }
+  if (isPutYourPointsGameMode(gameMode)) {
+    const outcome = buildPutYourPointsRoundOutcome(round, options);
     return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
   }
   return null;
@@ -3706,17 +3792,18 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     && normalizeText(currentRound.roundType || '') === normalizeText(incomingRound.roundType || '');
   const isSameLiveRound = sameByIdentity || sameByNumber || sameByPrompt;
   if (!isSameLiveRound) return incomingGame;
+  const incomingGameMode = incomingGame?.gameMode || currentGame?.gameMode || 'standard';
   const currentAnswers = currentGame.currentRound.answers || {};
   const incomingAnswers = incomingGame.currentRound.answers || {};
   const preserveOptimisticAnswers = incomingRound.status === 'open' && currentRound.status === 'open';
   const nextAnswers = preserveOptimisticAnswers
     ? {
-        jay: hasSubmittedRoundAnswer(incomingGame.currentRound, 'jay') ? incomingAnswers.jay : currentAnswers.jay,
-        kim: hasSubmittedRoundAnswer(incomingGame.currentRound, 'kim') ? incomingAnswers.kim : currentAnswers.kim,
+        jay: hasRoundAnswerSubmittedForMode(incomingGameMode, incomingGame.currentRound, 'jay') ? incomingAnswers.jay : currentAnswers.jay,
+        kim: hasRoundAnswerSubmittedForMode(incomingGameMode, incomingGame.currentRound, 'kim') ? incomingAnswers.kim : currentAnswers.kim,
       }
     : {
-        ...(hasSubmittedRoundAnswer(incomingGame.currentRound, 'jay') ? { jay: incomingAnswers.jay } : {}),
-        ...(hasSubmittedRoundAnswer(incomingGame.currentRound, 'kim') ? { kim: incomingAnswers.kim } : {}),
+        ...(hasRoundAnswerSubmittedForMode(incomingGameMode, incomingGame.currentRound, 'jay') ? { jay: incomingAnswers.jay } : {}),
+        ...(hasRoundAnswerSubmittedForMode(incomingGameMode, incomingGame.currentRound, 'kim') ? { kim: incomingAnswers.kim } : {}),
       };
   const stableRoundFields =
     currentGame.currentRound.status === incomingGame.currentRound.status
@@ -3730,6 +3817,9 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     && currentGame.currentRound.quizTimerSeconds === incomingGame.currentRound.quizTimerSeconds
     && currentGame.currentRound.quizTimerStartedAt === incomingGame.currentRound.quizTimerStartedAt
     && currentGame.currentRound.quizTimerEndsAt === incomingGame.currentRound.quizTimerEndsAt
+    && Number(currentGame.currentRound.putYourPointsStake || 0) === Number(incomingGame.currentRound.putYourPointsStake || 0)
+    && JSON.stringify(currentGame.currentRound.putYourPointsStakeSequence || []) === JSON.stringify(incomingGame.currentRound.putYourPointsStakeSequence || [])
+    && JSON.stringify(currentGame.currentRound.putYourPointsResults || {}) === JSON.stringify(incomingGame.currentRound.putYourPointsResults || {})
     && JSON.stringify(currentGame.currentRound.multipleChoiceOptions || []) === JSON.stringify(incomingGame.currentRound.multipleChoiceOptions || [])
     && currentGame.currentRound.penalties?.jay === incomingGame.currentRound.penalties?.jay
     && currentGame.currentRound.penalties?.kim === incomingGame.currentRound.penalties?.kim
@@ -3764,6 +3854,14 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     overrideRequests: {
       ...(currentRound.overrideRequests || {}),
       ...(incomingRound.overrideRequests || {}),
+    },
+    putYourPointsStake: incomingRound.putYourPointsStake ?? currentRound.putYourPointsStake,
+    putYourPointsStakeSequence: Array.isArray(incomingRound.putYourPointsStakeSequence) && incomingRound.putYourPointsStakeSequence.length
+      ? incomingRound.putYourPointsStakeSequence
+      : currentRound.putYourPointsStakeSequence || [],
+    putYourPointsResults: {
+      ...(currentRound.putYourPointsResults || {}),
+      ...(incomingRound.putYourPointsResults || {}),
     },
     answers: nextAnswers,
   };
@@ -4392,11 +4490,13 @@ function LobbyScreen({
   onSyncQuizBank,
   onSyncThisOrThatBank,
   onSyncMostLikelyBank,
+  onSyncPutYourPointsBank,
   onSyncTrueFalseBank,
   onImportQuestions,
   onImportQuizQuestions,
   onImportThisOrThatQuestions,
   onImportMostLikelyQuestions,
+  onImportPutYourPointsQuestions,
   onImportTrueFalseQuestions,
   onResumeGame,
   onViewSummary,
@@ -4431,6 +4531,9 @@ function LobbyScreen({
   mostLikelyQuestionCount,
   usedMostLikelyQuestionCount,
   remainingMostLikelyQuestionCount,
+  putYourPointsQuestionCount,
+  usedPutYourPointsQuestionCount,
+  remainingPutYourPointsQuestionCount,
   trueFalseQuestionCount,
   usedTrueFalseQuestionCount,
   remainingTrueFalseQuestionCount,
@@ -4486,6 +4589,8 @@ function LobbyScreen({
   const [thisOrThatQuestionCountDraft, setThisOrThatQuestionCountDraft] = useState('10');
   const [mostLikelyCreateCodeDraft, setMostLikelyCreateCodeDraft] = useState('');
   const [mostLikelyQuestionCountDraft, setMostLikelyQuestionCountDraft] = useState('10');
+  const [putYourPointsCreateCodeDraft, setPutYourPointsCreateCodeDraft] = useState('');
+  const [putYourPointsQuestionCountDraft, setPutYourPointsQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
   const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
   const [flippedLobbyTiles, setFlippedLobbyTiles] = useState(() => ({
@@ -4494,6 +4599,7 @@ function LobbyScreen({
     trueFalse: false,
     thisOrThat: false,
     mostLikely: false,
+    putYourPoints: false,
     holdem: false,
   }));
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
@@ -4534,6 +4640,7 @@ function LobbyScreen({
   }), [playerAccounts?.jay?.lifetimePenaltyPoints, playerAccounts?.kim?.lifetimePenaltyPoints]);
   const thisOrThatReadyCount = Number(thisOrThatQuestionCount || 0);
   const mostLikelyReadyCount = Number(mostLikelyQuestionCount || 0);
+  const putYourPointsReadyCount = Number(putYourPointsQuestionCount || 0);
   const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
   const lobbyChatUnreadCount = useChatUnreadCount(
     lobbyChatMessages,
@@ -4607,6 +4714,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: mostLikelyQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreatePutYourPointsGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: putYourPointsCreateCodeDraft,
+      gameName: 'Put Your Points Where Your Mouth Is',
+      mode: 'random',
+      gameMode: PUT_YOUR_POINTS_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: putYourPointsQuestionCountDraft,
       ...(sendInvite ? { sendInvite: true } : {}),
     });
 
@@ -5225,12 +5344,94 @@ function LobbyScreen({
     };
   }, [activeGames, previousGames]);
 
+  const putYourPointsAnalytics = useMemo(() => {
+    const mergedById = new Map();
+    [...(activeGames || []), ...(previousGames || [])].forEach((entry) => {
+      if (!entry?.id || !isPutYourPointsGameMode(entry?.gameMode || 'standard')) return;
+      if (!mergedById.has(entry.id)) mergedById.set(entry.id, entry);
+    });
+    const sessions = [...mergedById.values()];
+    const completedSessions = sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || ''));
+    const activeSessions = sessions.filter((entry) => ACTIVE_GAME_STATUSES.includes(entry?.status || ''));
+    const roundsData = sessions.flatMap((entry) =>
+      normalizeStoredRounds(entry?.rounds || []).map((round) => ({
+        ...round,
+        gameId: entry.id,
+        gameName: entry.name || entry.gameName || entry.joinCode || 'Put Your Points',
+      })),
+    );
+    const categoryStats = new Map();
+    const totals = {
+      sessionsTracked: sessions.length,
+      totalGamesPlayed: completedSessions.length,
+      activeGames: activeSessions.length,
+      totalQuestionsAnswered: roundsData.length,
+      matchedResults: 0,
+      missedResults: 0,
+      totalStake: 0,
+      biggestStake: 0,
+      jayPenaltyPoints: 0,
+      kimPenaltyPoints: 0,
+    };
+
+    roundsData.forEach((round) => {
+      const outcome = buildPutYourPointsRoundOutcome(round, { useStoredPenalties: false });
+      const categoryKey = normalizeText(round?.category) || 'uncategorised';
+      const categoryEntry = categoryStats.get(categoryKey) || {
+        category: round?.category || 'Uncategorised',
+        rounds: 0,
+        matchedResults: 0,
+        missedResults: 0,
+        totalStake: 0,
+        biggestStake: 0,
+        jayPenalty: 0,
+        kimPenalty: 0,
+      };
+      categoryEntry.rounds += 1;
+      categoryEntry.totalStake += Number(outcome.stake || 0);
+      categoryEntry.biggestStake = Math.max(categoryEntry.biggestStake, Number(outcome.stake || 0));
+      totals.totalStake += Number(outcome.stake || 0);
+      totals.biggestStake = Math.max(totals.biggestStake, Number(outcome.stake || 0));
+
+      seats.forEach((seatName) => {
+        const result = seatName === 'jay' ? outcome.jayResult : outcome.kimResult;
+        if (result === 'matched') {
+          totals.matchedResults += 1;
+          categoryEntry.matchedResults += 1;
+        }
+        if (result === 'missed') {
+          totals.missedResults += 1;
+          categoryEntry.missedResults += 1;
+        }
+      });
+
+      totals.jayPenaltyPoints += Number(outcome.jayPenalty || 0);
+      totals.kimPenaltyPoints += Number(outcome.kimPenalty || 0);
+      categoryEntry.jayPenalty += Number(outcome.jayPenalty || 0);
+      categoryEntry.kimPenalty += Number(outcome.kimPenalty || 0);
+      categoryStats.set(categoryKey, categoryEntry);
+    });
+
+    return {
+      ...totals,
+      averageStake: roundsData.length ? Math.round(totals.totalStake / roundsData.length) : 0,
+      categoryRows: [...categoryStats.values()].sort(
+        (left, right) =>
+          right.rounds - left.rounds
+          || right.missedResults - left.missedResults
+          || left.category.localeCompare(right.category),
+      ),
+    };
+  }, [activeGames, previousGames]);
+
   const questionBankLoadedCount = questionBankSegment === 'quiz'
     ? quizQuestionCount
     : questionBankSegment === 'thisOrThat'
       ? thisOrThatQuestionCount
     : questionBankSegment === 'mostLikely'
       ? mostLikelyQuestionCount
+    : questionBankSegment === 'putYourPoints'
+      ? putYourPointsQuestionCount
     : questionBankSegment === 'trueFalse'
       ? trueFalseQuestionCount
       : questionCount;
@@ -5240,6 +5441,8 @@ function LobbyScreen({
       ? usedThisOrThatQuestionCount
     : questionBankSegment === 'mostLikely'
       ? usedMostLikelyQuestionCount
+    : questionBankSegment === 'putYourPoints'
+      ? usedPutYourPointsQuestionCount
     : questionBankSegment === 'trueFalse'
       ? usedTrueFalseQuestionCount
       : usedQuestionCount;
@@ -5249,6 +5452,8 @@ function LobbyScreen({
       ? remainingThisOrThatQuestionCount
     : questionBankSegment === 'mostLikely'
       ? remainingMostLikelyQuestionCount
+    : questionBankSegment === 'putYourPoints'
+      ? remainingPutYourPointsQuestionCount
     : questionBankSegment === 'trueFalse'
       ? remainingTrueFalseQuestionCount
       : remainingQuestionCount;
@@ -5258,6 +5463,8 @@ function LobbyScreen({
       ? onSyncThisOrThatBank
     : questionBankSegment === 'mostLikely'
       ? onSyncMostLikelyBank
+    : questionBankSegment === 'putYourPoints'
+      ? onSyncPutYourPointsBank
     : questionBankSegment === 'trueFalse'
       ? onSyncTrueFalseBank
       : onSyncQuestionBank;
@@ -5267,6 +5474,8 @@ function LobbyScreen({
       ? onImportThisOrThatQuestions
     : questionBankSegment === 'mostLikely'
       ? onImportMostLikelyQuestions
+    : questionBankSegment === 'putYourPoints'
+      ? onImportPutYourPointsQuestions
     : questionBankSegment === 'trueFalse'
       ? onImportTrueFalseQuestions
       : onImportQuestions;
@@ -5276,6 +5485,8 @@ function LobbyScreen({
       ? 'This or That Bank'
     : questionBankSegment === 'mostLikely'
       ? 'Most Likely To Bank'
+    : questionBankSegment === 'putYourPoints'
+      ? 'Put Your Points Bank'
     : questionBankSegment === 'trueFalse'
       ? 'True or False Bank'
       : 'Question Bank';
@@ -5317,6 +5528,7 @@ function LobbyScreen({
 
   const lobbyCarouselCards = [
     { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
+    { id: 'putYourPoints', label: 'Put Your Points', image: putYourPointsTileImage },
     { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
     { id: 'trueFalse', label: 'True or False', image: trueOrFalseTileImage },
     { id: 'thisOrThat', label: 'This or That', image: thisOrThatTileImage },
@@ -5372,6 +5584,7 @@ function LobbyScreen({
   const isTrueFalseTileFlipped = Boolean(flippedLobbyTiles.trueFalse);
   const isThisOrThatTileFlipped = Boolean(flippedLobbyTiles.thisOrThat);
   const isMostLikelyTileFlipped = Boolean(flippedLobbyTiles.mostLikely);
+  const isPutYourPointsTileFlipped = Boolean(flippedLobbyTiles.putYourPoints);
   const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
   const getLobbyTileImageStyle = (imageUrl) => ({
     '--lobby-tile-image': lobbyTileImagesEnabled && imageUrl ? `url("${imageUrl}")` : 'none',
@@ -5732,6 +5945,97 @@ function LobbyScreen({
                     inert={getLobbyCarouselPosition(1) !== 'center'}
                     aria-hidden={getLobbyCarouselPosition(1) !== 'center'}
                   >
+                    <section
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--put-points"
+                      style={getLobbyTileImageStyle(putYourPointsTileImage)}
+                    >
+                      <div className={`lobby-image-tile-flip ${isPutYourPointsTileFlipped ? 'is-flipped' : ''}`}>
+                        {renderLobbyTileFront({
+                          cardId: 'putYourPoints',
+                          eyebrow: 'Stake Match',
+                          title: 'Put Your Points',
+                          statusText: `${putYourPointsReadyCount} ready`,
+                          description: 'A normal answer-and-guess round with a random 1-200 point stake. The host marks each player as matched or missed after the reveal.',
+                          footerMeta: (
+                            <label className="lobby-image-tile-front-control">
+                              <span>Questions</span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                value={putYourPointsQuestionCountDraft}
+                                onChange={(event) => setPutYourPointsQuestionCountDraft(event.target.value)}
+                                placeholder="10"
+                              />
+                            </label>
+                          ),
+                          onCreateAndInvite: () => handleCreatePutYourPointsGame(true),
+                        })}
+                        <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isPutYourPointsTileFlipped} aria-hidden={!isPutYourPointsTileFlipped}>
+                          <div className="lobby-image-tile-back-toolbar">
+                            <span className="status-pill">Setup</span>
+                            <Button
+                              type="button"
+                              className="ghost-button compact lobby-image-tile-back-button"
+                              onClick={() => setLobbyTileFlipped('putYourPoints', false)}
+                            >
+                              Back
+                            </Button>
+                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Stake Match</p>
+                              <h2>Put Your Points</h2>
+                            </div>
+                            <span className="status-pill">{putYourPointsReadyCount} ready</span>
+                          </div>
+                          <p className="panel-copy">Each round flicks through a few stake numbers, then lands on the final amount. Players submit their own answer and their guess. The host marks Match or Miss for Jay and Kim separately.</p>
+                          <label className="field">
+                            <span>Put Your Points Code</span>
+                            <input
+                              value={putYourPointsCreateCodeDraft}
+                              onChange={(event) => setPutYourPointsCreateCodeDraft(normalizeJoinCode(event.target.value))}
+                              placeholder="Optional"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Number of Questions</span>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min="1"
+                              value={putYourPointsQuestionCountDraft}
+                              onChange={(event) => setPutYourPointsQuestionCountDraft(event.target.value)}
+                              placeholder="10"
+                            />
+                          </label>
+                          <p className="field-note">Matched answers add 0. Missed answers add the round stake as the penalty for that player.</p>
+                          <div className="button-row">
+                            <Button
+                              className="primary-button compact"
+                              onClick={() => handleCreatePutYourPointsGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create Put Your Points
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreatePutYourPointsGame(true)}
+                              disabled={isBusy}
+                            >
+                              Create + Invite
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <div
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(2)}`}
+                    inert={getLobbyCarouselPosition(2) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(2) !== 'center'}
+                  >
 	                <section
                     className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--quiz"
                     style={getLobbyTileImageStyle(quickFireQuizTileImage)}
@@ -5841,9 +6145,9 @@ function LobbyScreen({
                   </div>
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(2)}`}
-                    inert={getLobbyCarouselPosition(2) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(2) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(3)}`}
+                    inert={getLobbyCarouselPosition(3) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(3) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--true-false"
@@ -5932,9 +6236,9 @@ function LobbyScreen({
                   </div>
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(3)}`}
-                    inert={getLobbyCarouselPosition(3) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(3) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(4)}`}
+                    inert={getLobbyCarouselPosition(4) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(4) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--this-or-that"
@@ -6023,9 +6327,9 @@ function LobbyScreen({
                   </div>
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(4)}`}
-                    inert={getLobbyCarouselPosition(4) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(4) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(5)}`}
+                    inert={getLobbyCarouselPosition(5) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(5) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--most-likely"
@@ -6114,9 +6418,9 @@ function LobbyScreen({
                   </div>
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(5)}`}
-                    inert={getLobbyCarouselPosition(5) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(5) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(6)}`}
+                    inert={getLobbyCarouselPosition(6) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(6) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
@@ -6244,6 +6548,9 @@ function LobbyScreen({
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'mostLikely' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('mostLikely')}>
                   Most Likely To
                 </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'putYourPoints' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('putYourPoints')}>
+                  Put Your Points
+                </button>
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('trueFalse')}>
                   True or False
                 </button>
@@ -6284,6 +6591,8 @@ function LobbyScreen({
                         ? 'This or That Questions'
                       : questionBankSegment === 'mostLikely'
                         ? 'Most Likely To Questions'
+                      : questionBankSegment === 'putYourPoints'
+                        ? 'Put Your Points Questions'
                         : 'New Questions'
                   }`}
                 </Button>
@@ -6578,6 +6887,9 @@ function LobbyScreen({
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'mostLikely' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('mostLikely')}>
                   Most Likely To
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'putYourPoints' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('putYourPoints')}>
+                  Put Your Points
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'holdem' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('holdem')}>
                   Texas Hold Em
@@ -7082,6 +7394,70 @@ function LobbyScreen({
                     </section>
                   </div>
                 </section>
+              ) : analyticsSegment === 'putYourPoints' ? (
+                <section className="analytics-questions-panel">
+                  <div className="question-bank-status-grid">
+                    <article className="stat-tile">
+                      <small>Total Games Played</small>
+                      <strong>{putYourPointsAnalytics.totalGamesPlayed}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Total Questions</small>
+                      <strong>{putYourPointsAnalytics.totalQuestionsAnswered}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Matched Results</small>
+                      <strong>{putYourPointsAnalytics.matchedResults}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Missed Results</small>
+                      <strong>{putYourPointsAnalytics.missedResults}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Biggest Stake</small>
+                      <strong>{formatScore(putYourPointsAnalytics.biggestStake)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Average Stake</small>
+                      <strong>{formatScore(putYourPointsAnalytics.averageStake)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Penalty</small>
+                      <strong>{formatScore(putYourPointsAnalytics.jayPenaltyPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Penalty</small>
+                      <strong>{formatScore(putYourPointsAnalytics.kimPenaltyPoints)}</strong>
+                    </article>
+                  </div>
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading"><div><span>Put Your Points</span><h3>Host Results</h3></div></div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Matches</strong><span>{putYourPointsAnalytics.matchedResults}</span></article>
+                        <article className="mini-list-row"><strong>Misses</strong><span>{putYourPointsAnalytics.missedResults}</span></article>
+                        <article className="mini-list-row"><strong>Total stake shown</strong><span>{formatScore(putYourPointsAnalytics.totalStake)}</span></article>
+                        <article className="mini-list-row"><strong>Tracked games</strong><span>{putYourPointsAnalytics.sessionsTracked}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading"><div><span>Categories</span><h3>Miss Hotspots</h3></div></div>
+                      <div className="summary-list">
+                        {putYourPointsAnalytics.categoryRows.length ? (
+                          putYourPointsAnalytics.categoryRows.slice(0, 14).map((row) => (
+                            <article className="mini-list-row" key={`put-points-cat-${row.category}`}>
+                              <strong>{row.category}</strong>
+                              <span>{`${row.rounds} rounds · ${row.missedResults} misses`}</span>
+                              <small>{`Matched ${row.matchedResults} · Stake ${formatScore(row.totalStake)} · Jay ${formatScore(row.jayPenalty)} / Kim ${formatScore(row.kimPenalty)}`}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="empty-copy">No Put Your Points rounds have been recorded yet.</p>
+                        )}
+                      </div>
+                    </section>
+                  </div>
+                </section>
               ) : analyticsSegment === 'holdem' ? (
                 <section className="analytics-questions-panel">
                   <div className="question-bank-status-grid">
@@ -7559,6 +7935,105 @@ function QuickDesk({ currentRound, penaltyDraft, setPenaltyDraft, onNextQuestion
           {isPaused ? 'Resume' : 'Pause'}
         </Button>
         <span className="quick-desk-status">{currentRound ? `Round ${currentRound.number}` : 'Waiting'}</span>
+      </div>
+    </section>
+  );
+}
+
+function PutYourPointsStakeTicker({ currentRound }) {
+  const roundKey = stableRoundIdentityKey(currentRound || {});
+  const finalStake = getPutYourPointsStake(currentRound || {});
+  const sequence = Array.isArray(currentRound?.putYourPointsStakeSequence) && currentRound.putYourPointsStakeSequence.length
+    ? currentRound.putYourPointsStakeSequence.map((value) => clampPutYourPointsStake(value))
+    : [finalStake];
+  const sequenceKey = sequence.join(':');
+  const [displayStake, setDisplayStake] = useState(sequence[0] || finalStake);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timers = [];
+    const values = sequence.length ? sequence : [finalStake];
+    setDisplayStake(values[0] || finalStake);
+    values.slice(1).forEach((value, index) => {
+      timers.push(window.setTimeout(() => {
+        if (!cancelled) setDisplayStake(value);
+      }, 120 + (index * 115)));
+    });
+    return () => {
+      cancelled = true;
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [finalStake, roundKey, sequenceKey]);
+
+  if (!currentRound) return null;
+  return (
+    <div className="put-points-stake-ticker" aria-live="polite">
+      <span>Round stake</span>
+      <strong>{formatScore(displayStake)}</strong>
+    </div>
+  );
+}
+
+function PutYourPointsHostDesk({ currentRound, onSetResult, onNextQuestion, onPauseToggle, status, isPaused, isCompleted, isBusy }) {
+  const outcome = buildPutYourPointsRoundOutcome(currentRound || {});
+  const resultBySeat = {
+    jay: outcome.jayResult,
+    kim: outcome.kimResult,
+  };
+  const isComplete = outcome.complete;
+
+  return (
+    <section className="panel quick-desk-panel put-points-host-desk">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Put Your Points</p>
+          <h2>Host Judgement</h2>
+        </div>
+        <span className="status-pill">{formatScore(outcome.stake)} stake</span>
+      </div>
+
+      <div className="put-points-judgement-grid">
+        {seats.map((seatName) => {
+          const result = resultBySeat[seatName] || '';
+          const penalty = result === 'missed' ? outcome.stake : 0;
+          return (
+            <article className="put-points-judgement-card" key={`put-points-result-${seatName}`}>
+              <div>
+                <strong>{PLAYER_LABEL[seatName] || seatName}</strong>
+                <span>{result ? `Penalty +${formatScore(penalty)}` : 'Needs host mark'}</span>
+              </div>
+              <div className="button-row put-points-result-buttons">
+                <Button
+                  type="button"
+                  className={`ghost-button compact ${result === 'matched' ? 'is-on' : ''}`}
+                  onClick={() => onSetResult?.(seatName, 'matched')}
+                  disabled={isBusy || isCompleted}
+                >
+                  Match
+                </Button>
+                <Button
+                  type="button"
+                  className={`ghost-button compact ${result === 'missed' ? 'is-on' : ''}`}
+                  onClick={() => onSetResult?.(seatName, 'missed')}
+                  disabled={isBusy || isCompleted}
+                >
+                  Miss
+                </Button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || isCompleted || !isComplete}>
+        Next Question
+      </Button>
+
+      <div className="button-row tiny-actions quick-desk-footer">
+        <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || isCompleted}>
+          {isPaused ? 'Resume' : 'Pause'}
+        </Button>
+        <span className="quick-desk-status">{isComplete ? 'Judged' : 'Mark both players'}</span>
       </div>
     </section>
   );
@@ -8891,6 +9366,7 @@ function RoomRevealPlayerCard({
   isTrueFalseGame = false,
   isThisOrThatGame = false,
   isMostLikelyGame = false,
+  isPutYourPointsGame = false,
   totalQuizPoints = 0,
 }) {
   const playerSeat = seat === 'kim' ? 'kim' : 'jay';
@@ -9155,6 +9631,65 @@ function RoomRevealPlayerCard({
       </article>
     );
   }
+  if (isPutYourPointsGame) {
+    const outcome = buildPutYourPointsRoundOutcome(currentRound || {});
+    const playerAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
+    const playerGuessRaw = currentRound?.answers?.[playerSeat]?.guessedOther || '';
+    const targetAnswerRaw = currentRound?.answers?.[oppositeSeat]?.ownAnswer || '';
+    const result = playerSeat === 'jay' ? outcome.jayResult : outcome.kimResult;
+    const penalty = playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty;
+    const matchTone = result === 'matched' ? 'success' : result === 'missed' ? 'warning' : 'neutral';
+    const matchLabel = result === 'matched'
+      ? 'Host marked match'
+      : result === 'missed'
+        ? `Host marked miss: +${formatScore(outcome.stake)}`
+        : 'Waiting for host judgement';
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>{`${playerLabel}'s guess for ${oppositeLabel}`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{formatRoundAnswerValue(playerGuessRaw, currentRound?.roundType)}</strong>
+            </div>
+          </div>
+
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>{`${oppositeLabel}'s real answer`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{formatRoundAnswerValue(targetAnswerRaw, currentRound?.roundType)}</strong>
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
+              {matchLabel}
+            </small>
+          </div>
+        </div>
+
+        <div className="room-reveal-score-strip">
+          <div>
+            <span>{`${playerLabel}'s answer`}</span>
+            <strong>{formatRoundAnswerValue(playerAnswerRaw, currentRound?.roundType)}</strong>
+          </div>
+          <div>
+            <span>Round penalty</span>
+            <strong>{formatScore(penalty || roundPenalty || 0)}</strong>
+          </div>
+          <div>
+            <span>Total penalty</span>
+            <strong>{formatScore(totalPenalty || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
   const actualAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
   const guessedAnswerRaw = currentRound?.answers?.[oppositeSeat]?.guessedOther || '';
   const actualAnswer = formatRoundAnswerValue(actualAnswerRaw, currentRound?.roundType);
@@ -9219,6 +9754,7 @@ function RoomActiveFrameBase({
   onLockTrueFalseAnswer,
   onLockThisOrThatAnswer,
   onLockMostLikelyAnswer,
+  onSetPutYourPointsResult,
   onMarkReady,
   onRequestQuizOverride,
   onRespondQuizOverride,
@@ -9254,6 +9790,7 @@ function RoomActiveFrameBase({
     && normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard')) === 'trueFalseGame';
   const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
   const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
+  const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
   const penaltyPreview = useMemo(
     () => (
       (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: false }) : null)
@@ -9303,7 +9840,7 @@ function RoomActiveFrameBase({
       ? 'Waiting'
       : 'Answering';
   const showReplayAction = false;
-  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame && !isMostLikelyGame;
+  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame && !isMostLikelyGame && !isPutYourPointsGame;
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
   const viewerOverrideRequest = currentRound?.overrideRequests?.[currentPlayer] || null;
@@ -9335,6 +9872,10 @@ function RoomActiveFrameBase({
     () => (isMostLikelyGame ? buildMostLikelyRoundOutcome(currentRound || {}) : null),
     [currentRound, isMostLikelyGame],
   );
+  const putYourPointsOutcome = useMemo(
+    () => (isPutYourPointsGame ? buildPutYourPointsRoundOutcome(currentRound || {}) : null),
+    [currentRound, isPutYourPointsGame],
+  );
   const trueFalseSummaryLabel = !trueFalseOutcome
     ? ''
     : trueFalseOutcome.jayCorrect && trueFalseOutcome.kimCorrect
@@ -9356,11 +9897,16 @@ function RoomActiveFrameBase({
       : mostLikelyOutcome.jayMissingResponse || mostLikelyOutcome.kimMissingResponse
         ? 'Missed votes triggered penalties'
         : 'Split vote';
+  const putYourPointsSummaryLabel = !putYourPointsOutcome
+    ? ''
+    : putYourPointsOutcome.complete
+      ? 'Host judgement saved'
+      : 'Host judgement needed';
 
   return (
-    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''}`} aria-label="Active round scoreboard">
+    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-frame--put-points' : ''}`} aria-label="Active round scoreboard">
       <div className="scoreboard-sheen" aria-hidden="true" />
-      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-stage--most-likely' : ''}`}>
+      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-stage--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-stage--put-points' : ''}`}>
         <header className="room-active-header">
           <div>
             <span className="scoreboard-kicker">{revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
@@ -9376,6 +9922,7 @@ function RoomActiveFrameBase({
         {isTrueFalseGame ? <TrueFalseLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isThisOrThatGame ? <ThisOrThatLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isMostLikelyGame ? <MostLikelyLiveStatus revealIsReady={revealIsReady} /> : null}
+        {isPutYourPointsGame ? <PutYourPointsStakeTicker currentRound={currentRound} /> : null}
         {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer ? (
           <div className="quiz-override-strip">
             <span className={`quiz-override-status ${viewerQuizResult === 'correct' ? 'is-correct' : 'is-incorrect'}`}>
@@ -9552,6 +10099,7 @@ function RoomActiveFrameBase({
                 isTrueFalseGame={isTrueFalseGame}
                 isThisOrThatGame={isThisOrThatGame}
                 isMostLikelyGame={isMostLikelyGame}
+                isPutYourPointsGame={isPutYourPointsGame}
                 totalQuizPoints={quizRevealTotals[currentPlayer]}
               />
 
@@ -9648,6 +10196,38 @@ function RoomActiveFrameBase({
                       {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
                     </small>
                   </>
+                ) : isPutYourPointsGame ? (
+                  <>
+                    <span>Round Stake</span>
+                    <strong>{formatScore(putYourPointsOutcome?.stake || getPutYourPointsStake(currentRound || {}))}</strong>
+                    <p>
+                      {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])}
+                      {' · '}
+                      {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
+                    </p>
+                    <small>{putYourPointsSummaryLabel}</small>
+                    {role === 'host' ? (
+                      <div className="put-points-inline-host-actions">
+                        <Button className="ghost-button compact" onClick={() => onSetPutYourPointsResult?.(currentPlayer, 'matched')} disabled={isBusy}>
+                          {viewerLabel} Match
+                        </Button>
+                        <Button className="ghost-button compact" onClick={() => onSetPutYourPointsResult?.(currentPlayer, 'missed')} disabled={isBusy}>
+                          {viewerLabel} Miss
+                        </Button>
+                        <Button className="ghost-button compact" onClick={() => onSetPutYourPointsResult?.(otherPlayer, 'matched')} disabled={isBusy}>
+                          {oppositeLabel} Match
+                        </Button>
+                        <Button className="ghost-button compact" onClick={() => onSetPutYourPointsResult?.(otherPlayer, 'missed')} disabled={isBusy}>
+                          {oppositeLabel} Miss
+                        </Button>
+                      </div>
+                    ) : null}
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
                 ) : (
                   <>
                     <span>Round Result</span>
@@ -9680,6 +10260,7 @@ function RoomActiveFrameBase({
                 isTrueFalseGame={isTrueFalseGame}
                 isThisOrThatGame={isThisOrThatGame}
                 isMostLikelyGame={isMostLikelyGame}
+                isPutYourPointsGame={isPutYourPointsGame}
                 totalQuizPoints={quizRevealTotals[otherPlayer]}
               />
             </div>
@@ -9750,11 +10331,14 @@ const RoomActiveFrame = memo(RoomActiveFrameBase, (previous, next) => {
     && previous.currentRound?.roundType === next.currentRound?.roundType
     && previous.currentRound?.correctAnswer === next.currentRound?.correctAnswer
     && previous.currentRound?.quizTimerEndsAt === next.currentRound?.quizTimerEndsAt
+    && Number(previous.currentRound?.putYourPointsStake || 0) === Number(next.currentRound?.putYourPointsStake || 0)
     && JSON.stringify(previous.currentRound?.multipleChoiceOptions || []) === JSON.stringify(next.currentRound?.multipleChoiceOptions || [])
     && JSON.stringify(previous.currentRound?.ready || {}) === JSON.stringify(next.currentRound?.ready || {})
     && JSON.stringify(previous.currentRound?.nextReady || {}) === JSON.stringify(next.currentRound?.nextReady || {})
     && JSON.stringify(previous.currentRound?.overrideRequests || {}) === JSON.stringify(next.currentRound?.overrideRequests || {})
     && JSON.stringify(previous.currentRound?.answers || {}) === JSON.stringify(next.currentRound?.answers || {})
+    && JSON.stringify(previous.currentRound?.penalties || {}) === JSON.stringify(next.currentRound?.penalties || {})
+    && JSON.stringify(previous.currentRound?.putYourPointsResults || {}) === JSON.stringify(next.currentRound?.putYourPointsResults || {})
     && Number(previous.baseTotals?.jay || 0) === Number(next.baseTotals?.jay || 0)
     && Number(previous.baseTotals?.kim || 0) === Number(next.baseTotals?.kim || 0)
     && Number(previous.liveTotals?.jay || 0) === Number(next.liveTotals?.jay || 0)
@@ -13419,12 +14003,15 @@ function GameRoomView({
   const isTrueFalseGame = isTrueFalseGameMode(currentGameMode);
   const isThisOrThatGame = isThisOrThatGameMode(currentGameMode);
   const isMostLikelyGame = isMostLikelyGameMode(currentGameMode);
+  const isPutYourPointsGame = isPutYourPointsGameMode(currentGameMode);
   const bothPlayersSubmitted = isTrueFalseGame
     ? Boolean(hasCompletedTrueFalseRoundAnswer(currentRound, 'jay') && hasCompletedTrueFalseRoundAnswer(currentRound, 'kim'))
     : isThisOrThatGame
       ? Boolean(hasCompletedThisOrThatRoundAnswer(currentRound, 'jay') && hasCompletedThisOrThatRoundAnswer(currentRound, 'kim'))
     : isMostLikelyGame
       ? Boolean(hasCompletedMostLikelyRoundAnswer(currentRound, 'jay') && hasCompletedMostLikelyRoundAnswer(currentRound, 'kim'))
+    : isPutYourPointsGame
+      ? Boolean(hasCompletedPutYourPointsRoundAnswer(currentRound, 'jay') && hasCompletedPutYourPointsRoundAnswer(currentRound, 'kim'))
       : Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
   const revealIsReady = bothPlayersSubmitted || currentRound?.status === 'reveal';
   const submissionState = isTrueFalseGame
@@ -13433,6 +14020,8 @@ function GameRoomView({
       ? (hasCompletedThisOrThatRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
     : isMostLikelyGame
       ? (hasCompletedMostLikelyRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
+    : isPutYourPointsGame
+      ? (hasCompletedPutYourPointsRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
       : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
   const submittedBySeat = {
     jay: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'jay'),
@@ -13719,6 +14308,22 @@ function GameRoomView({
     if (role !== 'host') return null;
 
     if (currentRound && revealIsReady && !isQuizGame) {
+      if (isPutYourPointsGame) {
+        return (
+          <section className="mobile-entry-panel mobile-round-panel">
+            <PutYourPointsHostDesk
+              currentRound={currentRound}
+              onSetResult={onSetPutYourPointsResult}
+              onNextQuestion={onNextQuestion}
+              onPauseToggle={onPauseToggle}
+              status={status}
+              isPaused={status === 'paused'}
+              isCompleted={status === 'completed'}
+              isBusy={isBusy}
+            />
+          </section>
+        );
+      }
       if (isTrueFalseGame || isThisOrThatGame || isMostLikelyGame) {
         const modeLabel = isMostLikelyGame ? 'Most Likely To' : isThisOrThatGame ? 'This or That' : 'True or False';
         return (
@@ -13946,6 +14551,7 @@ function GameRoomView({
 	                  onLockTrueFalseAnswer={onLockTrueFalseAnswer}
                     onLockThisOrThatAnswer={onLockThisOrThatAnswer}
                     onLockMostLikelyAnswer={onLockMostLikelyAnswer}
+                    onSetPutYourPointsResult={onSetPutYourPointsResult}
 	                  onMarkReady={onMarkReady}
 	                  onRequestQuizOverride={onRequestQuizOverride}
 	                  onRespondQuizOverride={onRespondQuizOverride}
@@ -14190,6 +14796,18 @@ function GameRoomView({
             </div>
             {role === 'host' ? (
               isQuizGame ? null : currentRound && revealIsReady ? (
+                isPutYourPointsGame ? (
+                  <PutYourPointsHostDesk
+                    currentRound={currentRound}
+                    onSetResult={onSetPutYourPointsResult}
+                    onNextQuestion={onNextQuestion}
+                    onPauseToggle={onPauseToggle}
+                    status={status}
+                    isPaused={status === 'paused'}
+                    isCompleted={status === 'completed'}
+                    isBusy={isBusy}
+                  />
+                ) :
                 isTrueFalseGame || isThisOrThatGame || isMostLikelyGame ? (
                   <section className="panel host-queue-panel room-status-panel">
                     <div className="panel-heading">
@@ -14277,6 +14895,7 @@ function GameRoomView({
                   onLockTrueFalseAnswer={onLockTrueFalseAnswer}
                   onLockThisOrThatAnswer={onLockThisOrThatAnswer}
                   onLockMostLikelyAnswer={onLockMostLikelyAnswer}
+                  onSetPutYourPointsResult={onSetPutYourPointsResult}
                   onMarkReady={onMarkReady}
 	              onRequestQuizOverride={onRequestQuizOverride}
 	              onRespondQuizOverride={onRespondQuizOverride}
@@ -14450,6 +15069,7 @@ function ProductionApp() {
   const autoSheetImportAttemptedRef = useRef(false);
   const autoThisOrThatSheetSyncInFlightRef = useRef(false);
   const autoMostLikelySheetSyncInFlightRef = useRef(false);
+  const autoPutYourPointsSheetSyncInFlightRef = useRef(false);
   const autoTrueFalseSheetSyncInFlightRef = useRef(false);
   const roomLoadTimeoutRef = useRef(null);
   const firestoreCooldownTimerRef = useRef(null);
@@ -15784,6 +16404,10 @@ function ProductionApp() {
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'mostLikelyGame'),
     [bankQuestions],
   );
+  const putYourPointsBankQuestions = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'putYourPointsGame'),
+    [bankQuestions],
+  );
   const trueFalseBankQuestions = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
     [bankQuestions],
@@ -15795,6 +16419,10 @@ function ProductionApp() {
   const mostLikelySelectableQuestions = useMemo(
     () => (mostLikelyBankQuestions.length ? mostLikelyBankQuestions : MOST_LIKELY_STARTER_QUESTIONS),
     [mostLikelyBankQuestions],
+  );
+  const putYourPointsSelectableQuestions = useMemo(
+    () => putYourPointsBankQuestions,
+    [putYourPointsBankQuestions],
   );
   const lobbyCategoryOptions = useMemo(
     () => deriveCategories(gameBankQuestions, lobbyRounds, DEFAULT_CATEGORIES).map((category) => category.name).filter(Boolean),
@@ -15831,6 +16459,7 @@ function ProductionApp() {
   const quizBankCount = quizBankQuestions.length;
   const thisOrThatBankCount = thisOrThatBankQuestions.length;
   const mostLikelyBankCount = mostLikelySelectableQuestions.length;
+  const putYourPointsBankCount = putYourPointsSelectableQuestions.length;
   const trueFalseBankCount = trueFalseBankQuestions.length;
   const trackedGameEntries = useMemo(() => {
     if (!game?.id || isLocalTestGame(game)) return enrichedGameLibrary;
@@ -15868,6 +16497,10 @@ function ProductionApp() {
   const mostLikelyQuestionIds = useMemo(
     () => new Set(mostLikelySelectableQuestions.map((question) => question.id).filter(Boolean)),
     [mostLikelySelectableQuestions],
+  );
+  const putYourPointsQuestionIds = useMemo(
+    () => new Set(putYourPointsSelectableQuestions.map((question) => question.id).filter(Boolean)),
+    [putYourPointsSelectableQuestions],
   );
   const trueFalseQuestionIds = useMemo(
     () => new Set(trueFalseBankQuestions.map((question) => question.id).filter(Boolean)),
@@ -15964,6 +16597,14 @@ function ProductionApp() {
     if (!mostLikelyQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => mostLikelyQuestionIds.has(questionId)));
   }, [pairPlayedQuestionIds, trackedGameEntries, mostLikelyQuestionIds]);
+  const trackedUsedPutYourPointsQuestionIds = useMemo(() => {
+    const trackedIds = mergeUniqueIds(
+      pairPlayedQuestionIds,
+      ...trackedGameEntries.map((entry) => getRetiredQuestionIdsForGame(entry)),
+    );
+    if (!putYourPointsQuestionIds.size) return new Set(trackedIds);
+    return new Set(trackedIds.filter((questionId) => putYourPointsQuestionIds.has(questionId)));
+  }, [pairPlayedQuestionIds, trackedGameEntries, putYourPointsQuestionIds]);
   const playedThisOrThatQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -15986,6 +16627,17 @@ function ProductionApp() {
   }, [trackedGameEntries, mostLikelyQuestionIds]);
   const usedMostLikelyQuestionCount = playedMostLikelyQuestionIds.size;
   const remainingMostLikelyQuestionCount = Math.max(0, mostLikelyBankCount - usedMostLikelyQuestionCount);
+  const playedPutYourPointsQuestionIds = useMemo(() => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'putYourPointsGame')
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+    );
+    if (!putYourPointsQuestionIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => putYourPointsQuestionIds.has(questionId)));
+  }, [trackedGameEntries, putYourPointsQuestionIds]);
+  const usedPutYourPointsQuestionCount = playedPutYourPointsQuestionIds.size;
+  const remainingPutYourPointsQuestionCount = Math.max(0, putYourPointsBankCount - usedPutYourPointsQuestionCount);
   const playedTrueFalseQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -16009,8 +16661,8 @@ function ProductionApp() {
   }, [standardSelectableQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
   const allPlayedQuestionIds = useMemo(
-    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedMostLikelyQuestionIds, ...playedTrueFalseQuestionIds]),
-    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedMostLikelyQuestionIds, playedTrueFalseQuestionIds],
+    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedMostLikelyQuestionIds, ...playedPutYourPointsQuestionIds, ...playedTrueFalseQuestionIds]),
+    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedMostLikelyQuestionIds, playedPutYourPointsQuestionIds, playedTrueFalseQuestionIds],
   );
   const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
@@ -16088,6 +16740,7 @@ function ProductionApp() {
     if (normalizedTargetBankType === 'quiz') return quizBankQuestions;
     if (normalizedTargetBankType === 'thisOrThatGame') return thisOrThatBankQuestions;
     if (normalizedTargetBankType === 'mostLikelyGame') return mostLikelySelectableQuestions;
+    if (normalizedTargetBankType === 'putYourPointsGame') return putYourPointsSelectableQuestions;
     if (normalizedTargetBankType === 'trueFalseGame') return trueFalseBankQuestions;
     return gameBankQuestions;
   };
@@ -16095,7 +16748,10 @@ function ProductionApp() {
   const ensureQuestionBankReadyForQueue = async (targetBankType = 'game') => {
     const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
     if (normalizedTargetBankType === 'game' && standardSelectableQuestions.length) return;
-    const shouldTrySheetBeforeFallback = normalizedTargetBankType === 'mostLikelyGame' && !mostLikelyBankQuestions.length;
+    const shouldTrySheetBeforeFallback = (
+      (normalizedTargetBankType === 'mostLikelyGame' && !mostLikelyBankQuestions.length)
+      || (normalizedTargetBankType === 'putYourPointsGame' && !putYourPointsBankQuestions.length)
+    );
     if (shouldTrySheetBeforeFallback) {
       await seedBankIfNeeded(normalizedTargetBankType);
       return;
@@ -16125,6 +16781,7 @@ function ProductionApp() {
     const requestedGameMode = resolveGameMode(filters.gameMode || 'standard');
     const isThisOrThatQueue = isThisOrThatGameMode(requestedGameMode);
     const isMostLikelyQueue = isMostLikelyGameMode(requestedGameMode);
+    const isPutYourPointsQueue = isPutYourPointsGameMode(requestedGameMode);
     const questionBankPool = requestedBankType === 'game'
       ? standardSelectableQuestions
       : getLocalQuestionPoolForBankType(requestedBankType);
@@ -16134,6 +16791,8 @@ function ProductionApp() {
         ? trackedUsedThisOrThatQuestionIds
       : requestedBankType === 'mostLikelyGame'
         ? trackedUsedMostLikelyQuestionIds
+      : requestedBankType === 'putYourPointsGame'
+        ? trackedUsedPutYourPointsQuestionIds
       : requestedBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
         : effectiveRetiredQuestionIds;
@@ -16174,6 +16833,8 @@ function ProductionApp() {
               ? `Only ${queue.length} unrepeated True or False questions are available for this player pair. This mode does not repeat questions.`
               : isMostLikelyQueue
                 ? `Only ${queue.length} Most Likely To questions are available right now.`
+              : isPutYourPointsQueue
+                ? `Only ${queue.length} Put Your Points questions are available right now.`
               : isThisOrThatQueue
                 ? `Only ${queue.length} This or That questions with clear either/or options are available right now.`
               : `Only ${queue.length} unique questions are available for this player pair.`
@@ -16181,6 +16842,8 @@ function ProductionApp() {
               ? 'No unused True or False questions remain for this player pair. This mode does not repeat questions.'
               : isMostLikelyQueue
                 ? 'No Most Likely To questions are available right now.'
+              : isPutYourPointsQueue
+                ? 'No Put Your Points questions are available right now.'
               : isThisOrThatQueue
                 ? 'No This or That questions with clear either/or options are available right now.'
               : 'No unused questions remain for this player pair.'
@@ -18809,6 +19472,8 @@ function ProductionApp() {
         ? 'This or That'
       : normalizedTargetBankType === 'mostLikelyGame'
         ? 'Most Like To'
+      : normalizedTargetBankType === 'putYourPointsGame'
+        ? 'Put Your Money Where Your Mouth Is'
       : normalizedTargetBankType === 'trueFalseGame'
         ? 'True or False'
         : 'Questions';
@@ -18855,6 +19520,14 @@ function ProductionApp() {
               overwriteExisting,
               importedAt: new Date().toISOString(),
               sourceLabel: `${reference.id}:${target.sheetName || 'Most Like To'}`,
+            })
+        : normalizedTargetBankType === 'putYourPointsGame'
+          ? parseGoogleSheetPutYourPointsImport({
+              rawText,
+              existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'putYourPointsGame'),
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'Put Your Money Where Your Mouth Is'}`,
             })
         : normalizedTargetBankType === 'trueFalseGame'
           ? parseGoogleSheetTrueFalseImport({
@@ -18992,6 +19665,26 @@ function ProductionApp() {
       }
       return existingQuestions;
     }
+    if (normalizedTargetBankType === 'putYourPointsGame') {
+      const putYourPointsQuestions = existingQuestions.filter(
+        (question) => normalizeQuestionBankType(question?.bankType) === 'putYourPointsGame',
+      );
+      if (putYourPointsQuestions.length >= PUT_YOUR_POINTS_AUTO_SYNC_MIN_COUNT) return existingQuestions;
+      try {
+        const result = await syncGoogleSheetQuestions({
+          sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+          existingQuestions,
+          overwriteExisting: false,
+          targetBankType: 'putYourPointsGame',
+        });
+        if (result.imports.length || result.updates.length) {
+          await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+        }
+      } catch (error) {
+        console.warn('Put Your Points bank sync failed while topping up the dedicated sheet tab.', error);
+      }
+      return existingQuestions;
+    }
     if (normalizedTargetBankType !== 'game') return existingQuestions;
     const needsTopUp = snap.empty || isStarterOnlyQuestionBank(existingQuestions);
     if (!needsTopUp) return existingQuestions;
@@ -19084,6 +19777,29 @@ function ProductionApp() {
     }
   }, [bankQuestions, firestore, mostLikelyBankQuestions.length, sheetInput, user]);
 
+  const topUpPutYourPointsBankFromDedicatedSheet = useCallback(async () => {
+    if (!user || !firestore) return false;
+    if (autoPutYourPointsSheetSyncInFlightRef.current) return false;
+    if (putYourPointsBankQuestions.length >= PUT_YOUR_POINTS_AUTO_SYNC_MIN_COUNT) return false;
+    autoPutYourPointsSheetSyncInFlightRef.current = true;
+    try {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'putYourPointsGame',
+      });
+      if (!result.imports.length && !result.updates.length) return false;
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      return true;
+    } catch (error) {
+      console.warn('Automatic Put Your Points sheet top-up failed.', error);
+      return false;
+    } finally {
+      autoPutYourPointsSheetSyncInFlightRef.current = false;
+    }
+  }, [bankQuestions, firestore, putYourPointsBankQuestions.length, sheetInput, user]);
+
   useEffect(() => {
     if (!shouldAutoTopUpQuestionBanks || autoSheetImportAttemptedRef.current) return;
     if (!bankQuestions.length || bankQuestions.length > STARTER_QUESTIONS.length) return;
@@ -19126,6 +19842,16 @@ function ProductionApp() {
     shouldAutoTopUpQuestionBanks,
     mostLikelyBankQuestions.length,
     topUpMostLikelyBankFromDedicatedSheet,
+  ]);
+
+  useEffect(() => {
+    if (!shouldAutoTopUpQuestionBanks) return;
+    if (putYourPointsBankQuestions.length >= PUT_YOUR_POINTS_AUTO_SYNC_MIN_COUNT) return;
+    void topUpPutYourPointsBankFromDedicatedSheet();
+  }, [
+    shouldAutoTopUpQuestionBanks,
+    putYourPointsBankQuestions.length,
+    topUpPutYourPointsBankFromDedicatedSheet,
   ]);
 
   useEffect(() => {
@@ -19862,6 +20588,7 @@ function ProductionApp() {
       const isTrueFalseGame = isTrueFalseGameMode(gameMode);
       const isThisOrThatGame = isThisOrThatGameMode(gameMode);
       const isMostLikelyGame = isMostLikelyGameMode(gameMode);
+      const isPutYourPointsGame = isPutYourPointsGameMode(gameMode);
       const requestedCreateCode = normalizeJoinCode(options.createCode ?? lobbyCode);
       const trimmedGameName = normalizeText(options.gameName ?? lobbyGameName);
       const effectiveGameName = trimmedGameName || (
@@ -19875,6 +20602,8 @@ function ProductionApp() {
                 ? 'This or That'
                 : isMostLikelyGame
                   ? 'Most Likely To'
+                  : isPutYourPointsGame
+                    ? 'Put Your Points Where Your Mouth Is'
                   : 'Jay vs Kim'
       );
       console.debug('Create New Game clicked', {
@@ -19931,8 +20660,8 @@ function ProductionApp() {
             throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
             if (actualCount < requestedQuestionCount) {
-              if (isThisOrThatGame || isMostLikelyGame) {
-                console.debug(`${isMostLikelyGame ? 'Most Likely To' : 'This or That'} local game auto-accepting shorter queue`, {
+              if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame) {
+                console.debug(`${isPutYourPointsGame ? 'Put Your Points' : isMostLikelyGame ? 'Most Likely To' : 'This or That'} local game auto-accepting shorter queue`, {
                   requestedQuestionCount,
                   actualCount,
                 });
@@ -20120,8 +20849,8 @@ function ProductionApp() {
             throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
           if (actualCount < requestedQuestionCount) {
-            if (isThisOrThatGame || isMostLikelyGame) {
-              console.debug(`${isMostLikelyGame ? 'Most Likely To' : 'This or That'} live game auto-accepting shorter queue`, {
+            if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame) {
+              console.debug(`${isPutYourPointsGame ? 'Put Your Points' : isMostLikelyGame ? 'Most Likely To' : 'This or That'} live game auto-accepting shorter queue`, {
                 requestedQuestionCount,
                 actualCount,
               });
@@ -21164,7 +21893,7 @@ function ProductionApp() {
   const trueFalseTimeoutRevealRef = useRef('');
   const thisOrThatRevealSettleRef = useRef('');
   const mostLikelyRevealSettleRef = useRef('');
-  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isTrueFalseGame = false, startOpen = false } = {}) => {
+  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isTrueFalseGame = false, isPutYourPointsGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
     const quizRoundKey = sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question';
@@ -21207,6 +21936,7 @@ function ProductionApp() {
       trueFalseTimerSeconds: isTrueFalseGame && startOpen ? TRUE_FALSE_TIMER_SECONDS : 0,
       trueFalseTimerStartedAt: isTrueFalseGame && startOpen ? nowIso : '',
       trueFalseTimerEndsAt: isTrueFalseGame && startOpen ? new Date(now + (TRUE_FALSE_TIMER_SECONDS * 1000)).toISOString() : '',
+      ...(isPutYourPointsGame ? { ...buildPutYourPointsStakeSnapshot(), putYourPointsResults: { jay: '', kim: '' } } : {}),
       createdAt: nowIso,
     };
   };
@@ -21218,6 +21948,9 @@ function ProductionApp() {
   }, []);
   const getMostLikelyPenaltyMap = useCallback((round = null) => {
     return buildAutoScoredRoundPenaltyMap(MOST_LIKELY_GAME_MODE, round || {}, { useStoredPenalties: false });
+  }, []);
+  const getPutYourPointsPenaltyMap = useCallback((round = null) => {
+    return buildAutoScoredRoundPenaltyMap(PUT_YOUR_POINTS_GAME_MODE, round || {}, { useStoredPenalties: false });
   }, []);
 
   const markReady = async (seatToReady = '') =>
@@ -21619,6 +22352,59 @@ function ProductionApp() {
   const lockMostLikelyAnswerField = async (_fieldName = '', value = '') =>
     lockAutoChoiceAnswerField({ fieldName: 'ownAnswer', value, gameMode: MOST_LIKELY_GAME_MODE });
 
+  const setPutYourPointsResult = async (seatToJudge = '', resultValue = '') =>
+    withBusy(async () => {
+      if (!game?.currentRound) throw new Error('No active Put Your Points round.');
+      if (!isPutYourPointsGameMode(game?.gameMode || 'standard')) {
+        throw new Error('Match judging is only available in Put Your Points.');
+      }
+      const targetSeat = seatToJudge === 'kim' ? 'kim' : seatToJudge === 'jay' ? 'jay' : '';
+      if (!targetSeat) throw new Error('Choose Jay or Kim to judge.');
+      const result = normalizePutYourPointsResult(resultValue);
+      if (!result) throw new Error('Choose Match or Miss.');
+      const stake = getPutYourPointsStake(game.currentRound);
+      const penalty = result === 'missed' ? stake : 0;
+      const nowIso = new Date().toISOString();
+      setPenaltyDraft((current) => ({
+        jay: targetSeat === 'jay' ? String(penalty) : current.jay,
+        kim: targetSeat === 'kim' ? String(penalty) : current.kim,
+      }));
+
+      if (isCurrentLocalTestGame) {
+        setGame((current) => (
+          current?.currentRound && isPutYourPointsGameMode(current?.gameMode || 'standard')
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  putYourPointsResults: {
+                    ...(current.currentRound.putYourPointsResults || {}),
+                    [targetSeat]: result,
+                  },
+                  penalties: {
+                    ...(current.currentRound.penalties || {}),
+                    [targetSeat]: penalty,
+                  },
+                  updatedAt: nowIso,
+                },
+                updatedAt: nowIso,
+              }
+            : current
+        ));
+        return true;
+      }
+
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) throw new Error('Room is missing.');
+      await updateDoc(gameRef, {
+        [`currentRound.putYourPointsResults.${targetSeat}`]: result,
+        [`currentRound.penalties.${targetSeat}`]: penalty,
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return true;
+    }, 'Could not save the Put Your Points result.');
+
   const submitAnswer = async (draftOverride = null) => {
     let previousLocalAnswer;
     let optimisticPayload = null;
@@ -21632,9 +22418,14 @@ function ProductionApp() {
         guessedOther: String(game.currentRound.answers?.[currentSeat]?.guessedOther ?? ''),
       };
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
+      const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
       const roundType = normalizeQuestionType(game.currentRound?.roundType, 'text');
       const serialisedOwnAnswer = serialiseAnswerForQuestionType(roundType, draft.ownAnswer);
       const serialisedGuessedOther = isQuizGame ? '' : serialiseAnswerForQuestionType(roundType, draft.guessedOther);
+      if (!normalizeText(serialisedOwnAnswer)) throw new Error('Enter your answer before submitting.');
+      if (isPutYourPointsGame && !normalizeText(serialisedGuessedOther)) {
+        throw new Error('Enter your guess for the other player before submitting.');
+      }
       const submittedAtIso = new Date().toISOString();
       const quizEndsAtMs = Date.parse(game.currentRound?.quizTimerEndsAt || '');
       const nowMs = Date.now();
@@ -21699,7 +22490,10 @@ function ProductionApp() {
               : {}),
           };
         }
-        const bothAnswered = Boolean(nextAnswers.jay?.ownAnswer && nextAnswers.kim?.ownAnswer);
+        const bothAnswered = Boolean(
+          hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', { ...game.currentRound, answers: nextAnswers }, 'jay')
+          && hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', { ...game.currentRound, answers: nextAnswers }, 'kim'),
+        );
         setGame((current) =>
           current?.currentRound
             ? {
@@ -21732,7 +22526,11 @@ function ProductionApp() {
         ...currentAnswers,
         [currentSeat]: payload,
       };
-      const bothAnsweredLocally = Boolean(normalizeText(nextLocalAnswers.jay?.ownAnswer) && normalizeText(nextLocalAnswers.kim?.ownAnswer));
+      const localRoundForCompletion = { ...game.currentRound, answers: nextLocalAnswers };
+      const bothAnsweredLocally = Boolean(
+        hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', localRoundForCompletion, 'jay')
+        && hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', localRoundForCompletion, 'kim'),
+      );
       setGame((current) => {
         if (!current?.currentRound || current.currentRound.id !== game.currentRound.id) return current;
         const nextAnswers = {
@@ -21746,7 +22544,12 @@ function ProductionApp() {
             answers: nextAnswers,
             status: isQuizGame
               ? current.currentRound.status
-              : (nextAnswers.jay?.ownAnswer && nextAnswers.kim?.ownAnswer ? 'reveal' : 'open'),
+              : (
+                  hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', { ...current.currentRound, answers: nextAnswers }, 'jay')
+                  && hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', { ...current.currentRound, answers: nextAnswers }, 'kim')
+                    ? 'reveal'
+                    : 'open'
+                ),
           },
         };
       });
@@ -21845,8 +22648,8 @@ function ProductionApp() {
       || isMostLikelyGame
       || !round
       || round.status !== 'open'
-      || !hasSubmittedRoundAnswer(round, 'jay')
-      || !hasSubmittedRoundAnswer(round, 'kim')
+      || !hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', round, 'jay')
+      || !hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', round, 'kim')
     ) {
       if (standardRevealSettleRef.current === settleKey) standardRevealSettleRef.current = '';
       return undefined;
@@ -21871,7 +22674,9 @@ function ProductionApp() {
     game?.currentRound?.questionId,
     game?.currentRound?.number,
     game?.currentRound?.answers?.jay?.ownAnswer,
+    game?.currentRound?.answers?.jay?.guessedOther,
     game?.currentRound?.answers?.kim?.ownAnswer,
+    game?.currentRound?.answers?.kim?.guessedOther,
   ]);
 
   useEffect(() => {
@@ -22177,6 +22982,8 @@ function ProductionApp() {
         ? thisOrThatBankQuestions
       : sourceBankType === 'mostLikelyGame'
         ? mostLikelySelectableQuestions
+      : sourceBankType === 'putYourPointsGame'
+        ? putYourPointsSelectableQuestions
       : sourceBankType === 'trueFalseGame'
         ? trueFalseBankQuestions
         : gameBankQuestions;
@@ -22186,6 +22993,8 @@ function ProductionApp() {
         ? trackedUsedThisOrThatQuestionIds
       : sourceBankType === 'mostLikelyGame'
         ? trackedUsedMostLikelyQuestionIds
+      : sourceBankType === 'putYourPointsGame'
+        ? trackedUsedPutYourPointsQuestionIds
       : sourceBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
         : effectiveRetiredQuestionIds;
@@ -22204,7 +23013,7 @@ function ProductionApp() {
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
-    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame' || sourceBankType === 'mostLikelyGame'
+    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame' || sourceBankType === 'mostLikelyGame' || sourceBankType === 'putYourPointsGame'
       ? []
       : standardSelectableQuestions.filter(
           (question) =>
@@ -22247,6 +23056,7 @@ function ProductionApp() {
       const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
       const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
       const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
+      const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
       if (
         game.currentRound
         && game.currentRound.status !== 'reveal'
@@ -22256,6 +23066,9 @@ function ProductionApp() {
         )
       ) {
         throw new Error('Both players must submit their answers before loading the next question.');
+      }
+      if (game.currentRound && isPutYourPointsGame && !hasCompletedPutYourPointsJudgement(game.currentRound)) {
+        throw new Error('Mark Match or Miss for both players before loading the next question.');
       }
       if (isCurrentLocalTestGame) {
         const completedRoundsBefore = Math.max(Number(game.roundsPlayed || 0), rounds.length);
@@ -22360,7 +23173,7 @@ function ProductionApp() {
             Number(nextGameState.currentRound?.number || 0) + 1,
             1,
           );
-          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, startOpen: true });
+          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, isPutYourPointsGame, startOpen: true });
           nextGameState = {
             ...nextGameState,
             totals: nextTotals,
@@ -22518,7 +23331,7 @@ function ProductionApp() {
           Number(game.currentRound?.number || 0) + 1,
           1,
         );
-        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, startOpen: true });
+        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isTrueFalseGame, isPutYourPointsGame, startOpen: true });
         const gamePatch = {
           ...(savedCurrentRound
             ? {
@@ -23295,6 +24108,38 @@ function ProductionApp() {
       setNotice('Most Likely To bank synced from Google Sheet.');
     }, 'Could not sync the Most Likely To bank.');
 
+  const importPutYourPointsSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: 'putYourPointsGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = putYourPointsBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new Put Your Points questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. Put Your Points bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice(`Put Your Points import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import Put Your Points questions from the Google Sheet.');
+
+  const syncPutYourPointsSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: true,
+        targetBankType: 'putYourPointsGame',
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = putYourPointsBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Synced Put Your Points bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. Put Your Points bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice('Put Your Points bank synced from Google Sheet.');
+    }, 'Could not sync the Put Your Points bank.');
+
   const importTrueFalseSheet = async () =>
     withBusy(async () => {
       const result = await syncGoogleSheetQuestions({
@@ -23492,11 +24337,13 @@ function ProductionApp() {
         onSyncQuizBank={syncQuizSheet}
         onSyncThisOrThatBank={syncThisOrThatSheet}
         onSyncMostLikelyBank={syncMostLikelySheet}
+        onSyncPutYourPointsBank={syncPutYourPointsSheet}
         onSyncTrueFalseBank={syncTrueFalseSheet}
         onImportQuestions={importSheet}
         onImportQuizQuestions={importQuizSheet}
         onImportThisOrThatQuestions={importThisOrThatSheet}
         onImportMostLikelyQuestions={importMostLikelySheet}
+        onImportPutYourPointsQuestions={importPutYourPointsSheet}
         onImportTrueFalseQuestions={importTrueFalseSheet}
         onResumeGame={resumeGame}
         onViewSummary={setSelectedGameId}
@@ -23524,6 +24371,9 @@ function ProductionApp() {
         mostLikelyQuestionCount={mostLikelyBankCount}
         usedMostLikelyQuestionCount={usedMostLikelyQuestionCount}
         remainingMostLikelyQuestionCount={remainingMostLikelyQuestionCount}
+        putYourPointsQuestionCount={putYourPointsBankCount}
+        usedPutYourPointsQuestionCount={usedPutYourPointsQuestionCount}
+        remainingPutYourPointsQuestionCount={remainingPutYourPointsQuestionCount}
         trueFalseQuestionCount={trueFalseBankCount}
         usedTrueFalseQuestionCount={usedTrueFalseQuestionCount}
         remainingTrueFalseQuestionCount={remainingTrueFalseQuestionCount}
@@ -23604,6 +24454,7 @@ function ProductionApp() {
       onLockTrueFalseAnswer={lockTrueFalseAnswerField}
       onLockThisOrThatAnswer={lockThisOrThatAnswerField}
       onLockMostLikelyAnswer={lockMostLikelyAnswerField}
+      onSetPutYourPointsResult={setPutYourPointsResult}
 	      onMarkReady={markReady}
 	      onAddQuestion={addQuestion}
       onSyncSheet={syncSheet}

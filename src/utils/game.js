@@ -599,6 +599,16 @@ export const normalizeQuestionBankType = (value = 'game') => {
   ) {
     return 'mostLikelyGame';
   }
+  if (
+    normalized === 'putyourpointsgame'
+    || normalized === 'putyourpoints'
+    || normalized === 'putyourpointswhereyourmouthis'
+    || normalized === 'putyourmoneywhereyourmouthis'
+    || normalized === 'pointswhereyourmouthis'
+    || normalized === 'moneywhereyourmouthis'
+  ) {
+    return 'putYourPointsGame';
+  }
   return 'game';
 };
 
@@ -902,6 +912,15 @@ export const createRoundResult = (input, nextNumber = 1, priorTotals = emptyTota
       jay: toScore(input.quizPoints?.jay ?? input.pointsAwarded?.jay ?? 0),
       kim: toScore(input.quizPoints?.kim ?? input.pointsAwarded?.kim ?? 0),
     },
+    putYourPointsStake: toScore(input.putYourPointsStake ?? input.roundStake ?? 0),
+    putYourPointsStakeSequence: Array.isArray(input.putYourPointsStakeSequence)
+      ? input.putYourPointsStakeSequence.map((value) => toScore(value)).filter((value) => value > 0)
+      : [],
+    putYourPointsResults: {
+      jay: normalizeText(input.putYourPointsResults?.jay),
+      kim: normalizeText(input.putYourPointsResults?.kim),
+    },
+    putYourPointsStakeGeneratedAt: normalizeText(input.putYourPointsStakeGeneratedAt),
     manualScores: Boolean(input.manualScores),
     scoringMode: normalizeScoringMode(input.scoringMode, roundType),
     scoringOutcomeType: normalizeScoringOutcomeType(input.scoringOutcomeType, roundType),

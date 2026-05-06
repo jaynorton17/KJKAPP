@@ -564,6 +564,10 @@ button:disabled {
   --lobby-tile-position: center 18%;
 }
 
+.lobby-image-tile--put-points {
+  --lobby-tile-position: center 18%;
+}
+
 .lobby-image-tile--holdem {
   --lobby-tile-position: center 20%;
 }
@@ -12292,6 +12296,96 @@ select:focus-visible {
 
 .quick-desk-fields {
   gap: 8px;
+}
+
+.put-points-stake-ticker {
+  justify-self: center;
+  display: inline-grid;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.put-points-stake-ticker span {
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.put-points-stake-ticker strong {
+  color: #fff;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 1.08rem;
+  line-height: 1;
+}
+
+.put-points-host-desk {
+  gap: 12px;
+}
+
+.put-points-judgement-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.put-points-judgement-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.put-points-judgement-card > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.put-points-judgement-card strong,
+.put-points-judgement-card span {
+  overflow-wrap: anywhere;
+}
+
+.put-points-judgement-card span {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.put-points-result-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.put-points-result-buttons .ghost-button.is-on,
+.put-points-inline-host-actions .ghost-button.is-on {
+  border-color: rgba(70, 240, 138, 0.5);
+  background: rgba(70, 240, 138, 0.14);
+  color: #d7ffe7;
+}
+
+.put-points-inline-host-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  width: min(100%, 340px);
+}
+
+.put-points-inline-host-actions .ghost-button {
+  min-width: 0;
+  white-space: normal;
 }
 
 .quick-score-fields,
