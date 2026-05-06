@@ -10358,7 +10358,7 @@ function RoomActiveFrameBase({
       ? 'Both guessed correctly'
       : thisOrThatOutcome.jayMissingResponse || thisOrThatOutcome.kimMissingResponse
         ? 'Missed answers triggered penalties'
-        : 'Automatic penalties applied';
+        : 'Penalties applied';
   const mostLikelySummaryLabel = !mostLikelyOutcome
     ? ''
     : mostLikelyOutcome.agreed
