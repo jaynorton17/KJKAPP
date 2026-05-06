@@ -4078,6 +4078,40 @@ const upsertQuestionBankBatch = async (db, questions) => {
   }
 };
 
+const replaceQuestionBankSegmentBatch = async (db, targetBankType = 'game', existingQuestions = [], replacementQuestions = []) => {
+  if (!db) return { replaced: 0, removed: 0 };
+  const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+  const replacements = dedupeQuestionsById(
+    replacementQuestions.filter((question) =>
+      question?.id && normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType,
+    ),
+  );
+  const replacementIds = new Set(replacements.map((question) => question.id));
+  const staleQuestions = existingQuestions.filter((question) =>
+    question?.id
+    && normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType
+    && !replacementIds.has(question.id),
+  );
+
+  for (const chunk of chunkArray(replacements, 400)) {
+    const batch = writeBatch(db);
+    chunk.forEach((question) => {
+      batch.set(doc(db, 'questionBank', question.id), question, { merge: true });
+    });
+    await batch.commit();
+  }
+
+  for (const chunk of chunkArray(staleQuestions, 400)) {
+    const batch = writeBatch(db);
+    chunk.forEach((question) => {
+      batch.delete(doc(db, 'questionBank', question.id));
+    });
+    await batch.commit();
+  }
+
+  return { replaced: replacements.length, removed: staleQuestions.length };
+};
+
 function Button({ children, className = 'ghost-button compact', ...props }) {
   return (
     <button type="button" className={className} {...props}>
@@ -19589,6 +19623,7 @@ function ProductionApp() {
     );
     const importedQuestions = [];
     const updatedQuestions = [];
+    const previewRows = [];
     let importedTotal = 0;
     let updatedTotal = 0;
     let duplicatedTotal = 0;
@@ -19647,6 +19682,7 @@ function ProductionApp() {
               sourceLabel: `${reference.id}:${target.sheetName || target.gid || 'Questions'}`,
             });
 
+      previewRows.push(...(parsedResult.preview || []));
       importedQuestions.push(...parsedResult.imports);
       updatedQuestions.push(...parsedResult.updates);
       importedTotal += parsedResult.summary.imported;
@@ -19659,6 +19695,7 @@ function ProductionApp() {
 
     return {
       reference,
+      preview: previewRows,
       imports: importedQuestions,
       updates: updatedQuestions,
       summary: {
@@ -19669,6 +19706,21 @@ function ProductionApp() {
         skipped: skippedTotal,
       },
     };
+  };
+
+  const getSheetReplacementQuestions = (result, targetBankType = 'game') => {
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    const replacementStatuses = new Set(['import', 'update', 'skipped']);
+    return dedupeQuestionsById(
+      (result?.preview || [])
+        .filter((row) =>
+          replacementStatuses.has(row?.status)
+          && !row?.errors?.length
+          && row?.question?.id
+          && normalizeQuestionBankType(row.question.bankType) === normalizedTargetBankType,
+        )
+        .map((row) => row.question),
+    );
   };
 
   const buildActiveGameProfilePatch = (nextGameId = '') => ({
@@ -24196,36 +24248,43 @@ function ProductionApp() {
       setNotice('Put Your Points bank synced from Google Sheet.');
     }, 'Could not sync the Put Your Points bank.');
 
+  const replaceTrueFalseBankFromSheet = async (actionLabel = 'Synced') => {
+    const result = await syncGoogleSheetQuestions({
+      sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+      existingQuestions: bankQuestions,
+      overwriteExisting: true,
+      targetBankType: 'trueFalseGame',
+    });
+    const replacementQuestions = getSheetReplacementQuestions(result, 'trueFalseGame');
+    if (!replacementQuestions.length) {
+      throw new Error('The True or False sheet did not contain any active valid questions.');
+    }
+    const replaceResult = await replaceQuestionBankSegmentBatch(
+      firestore,
+      'trueFalseGame',
+      bankQuestions,
+      replacementQuestions,
+    );
+    setBankQuestions((current) =>
+      mergeQuestionBankRecords(
+        current.filter((question) => normalizeQuestionBankType(question?.bankType) !== 'trueFalseGame'),
+        replacementQuestions,
+      ),
+    );
+    setSyncNotice(
+      `${actionLabel} True or False bank from Google Sheet: ${replaceResult.replaced} active questions kept, ${replaceResult.removed} old questions removed, ${result.summary.invalid} invalid, ${result.summary.duplicates} duplicate rows.`,
+    );
+    setNotice(`${actionLabel} True or False bank from Google Sheet. Removed ${replaceResult.removed} old questions.`);
+  };
+
   const importTrueFalseSheet = async () =>
     withBusy(async () => {
-      const result = await syncGoogleSheetQuestions({
-        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
-        existingQuestions: bankQuestions,
-        overwriteExisting: false,
-        targetBankType: 'trueFalseGame',
-      });
-      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
-      const nextBankCount = trueFalseBankQuestions.length + result.summary.imported;
-      setSyncNotice(
-        `Imported ${result.summary.imported} new True or False questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. True or False bank now tracks about ${nextBankCount} questions.`,
-      );
-      setNotice(`True or False import complete: ${result.summary.imported} new questions added.`);
+      await replaceTrueFalseBankFromSheet('Imported');
     }, 'Could not import True or False questions from the Google Sheet.');
 
   const syncTrueFalseSheet = async () =>
     withBusy(async () => {
-      const result = await syncGoogleSheetQuestions({
-        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
-        existingQuestions: bankQuestions,
-        overwriteExisting: true,
-        targetBankType: 'trueFalseGame',
-      });
-      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
-      const nextBankCount = trueFalseBankQuestions.length + result.summary.imported;
-      setSyncNotice(
-        `Synced True or False bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. True or False bank now tracks about ${nextBankCount} questions.`,
-      );
-      setNotice('True or False bank synced from Google Sheet.');
+      await replaceTrueFalseBankFromSheet('Synced');
     }, 'Could not sync the True or False bank.');
 
   if (authLoading) {
