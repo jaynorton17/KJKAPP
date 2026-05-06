@@ -21259,8 +21259,8 @@ function ProductionApp() {
       setNotice(shouldApprove ? 'Override approved.' : 'Override rejected.');
     }, 'Could not respond to override.');
 
-  const setQuizAnswerResult = async (seatToJudge = '', resultValue = '') =>
-    withBusy(async () => {
+  const setQuizAnswerResult = async (seatToJudge = '', resultValue = '') => {
+    try {
       if (!game?.currentRound) throw new Error('No active quiz round.');
       if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('Quiz judging is only available in Quick Fire Quiz.');
       const targetSeat = seatToJudge === 'kim' ? 'kim' : seatToJudge === 'jay' ? 'jay' : '';
@@ -21287,6 +21287,8 @@ function ProductionApp() {
         answerTimeMs: QUIZ_TIMER_SECONDS * 1000,
         timerValue: 0,
         speedPointsAvailable: 0,
+        originalSystemWasCorrect: false,
+        originalSystemResult: 'incorrect',
         timedOut: true,
       };
       const nextAnswerPatch = {
@@ -21336,14 +21338,20 @@ function ProductionApp() {
       const gameRef = makeGameRef();
       if (!gameRef || !firestore) throw new Error('Room is missing.');
       applyLocalQuizResult();
-      await updateDoc(gameRef, {
-        [`currentRound.answers.${targetSeat}`]: {
-          ...nextAnswerPayload,
-          hostJudgedAt: serverTimestamp(),
+      await runTransaction(firestore, async (transaction) => {
+        const latestSnapshot = await transaction.get(gameRef);
+        if (!latestSnapshot.exists()) throw new Error('Room is missing.');
+        const latestGame = latestSnapshot.data() || {};
+        if (stableRoundIdentityKey(latestGame.currentRound || {}) !== roundKeyAtStart) return;
+        transaction.update(gameRef, {
+          [`currentRound.answers.${targetSeat}`]: {
+            ...nextAnswerPayload,
+            hostJudgedAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          'currentRound.updatedAt': serverTimestamp(),
           updatedAt: serverTimestamp(),
-        },
-        'currentRound.updatedAt': serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        });
       });
 
       const roundQuestionId = normalizeText(game.currentRound?.questionId || '') || sanitizeNoteKey(game.currentRound?.question || '');
@@ -21381,7 +21389,21 @@ function ProductionApp() {
         });
       }
       return true;
-    }, 'Could not save the quiz result.');
+    } catch (error) {
+      const message = String(error?.message || 'Could not save the quiz result.');
+      if (isLocalStorageQuotaError(error)) {
+        console.warn('Suppressed storage quota warning from quiz judgement.', error);
+        return null;
+      }
+      if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('setQuizAnswerResult');
+        setNotice('Firebase is rate-limiting quiz judging right now. Wait a moment and try again.');
+        return null;
+      }
+      setNotice(message);
+      return null;
+    }
+  };
 
   const createGame = async (options = {}) =>
     withBusy(async () => {
