@@ -3832,7 +3832,14 @@ const getLifetimeRollbackForGame = (game = {}) => {
       kim: -Number(game?.holdemStats?.netMovementKim || 0),
     };
   }
-  if (!game?.lifetimePointsApplied) {
+  const hasAppliedLifetimePoints =
+    Boolean(game?.lifetimePointsApplied)
+    || (
+      isMostLikelyGameMode(gameMode)
+      && COMPLETED_GAME_STATUSES.includes(game?.status || '')
+      && (Number(game?.finalScores?.jay ?? game?.totals?.jay ?? 0) !== 0 || Number(game?.finalScores?.kim ?? game?.totals?.kim ?? 0) !== 0)
+    );
+  if (!hasAppliedLifetimePoints) {
     return { jay: 0, kim: 0 };
   }
   if (gameMode === 'quiz') {
@@ -18908,14 +18915,38 @@ function ProductionApp() {
   const deleteGameById = async (targetGameId) => {
     if (!firestore || !targetGameId) return;
     const gameRef = doc(firestore, 'games', targetGameId);
+    const snapshot = await getDoc(gameRef);
     const cachedGameDoc =
       (game?.id === targetGameId ? game : null)
       || gameLibrary.find((entry) => entry?.id === targetGameId)
       || localArchivedGames.find((entry) => entry?.id === targetGameId)
       || null;
-    const snapshot = cachedGameDoc ? null : await getDoc(gameRef);
     if (!cachedGameDoc && !snapshot?.exists()) return;
-    const gameDoc = cachedGameDoc || { id: snapshot.id, ...snapshot.data() };
+    const storedGameDoc = snapshot?.exists() ? { id: snapshot.id, ...snapshot.data() } : null;
+    const gameDocBase = {
+      ...(cachedGameDoc || {}),
+      ...(storedGameDoc || {}),
+      id: targetGameId,
+    };
+    let deletedRounds = normalizeStoredRounds(gameDocBase.rounds || []);
+    if (snapshot?.exists() && !deletedRounds.length && !isHoldemGameMode(gameDocBase?.gameMode || 'standard')) {
+      const roundsSnap = await getDocs(query(collection(gameRef, 'rounds'), orderBy('number', 'asc'))).catch(() => null);
+      deletedRounds = normalizeStoredRounds(roundsSnap?.docs?.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() })) || []);
+    }
+    const gameDoc = {
+      ...gameDocBase,
+      rounds: deletedRounds.length ? deletedRounds : gameDocBase.rounds || [],
+      usedQuestionIds: mergeUniqueIds(
+        gameDocBase.usedQuestionIds || [],
+        deletedRounds.map((round) => round.questionId),
+        gameDocBase.currentRound?.questionId ? [gameDocBase.currentRound.questionId] : [],
+      ),
+      retiredQuestionIds: mergeUniqueIds(
+        gameDocBase.retiredQuestionIds || [],
+        gameDocBase.questionQueueIds || [],
+        gameDocBase.currentRound?.questionId ? [gameDocBase.currentRound.questionId] : [],
+      ),
+    };
     const pairId = gameDoc.pairId || buildPairKey();
     const rollback = getLifetimeRollbackForGame(gameDoc);
     const shouldRollbackLifetimePoints = Number(rollback.jay || 0) !== 0 || Number(rollback.kim || 0) !== 0;
@@ -18940,9 +18971,28 @@ function ProductionApp() {
     const deletedQuestionRestoreIds = deletedRetiredQuestionIds.filter(
       (questionId) => questionId && !remainingPairPlayedQuestionIds.includes(questionId),
     );
+    const currentPairPlayedQuestionIds = mergeUniqueIds(pairHistory?.playedQuestionIds || []);
+    const nextPairPlayedQuestionIds = mergeUniqueIds(
+      ...remainingGames.map((entry) => getRetiredQuestionIdsForGame(entry)),
+      ...currentPairPlayedQuestionIds.filter((questionId) => !deletedQuestionRestoreIds.includes(questionId)),
+    );
     const questionsToRestoreById = new Map(bankQuestions.filter((question) => deletedQuestionRestoreIds.includes(question.id)).map((question) => [question.id, question]));
-    const currentJayBalance = Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0);
-    const currentKimBalance = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
+    const [jayBalanceSnap, kimBalanceSnap] = shouldRollbackLifetimePoints
+      ? await Promise.all([
+          getDoc(doc(firestore, 'users', fixedPlayerUids.jay)).catch(() => null),
+          getDoc(doc(firestore, 'users', fixedPlayerUids.kim)).catch(() => null),
+        ])
+      : [null, null];
+    const currentJayBalance = Number(
+      jayBalanceSnap?.exists?.()
+        ? jayBalanceSnap.data()?.lifetimePenaltyPoints || 0
+        : playerAccounts?.jay?.lifetimePenaltyPoints || 0,
+    );
+    const currentKimBalance = Number(
+      kimBalanceSnap?.exists?.()
+        ? kimBalanceSnap.data()?.lifetimePenaltyPoints || 0
+        : playerAccounts?.kim?.lifetimePenaltyPoints || 0,
+    );
     const nextJayBalance = Math.max(0, currentJayBalance + Number(rollback.jay || 0));
     const nextKimBalance = Math.max(0, currentKimBalance + Number(rollback.kim || 0));
     await deleteDoc(gameRef);
@@ -18971,7 +19021,7 @@ function ProductionApp() {
     cleanupBatch.set(doc(firestore, 'playerPairs', pairId), {
       pairId,
       playerUids: [fixedPlayerUids.jay, fixedPlayerUids.kim],
-      playedQuestionIds: remainingPairPlayedQuestionIds,
+      playedQuestionIds: nextPairPlayedQuestionIds,
       completedGameIds: remainingCompletedGameIds,
       updatedAt: serverTimestamp(),
       stats: {
