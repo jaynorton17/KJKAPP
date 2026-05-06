@@ -3595,6 +3595,9 @@ const normalizePutYourPointsResult = (value = '') => {
   return '';
 };
 const hasSubmittedRoundAnswer = (round = {}, seat = '') => Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''));
+const hasSubmittedOrJudgedQuizRoundAnswer = (round = {}, seat = '') =>
+  Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''))
+  || Boolean(getQuizAnswerFinalResult(round?.answers?.[seat] || {}, { includeSystemFallback: false }));
 const hasCompletedTrueFalseRoundAnswer = (round = {}, seat = '') =>
   Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.ownAnswer || ''))
   && Boolean(normalizeTrueFalseChoice(round?.answers?.[seat]?.guessedOther || ''));
@@ -3610,7 +3613,9 @@ const hasCompletedPutYourPointsJudgement = (round = {}) =>
   Boolean(normalizePutYourPointsResult(round?.putYourPointsResults?.jay))
   && Boolean(normalizePutYourPointsResult(round?.putYourPointsResults?.kim));
 const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat = '') =>
-  isTrueFalseGameMode(gameMode)
+  isQuizGameMode(gameMode)
+    ? hasSubmittedOrJudgedQuizRoundAnswer(round, seat)
+    : isTrueFalseGameMode(gameMode)
     ? hasCompletedTrueFalseRoundAnswer(round, seat)
     : isThisOrThatGameMode(gameMode)
       ? hasCompletedThisOrThatRoundAnswer(round, seat)
