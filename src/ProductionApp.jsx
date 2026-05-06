@@ -125,8 +125,8 @@ const TRUE_FALSE_UNANSWERED_PENALTY = 10;
 const TRUE_FALSE_TIMER_SECONDS = 8;
 const THIS_OR_THAT_WRONG_PENALTY = 10;
 const THIS_OR_THAT_UNANSWERED_PENALTY = 10;
-const MOST_LIKELY_DISAGREE_PENALTY = 5;
-const MOST_LIKELY_UNANSWERED_PENALTY = 10;
+const MOST_LIKELY_DISAGREE_PENALTY = 10;
+const MOST_LIKELY_UNANSWERED_PENALTY = 20;
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
 const MOST_LIKELY_AUTO_SYNC_MIN_COUNT = 20;
@@ -5877,7 +5877,7 @@ function LobbyScreen({
                             </div>
                             <span className="status-pill">{mostLikelyReadyCount} ready</span>
                           </div>
-                          <p className="panel-copy">Each player locks one vote: Jay, Kim, Both, or Neither. Matching votes add 0. Split votes add +5 to both players automatically.</p>
+                          <p className="panel-copy">Each player locks one vote: Jay, Kim, Both, or Neither. Matching votes add 0. Split votes add +10 to both players automatically.</p>
                           <label className="field">
                             <span>Most Likely To Code</span>
                             <input
@@ -5897,7 +5897,7 @@ function LobbyScreen({
                               placeholder="10"
                             />
                           </label>
-                          <p className="field-note">The first vote locks immediately. Missing a vote adds +10.</p>
+                          <p className="field-note">The first vote locks immediately. Missing a vote adds +20.</p>
                           <div className="button-row">
                             <Button
                               className="primary-button compact"
@@ -8505,7 +8505,7 @@ function MostLikelyLiveStatus({ revealIsReady }) {
         </article>
         <article className="quiz-status-card">
           <span>Scoring</span>
-          <strong>0 / +5</strong>
+          <strong>0 / +10</strong>
         </article>
       </div>
       <p className="field-note true-false-answer-note">
