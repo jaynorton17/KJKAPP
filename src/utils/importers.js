@@ -126,6 +126,7 @@ const isPutYourPointsOrderingPrompt = (questionText = '') =>
 const inferPutYourPointsQuestionType = (questionText = '', fallbackType = 'text', options = [], typeText = '') => {
   const normalizedQuestion = normalizeText(questionText);
   if (!normalizedQuestion) return fallbackType;
+  if (fallbackType === 'sortIntoOrder') return 'sortIntoOrder';
   if (/\btrue\s+or\s+false\b|\btrue\/false\b/i.test(normalizedQuestion)) return 'trueFalse';
   if (isPutYourPointsPlayerChoicePrompt(normalizedQuestion, typeText)) return 'multipleChoice';
   if (/\b(would\s+you\s+rather|which\s+would\s+you\s+choose|do\s+you\s+prefer|prefer|this\s+or\s+that|either\s+or)\b/i.test(normalizedQuestion)) {
