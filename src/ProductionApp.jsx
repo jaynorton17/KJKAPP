@@ -138,6 +138,55 @@ const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
 const MOST_LIKELY_AUTO_SYNC_MIN_COUNT = 20;
 const PUT_YOUR_POINTS_AUTO_SYNC_MIN_COUNT = 20;
 const QUESTION_BANK_LOW_AVAILABLE_THRESHOLD = 50;
+const QUESTION_BANK_SYNC_TARGETS = [
+  {
+    bankType: 'game',
+    gameName: 'Normal Game',
+    label: 'Question Bank',
+    importLabel: 'New Questions',
+    sheetName: 'Questions',
+  },
+  {
+    bankType: 'quiz',
+    gameName: 'Quick Fire Quiz',
+    label: 'Quiz Question Bank',
+    importLabel: 'Quiz Questions',
+    sheetName: 'Quiz',
+  },
+  {
+    bankType: THIS_OR_THAT_GAME_MODE,
+    gameName: 'This or That',
+    label: 'This or That Bank',
+    importLabel: 'This or That Questions',
+    sheetName: 'This or That',
+  },
+  {
+    bankType: MOST_LIKELY_GAME_MODE,
+    gameName: 'Most Likely To',
+    label: 'Most Likely To Bank',
+    importLabel: 'Most Likely To Questions',
+    sheetName: 'Most Likely To',
+  },
+  {
+    bankType: PUT_YOUR_POINTS_GAME_MODE,
+    gameName: 'Put Your Money Where Your Mouth Is',
+    label: 'Put Your Money Where Your Mouth Is Bank',
+    importLabel: 'Put Your Money Questions',
+    sheetName: 'Put Your Money Where Your Mouth Is',
+  },
+  {
+    bankType: TRUE_FALSE_GAME_MODE,
+    gameName: 'True or False',
+    label: 'True or False Bank',
+    importLabel: 'True or False Questions',
+    sheetName: 'True or False',
+  },
+];
+const getQuestionBankSyncTarget = (targetBankType = 'game') => {
+  const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+  return QUESTION_BANK_SYNC_TARGETS.find((target) => normalizeQuestionBankType(target.bankType) === normalizedTargetBankType)
+    || QUESTION_BANK_SYNC_TARGETS[0];
+};
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const MOST_LIKELY_STARTER_QUESTIONS = [
   'Who is most likely to turn a tiny plan into a full adventure?',
@@ -3268,8 +3317,41 @@ const normalizeStoredQuestion = (raw = {}, fallbackId = '') => {
     lastPlayedAt: isValidDateString(raw?.lastPlayedAt) ? raw.lastPlayedAt : hydrated.lastPlayedAt,
     createdAt: isValidDateString(raw?.createdAt) ? raw.createdAt : hydrated.createdAt,
     updatedAt: raw?.updatedAt || hydrated.updatedAt,
+    activeInQuestionBank: raw?.activeInQuestionBank !== false,
+    retiredFromSheet: Boolean(raw?.retiredFromSheet),
+    retiredFromSheetAt: isValidDateString(raw?.retiredFromSheetAt) ? raw.retiredFromSheetAt : null,
+    retiredReason: normalizeText(raw?.retiredReason || ''),
   };
 };
+
+const isQuestionRetiredFromSheet = (question = {}) =>
+  Boolean(question?.retiredFromSheet) || question?.activeInQuestionBank === false;
+
+const isQuestionActiveInBank = (question = {}) => !isQuestionRetiredFromSheet(question);
+
+const isQuestionUsedInHistory = (question = {}, usedQuestionIds = new Set()) =>
+  Boolean(question?.used)
+  || Number(question?.timesPlayed || 0) > 0
+  || usedQuestionIds.has(question?.id);
+
+const activateQuestionBankRecord = (question = {}) => ({
+  ...question,
+  activeInQuestionBank: true,
+  retiredFromSheet: false,
+  retiredFromSheetAt: null,
+  retiredReason: '',
+});
+
+const retireQuestionBankRecordFromSheet = (question = {}, retiredAt = new Date().toISOString()) => ({
+  ...question,
+  activeInQuestionBank: false,
+  retiredFromSheet: true,
+  retiredFromSheetAt: retiredAt,
+  retiredReason: 'removed-from-sheet',
+  used: true,
+  timesPlayed: Math.max(1, Number(question?.timesPlayed || 0)),
+  updatedAt: retiredAt,
+});
 
 const dedupeQuestionsById = (questions = []) => {
   const seen = new Set();
@@ -4078,19 +4160,69 @@ const upsertQuestionBankBatch = async (db, questions) => {
   }
 };
 
-const replaceQuestionBankSegmentBatch = async (db, targetBankType = 'game', existingQuestions = [], replacementQuestions = []) => {
-  if (!db) return { replaced: 0, removed: 0 };
+const buildQuestionBankSegmentReplacement = (
+  targetBankType = 'game',
+  existingQuestions = [],
+  replacementQuestions = [],
+  usedQuestionIds = new Set(),
+) => {
   const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
   const replacements = dedupeQuestionsById(
     replacementQuestions.filter((question) =>
       question?.id && normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType,
     ),
-  );
+  ).map(activateQuestionBankRecord);
   const replacementIds = new Set(replacements.map((question) => question.id));
   const staleQuestions = existingQuestions.filter((question) =>
     question?.id
     && normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType
     && !replacementIds.has(question.id),
+  );
+  const retiredQuestions = staleQuestions
+    .filter((question) => isQuestionUsedInHistory(question, usedQuestionIds))
+    .map((question) => retireQuestionBankRecordFromSheet(question));
+  const deletedQuestions = staleQuestions.filter((question) => !isQuestionUsedInHistory(question, usedQuestionIds));
+
+  return {
+    replacements,
+    retiredQuestions,
+    deletedQuestions,
+  };
+};
+
+const applyQuestionBankSegmentReplacement = (
+  currentQuestions = [],
+  targetBankType = 'game',
+  replacementQuestions = [],
+  usedQuestionIds = new Set(),
+) => {
+  const { replacements, retiredQuestions, deletedQuestions } = buildQuestionBankSegmentReplacement(
+    targetBankType,
+    currentQuestions,
+    replacementQuestions,
+    usedQuestionIds,
+  );
+  const deletedIds = new Set(deletedQuestions.map((question) => question.id));
+  return mergeQuestionBankRecords(
+    currentQuestions.filter((question) => !deletedIds.has(question?.id)),
+    replacements,
+    retiredQuestions,
+  );
+};
+
+const replaceQuestionBankSegmentBatch = async (
+  db,
+  targetBankType = 'game',
+  existingQuestions = [],
+  replacementQuestions = [],
+  usedQuestionIds = new Set(),
+) => {
+  if (!db) return { replaced: 0, removed: 0, retired: 0 };
+  const { replacements, retiredQuestions, deletedQuestions } = buildQuestionBankSegmentReplacement(
+    targetBankType,
+    existingQuestions,
+    replacementQuestions,
+    usedQuestionIds,
   );
 
   for (const chunk of chunkArray(replacements, 400)) {
@@ -4101,7 +4233,15 @@ const replaceQuestionBankSegmentBatch = async (db, targetBankType = 'game', exis
     await batch.commit();
   }
 
-  for (const chunk of chunkArray(staleQuestions, 400)) {
+  for (const chunk of chunkArray(retiredQuestions, 400)) {
+    const batch = writeBatch(db);
+    chunk.forEach((question) => {
+      batch.set(doc(db, 'questionBank', question.id), question, { merge: true });
+    });
+    await batch.commit();
+  }
+
+  for (const chunk of chunkArray(deletedQuestions, 400)) {
     const batch = writeBatch(db);
     chunk.forEach((question) => {
       batch.delete(doc(db, 'questionBank', question.id));
@@ -4109,7 +4249,7 @@ const replaceQuestionBankSegmentBatch = async (db, targetBankType = 'game', exis
     await batch.commit();
   }
 
-  return { replaced: replacements.length, removed: staleQuestions.length };
+  return { replaced: replacements.length, removed: deletedQuestions.length, retired: retiredQuestions.length };
 };
 
 function Button({ children, className = 'ghost-button compact', ...props }) {
@@ -4564,6 +4704,7 @@ function LobbyScreen({
   onSyncMostLikelyBank,
   onSyncPutYourPointsBank,
   onSyncTrueFalseBank,
+  onSyncAllQuestionBanks,
   onImportQuestions,
   onImportQuizQuestions,
   onImportThisOrThatQuestions,
@@ -5529,6 +5670,18 @@ function LobbyScreen({
     : questionBankSegment === 'trueFalse'
       ? remainingTrueFalseQuestionCount
       : remainingQuestionCount;
+  const questionBankSegmentBankType = questionBankSegment === 'quiz'
+    ? 'quiz'
+    : questionBankSegment === 'thisOrThat'
+      ? THIS_OR_THAT_GAME_MODE
+    : questionBankSegment === 'mostLikely'
+      ? MOST_LIKELY_GAME_MODE
+    : questionBankSegment === 'putYourPoints'
+      ? PUT_YOUR_POINTS_GAME_MODE
+    : questionBankSegment === 'trueFalse'
+      ? TRUE_FALSE_GAME_MODE
+      : 'game';
+  const questionBankTarget = getQuestionBankSyncTarget(questionBankSegmentBankType);
   const questionBankSyncAction = questionBankSegment === 'quiz'
     ? onSyncQuizBank
     : questionBankSegment === 'thisOrThat'
@@ -5551,17 +5704,8 @@ function LobbyScreen({
     : questionBankSegment === 'trueFalse'
       ? onImportTrueFalseQuestions
       : onImportQuestions;
-  const questionBankActionLabel = questionBankSegment === 'quiz'
-    ? 'Quiz Question Bank'
-    : questionBankSegment === 'thisOrThat'
-      ? 'This or That Bank'
-    : questionBankSegment === 'mostLikely'
-      ? 'Most Likely To Bank'
-    : questionBankSegment === 'putYourPoints'
-      ? 'Put Your Points Bank'
-    : questionBankSegment === 'trueFalse'
-      ? 'True or False Bank'
-      : 'Question Bank';
+  const questionBankActionLabel = questionBankTarget.label;
+  const questionBankImportLabel = questionBankTarget.importLabel;
 
   useEffect(() => {
     setProfileNameDraft(normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
@@ -6607,6 +6751,26 @@ function LobbyScreen({
                 </div>
                 <span className="status-pill">{questionBankLoadedCount} loaded</span>
               </div>
+
+              <div className="question-bank-master-control">
+                <div>
+                  <p className="eyebrow">Master Bank</p>
+                  <h3>Sync All Games</h3>
+                </div>
+                <Button className="primary-button compact" onClick={onSyncAllQuestionBanks} disabled={isBusy}>
+                  Sync All Games
+                </Button>
+              </div>
+
+              <div className="question-bank-sheet-grid" aria-label="Question bank sheet routing">
+                {QUESTION_BANK_SYNC_TARGETS.map((target) => (
+                  <article className="question-bank-sheet-row" key={target.bankType}>
+                    <strong>{target.gameName}</strong>
+                    <span>{target.sheetName}</span>
+                  </article>
+                ))}
+              </div>
+
               <div className="dashboard-subnav" role="tablist" aria-label="Question bank tabs">
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'game' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('game')}>
                   Game Questions
@@ -6656,17 +6820,7 @@ function LobbyScreen({
                   {`Sync ${questionBankActionLabel}`}
                 </Button>
                 <Button className="primary-button compact" onClick={questionBankImportAction} disabled={isBusy}>
-                  {`Import ${
-                    questionBankSegment === 'trueFalse'
-                      ? 'True or False Questions'
-                      : questionBankSegment === 'thisOrThat'
-                        ? 'This or That Questions'
-                      : questionBankSegment === 'mostLikely'
-                        ? 'Most Likely To Questions'
-                      : questionBankSegment === 'putYourPoints'
-                        ? 'Put Your Points Questions'
-                        : 'New Questions'
-                  }`}
+                  {`Import ${questionBankImportLabel}`}
                 </Button>
                 <Button className="ghost-button compact" onClick={onResetQuestionBank} disabled={isBusy}>
                   Re-enter All Questions
@@ -16456,29 +16610,53 @@ function ProductionApp() {
         .flatMap((entry) => entry.rounds || []),
     [enrichedGameLibrary],
   );
-  const gameBankQuestions = useMemo(
+  const gameBankRecords = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'game'),
     [bankQuestions],
   );
-  const quizBankQuestions = useMemo(
+  const quizBankRecords = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'quiz'),
     [bankQuestions],
   );
-  const thisOrThatBankQuestions = useMemo(
+  const thisOrThatBankRecords = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'thisOrThatGame'),
     [bankQuestions],
   );
-  const mostLikelyBankQuestions = useMemo(
+  const mostLikelyBankRecords = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'mostLikelyGame'),
     [bankQuestions],
   );
-  const putYourPointsBankQuestions = useMemo(
+  const putYourPointsBankRecords = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'putYourPointsGame'),
     [bankQuestions],
   );
-  const trueFalseBankQuestions = useMemo(
+  const trueFalseBankRecords = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
     [bankQuestions],
+  );
+  const gameBankQuestions = useMemo(
+    () => gameBankRecords.filter(isQuestionActiveInBank),
+    [gameBankRecords],
+  );
+  const quizBankQuestions = useMemo(
+    () => quizBankRecords.filter(isQuestionActiveInBank),
+    [quizBankRecords],
+  );
+  const thisOrThatBankQuestions = useMemo(
+    () => thisOrThatBankRecords.filter(isQuestionActiveInBank),
+    [thisOrThatBankRecords],
+  );
+  const mostLikelyBankQuestions = useMemo(
+    () => mostLikelyBankRecords.filter(isQuestionActiveInBank),
+    [mostLikelyBankRecords],
+  );
+  const putYourPointsBankQuestions = useMemo(
+    () => putYourPointsBankRecords.filter(isQuestionActiveInBank),
+    [putYourPointsBankRecords],
+  );
+  const trueFalseBankQuestions = useMemo(
+    () => trueFalseBankRecords.filter(isQuestionActiveInBank),
+    [trueFalseBankRecords],
   );
   const standardSelectableQuestions = useMemo(
     () => (gameBankQuestions.length ? gameBankQuestions : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))),
@@ -16554,25 +16732,49 @@ function ProductionApp() {
     () => new Set(standardSelectableQuestions.map((question) => question.id).filter(Boolean)),
     [standardSelectableQuestions],
   );
+  const bankQuestionRecordIds = useMemo(
+    () => new Set(gameBankRecords.map((question) => question.id).filter(Boolean)),
+    [gameBankRecords],
+  );
   const quizQuestionIds = useMemo(
     () => new Set(quizBankQuestions.map((question) => question.id).filter(Boolean)),
     [quizBankQuestions],
+  );
+  const quizQuestionRecordIds = useMemo(
+    () => new Set(quizBankRecords.map((question) => question.id).filter(Boolean)),
+    [quizBankRecords],
   );
   const thisOrThatQuestionIds = useMemo(
     () => new Set(thisOrThatBankQuestions.map((question) => question.id).filter(Boolean)),
     [thisOrThatBankQuestions],
   );
+  const thisOrThatQuestionRecordIds = useMemo(
+    () => new Set(thisOrThatBankRecords.map((question) => question.id).filter(Boolean)),
+    [thisOrThatBankRecords],
+  );
   const mostLikelyQuestionIds = useMemo(
     () => new Set(mostLikelySelectableQuestions.map((question) => question.id).filter(Boolean)),
     [mostLikelySelectableQuestions],
+  );
+  const mostLikelyQuestionRecordIds = useMemo(
+    () => new Set(mostLikelyBankRecords.map((question) => question.id).filter(Boolean)),
+    [mostLikelyBankRecords],
   );
   const putYourPointsQuestionIds = useMemo(
     () => new Set(putYourPointsSelectableQuestions.map((question) => question.id).filter(Boolean)),
     [putYourPointsSelectableQuestions],
   );
+  const putYourPointsQuestionRecordIds = useMemo(
+    () => new Set(putYourPointsBankRecords.map((question) => question.id).filter(Boolean)),
+    [putYourPointsBankRecords],
+  );
   const trueFalseQuestionIds = useMemo(
     () => new Set(trueFalseBankQuestions.map((question) => question.id).filter(Boolean)),
     [trueFalseBankQuestions],
+  );
+  const trueFalseQuestionRecordIds = useMemo(
+    () => new Set(trueFalseBankRecords.map((question) => question.id).filter(Boolean)),
+    [trueFalseBankRecords],
   );
   const pairPlayedQuestionIds = useMemo(
     () => mergeUniqueIds(pairHistory?.playedQuestionIds || []),
@@ -16613,15 +16815,21 @@ function ProductionApp() {
       ...trackedGameEntries
         .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'game')
         .map((entry) => getPlayedQuestionIdsForGame(entry)),
+      gameBankRecords.filter((question) => question.used).map((question) => question.id),
     );
-    if (!bankQuestionIds.size) return new Set(playedIds);
-    return new Set(playedIds.filter((questionId) => bankQuestionIds.has(questionId)));
-  }, [trackedGameEntries, bankQuestionIds]);
+    const filterIds = bankQuestionRecordIds.size ? bankQuestionRecordIds : bankQuestionIds;
+    if (!filterIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => filterIds.has(questionId)));
+  }, [trackedGameEntries, gameBankRecords, bankQuestionRecordIds, bankQuestionIds]);
   const displayUsedStandardQuestionIds = useMemo(() => {
     return new Set(playedStandardQuestionIds);
   }, [playedStandardQuestionIds]);
+  const activePlayedStandardQuestionIds = useMemo(
+    () => new Set([...playedStandardQuestionIds].filter((questionId) => bankQuestionIds.has(questionId))),
+    [playedStandardQuestionIds, bankQuestionIds],
+  );
   const usedQuestionCount = displayUsedStandardQuestionIds.size;
-  const remainingQuestionCount = Math.max(0, bankCount - usedQuestionCount);
+  const remainingQuestionCount = Math.max(0, bankCount - activePlayedStandardQuestionIds.size);
   const trackedUsedQuizQuestionIds = useMemo(() => {
     const trackedIds = mergeUniqueIds(
       pairPlayedQuestionIds,
@@ -16635,12 +16843,18 @@ function ProductionApp() {
       ...trackedGameEntries
         .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'quiz')
         .map((entry) => getPlayedQuestionIdsForGame(entry)),
+      quizBankRecords.filter((question) => question.used).map((question) => question.id),
     );
-    if (!quizQuestionIds.size) return new Set(playedIds);
-    return new Set(playedIds.filter((questionId) => quizQuestionIds.has(questionId)));
-  }, [trackedGameEntries, quizQuestionIds]);
+    const filterIds = quizQuestionRecordIds.size ? quizQuestionRecordIds : quizQuestionIds;
+    if (!filterIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => filterIds.has(questionId)));
+  }, [trackedGameEntries, quizBankRecords, quizQuestionRecordIds, quizQuestionIds]);
+  const activePlayedQuizQuestionIds = useMemo(
+    () => new Set([...playedQuizQuestionIds].filter((questionId) => quizQuestionIds.has(questionId))),
+    [playedQuizQuestionIds, quizQuestionIds],
+  );
   const usedQuizQuestionCount = playedQuizQuestionIds.size;
-  const remainingQuizQuestionCount = Math.max(0, quizBankCount - usedQuizQuestionCount);
+  const remainingQuizQuestionCount = Math.max(0, quizBankCount - activePlayedQuizQuestionIds.size);
   const trackedUsedTrueFalseQuestionIds = useMemo(() => {
     const trackedIds = mergeUniqueIds(
       pairPlayedQuestionIds,
@@ -16678,45 +16892,69 @@ function ProductionApp() {
       ...trackedGameEntries
         .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'thisOrThatGame')
         .map((entry) => getPlayedQuestionIdsForGame(entry)),
+      thisOrThatBankRecords.filter((question) => question.used).map((question) => question.id),
     );
-    if (!thisOrThatQuestionIds.size) return new Set(playedIds);
-    return new Set(playedIds.filter((questionId) => thisOrThatQuestionIds.has(questionId)));
-  }, [trackedGameEntries, thisOrThatQuestionIds]);
+    const filterIds = thisOrThatQuestionRecordIds.size ? thisOrThatQuestionRecordIds : thisOrThatQuestionIds;
+    if (!filterIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => filterIds.has(questionId)));
+  }, [trackedGameEntries, thisOrThatBankRecords, thisOrThatQuestionRecordIds, thisOrThatQuestionIds]);
+  const activePlayedThisOrThatQuestionIds = useMemo(
+    () => new Set([...playedThisOrThatQuestionIds].filter((questionId) => thisOrThatQuestionIds.has(questionId))),
+    [playedThisOrThatQuestionIds, thisOrThatQuestionIds],
+  );
   const usedThisOrThatQuestionCount = playedThisOrThatQuestionIds.size;
-  const remainingThisOrThatQuestionCount = Math.max(0, thisOrThatBankCount - usedThisOrThatQuestionCount);
+  const remainingThisOrThatQuestionCount = Math.max(0, thisOrThatBankCount - activePlayedThisOrThatQuestionIds.size);
   const playedMostLikelyQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
         .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'mostLikelyGame')
         .map((entry) => getPlayedQuestionIdsForGame(entry)),
+      mostLikelyBankRecords.filter((question) => question.used).map((question) => question.id),
     );
-    if (!mostLikelyQuestionIds.size) return new Set(playedIds);
-    return new Set(playedIds.filter((questionId) => mostLikelyQuestionIds.has(questionId)));
-  }, [trackedGameEntries, mostLikelyQuestionIds]);
+    const filterIds = mostLikelyQuestionRecordIds.size ? mostLikelyQuestionRecordIds : mostLikelyQuestionIds;
+    if (!filterIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => filterIds.has(questionId)));
+  }, [trackedGameEntries, mostLikelyBankRecords, mostLikelyQuestionRecordIds, mostLikelyQuestionIds]);
+  const activePlayedMostLikelyQuestionIds = useMemo(
+    () => new Set([...playedMostLikelyQuestionIds].filter((questionId) => mostLikelyQuestionIds.has(questionId))),
+    [playedMostLikelyQuestionIds, mostLikelyQuestionIds],
+  );
   const usedMostLikelyQuestionCount = playedMostLikelyQuestionIds.size;
-  const remainingMostLikelyQuestionCount = Math.max(0, mostLikelyBankCount - usedMostLikelyQuestionCount);
+  const remainingMostLikelyQuestionCount = Math.max(0, mostLikelyBankCount - activePlayedMostLikelyQuestionIds.size);
   const playedPutYourPointsQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
         .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'putYourPointsGame')
         .map((entry) => getPlayedQuestionIdsForGame(entry)),
+      putYourPointsBankRecords.filter((question) => question.used).map((question) => question.id),
     );
-    if (!putYourPointsQuestionIds.size) return new Set(playedIds);
-    return new Set(playedIds.filter((questionId) => putYourPointsQuestionIds.has(questionId)));
-  }, [trackedGameEntries, putYourPointsQuestionIds]);
+    const filterIds = putYourPointsQuestionRecordIds.size ? putYourPointsQuestionRecordIds : putYourPointsQuestionIds;
+    if (!filterIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => filterIds.has(questionId)));
+  }, [trackedGameEntries, putYourPointsBankRecords, putYourPointsQuestionRecordIds, putYourPointsQuestionIds]);
+  const activePlayedPutYourPointsQuestionIds = useMemo(
+    () => new Set([...playedPutYourPointsQuestionIds].filter((questionId) => putYourPointsQuestionIds.has(questionId))),
+    [playedPutYourPointsQuestionIds, putYourPointsQuestionIds],
+  );
   const usedPutYourPointsQuestionCount = playedPutYourPointsQuestionIds.size;
-  const remainingPutYourPointsQuestionCount = Math.max(0, putYourPointsBankCount - usedPutYourPointsQuestionCount);
+  const remainingPutYourPointsQuestionCount = Math.max(0, putYourPointsBankCount - activePlayedPutYourPointsQuestionIds.size);
   const playedTrueFalseQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
         .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === 'trueFalseGame')
         .map((entry) => getPlayedQuestionIdsForGame(entry)),
+      trueFalseBankRecords.filter((question) => question.used).map((question) => question.id),
     );
-    if (!trueFalseQuestionIds.size) return new Set(playedIds);
-    return new Set(playedIds.filter((questionId) => trueFalseQuestionIds.has(questionId)));
-  }, [trackedGameEntries, trueFalseQuestionIds]);
+    const filterIds = trueFalseQuestionRecordIds.size ? trueFalseQuestionRecordIds : trueFalseQuestionIds;
+    if (!filterIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => filterIds.has(questionId)));
+  }, [trackedGameEntries, trueFalseBankRecords, trueFalseQuestionRecordIds, trueFalseQuestionIds]);
+  const activePlayedTrueFalseQuestionIds = useMemo(
+    () => new Set([...playedTrueFalseQuestionIds].filter((questionId) => trueFalseQuestionIds.has(questionId))),
+    [playedTrueFalseQuestionIds, trueFalseQuestionIds],
+  );
   const usedTrueFalseQuestionCount = playedTrueFalseQuestionIds.size;
-  const remainingTrueFalseQuestionCount = Math.max(0, trueFalseBankCount - usedTrueFalseQuestionCount);
+  const remainingTrueFalseQuestionCount = Math.max(0, trueFalseBankCount - activePlayedTrueFalseQuestionIds.size);
   const usedQuestionIds = useMemo(() => new Set(rounds.map((round) => round.questionId).filter(Boolean)), [rounds]);
   const availableQuestions = useMemo(() => {
     const bank = standardSelectableQuestions.filter(
@@ -19602,28 +19840,12 @@ function ProductionApp() {
     const reference = parseGoogleSheetReference(sheetValue);
     if (!reference) throw new Error('Enter a valid Google Sheet URL or ID.');
     const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
-    const sheetNames = normalizedTargetBankType === 'quiz'
-      ? ['Quiz']
-      : normalizedTargetBankType === 'thisOrThatGame'
-        ? ['This or That']
-      : normalizedTargetBankType === 'mostLikelyGame'
-        ? ['Most Like To']
-      : normalizedTargetBankType === 'putYourPointsGame'
-        ? [
-            'Put Your Money Where Your Mouth Is',
-            'Put Your Money Where Your Mouth',
-            'Put Your Points Where Your Mouth Is',
-            'Put Your Points Where Your Mouth',
-            'Put Your Points',
-          ]
-      : normalizedTargetBankType === 'trueFalseGame'
-        ? ['True or False']
-        : ['Questions'];
-    const targets = sheetNames.map((sheetName) => ({
+    const sheetName = getQuestionBankSyncTarget(normalizedTargetBankType).sheetName;
+    const targets = [{
       gid: '',
       csvUrl: `https://docs.google.com/spreadsheets/d/${reference.id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`,
       sheetName,
-    }));
+    }];
     const nextExistingQuestions = [...existingQuestions].filter(
       (question) => normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType,
     );
@@ -19636,16 +19858,9 @@ function ProductionApp() {
     let invalidTotal = 0;
     let skippedTotal = 0;
 
-    let didLoadTarget = false;
-    let lastTargetError = null;
     for (const target of targets) {
       const response = await fetch(target.csvUrl);
-      if (!response.ok) {
-        lastTargetError = new Error(`Google Sheet tab fetch failed (${response.status}) for sheet "${target.sheetName}".`);
-        if (targets.length > 1) continue;
-        throw lastTargetError;
-      }
-      didLoadTarget = true;
+      if (!response.ok) throw new Error(`Google Sheet tab fetch failed (${response.status}) for sheet "${target.sheetName}".`);
       const rawText = await response.text();
       const parsedResult = normalizedTargetBankType === 'quiz'
         ? parseGoogleSheetQuizImport({
@@ -19669,7 +19884,7 @@ function ProductionApp() {
               existingQuestions: nextExistingQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'mostLikelyGame'),
               overwriteExisting,
               importedAt: new Date().toISOString(),
-              sourceLabel: `${reference.id}:${target.sheetName || 'Most Like To'}`,
+              sourceLabel: `${reference.id}:${target.sheetName || 'Most Likely To'}`,
             })
         : normalizedTargetBankType === 'putYourPointsGame'
           ? parseGoogleSheetPutYourPointsImport({
@@ -19704,10 +19919,7 @@ function ProductionApp() {
       invalidTotal += parsedResult.summary.invalid;
       skippedTotal += parsedResult.summary.skipped;
       nextExistingQuestions.push(...parsedResult.imports, ...parsedResult.updates);
-      break;
     }
-
-    if (!didLoadTarget && lastTargetError) throw lastTargetError;
 
     return {
       reference,
@@ -24104,6 +24316,88 @@ function ProductionApp() {
       setNotice('Question added to the bank.');
     }, 'Could not add question.');
 
+  const getUsedQuestionIdsForBankType = (targetBankType = 'game') => {
+    const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+    if (normalizedTargetBankType === 'quiz') return playedQuizQuestionIds;
+    if (normalizedTargetBankType === 'thisOrThatGame') return playedThisOrThatQuestionIds;
+    if (normalizedTargetBankType === 'mostLikelyGame') return playedMostLikelyQuestionIds;
+    if (normalizedTargetBankType === 'putYourPointsGame') return playedPutYourPointsQuestionIds;
+    if (normalizedTargetBankType === 'trueFalseGame') return playedTrueFalseQuestionIds;
+    return displayUsedStandardQuestionIds;
+  };
+
+  const replaceQuestionBankFromSheet = async ({
+    targetBankType = 'game',
+    actionLabel = 'Synced',
+    existingQuestions = bankQuestions,
+    updateLocalState = true,
+  } = {}) => {
+    const target = getQuestionBankSyncTarget(targetBankType);
+    const result = await syncGoogleSheetQuestions({
+      sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+      existingQuestions,
+      overwriteExisting: true,
+      targetBankType: target.bankType,
+    });
+    const replacementQuestions = getSheetReplacementQuestions(result, target.bankType);
+    if (!replacementQuestions.length) {
+      throw new Error(`The ${target.sheetName} sheet did not contain any active valid questions.`);
+    }
+    const usedQuestionIdsForBank = getUsedQuestionIdsForBankType(target.bankType);
+    const replaceResult = await replaceQuestionBankSegmentBatch(
+      firestore,
+      target.bankType,
+      existingQuestions,
+      replacementQuestions,
+      usedQuestionIdsForBank,
+    );
+    const nextQuestions = applyQuestionBankSegmentReplacement(
+      existingQuestions,
+      target.bankType,
+      replacementQuestions,
+      usedQuestionIdsForBank,
+    );
+
+    if (updateLocalState) {
+      setBankQuestions(nextQuestions);
+      setSyncNotice(
+        `${actionLabel} ${target.label} from "${target.sheetName}": ${replaceResult.replaced} active, ${replaceResult.removed} unused removed, ${replaceResult.retired} used kept, ${result.summary.invalid} invalid, ${result.summary.duplicates} duplicate rows.`,
+      );
+      setNotice(`${actionLabel} ${target.gameName} question bank from Google Sheet.`);
+    }
+
+    return {
+      target,
+      result,
+      replaceResult,
+      replacementQuestions,
+      nextQuestions,
+    };
+  };
+
+  const syncAllQuestionBanks = async () =>
+    withBusy(async () => {
+      let workingQuestions = bankQuestions;
+      const summaries = [];
+
+      for (const target of QUESTION_BANK_SYNC_TARGETS) {
+        const outcome = await replaceQuestionBankFromSheet({
+          targetBankType: target.bankType,
+          actionLabel: 'Synced',
+          existingQuestions: workingQuestions,
+          updateLocalState: false,
+        });
+        workingQuestions = outcome.nextQuestions;
+        summaries.push(
+          `${outcome.target.gameName}: ${outcome.replaceResult.replaced} active, ${outcome.replaceResult.removed} removed, ${outcome.replaceResult.retired} used kept`,
+        );
+      }
+
+      setBankQuestions(workingQuestions);
+      setSyncNotice(`Synced all question banks. ${summaries.join(' | ')}`);
+      setNotice('All question banks synced from Google Sheet.');
+    }, 'Could not sync all question banks.');
+
   const importSheet = async () =>
     withBusy(async () => {
       const result = await syncGoogleSheetQuestions({
@@ -24122,18 +24416,7 @@ function ProductionApp() {
 
   const syncSheet = async () =>
     withBusy(async () => {
-      const result = await syncGoogleSheetQuestions({
-        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
-        existingQuestions: bankQuestions,
-        overwriteExisting: true,
-        targetBankType: 'game',
-      });
-      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
-      const nextBankCount = bankQuestions.length + result.summary.imported;
-      setSyncNotice(
-        `Synced question bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. Bank now tracks about ${nextBankCount} questions.`,
-      );
-      setNotice('Question bank synced from Google Sheet.');
+      await replaceQuestionBankFromSheet({ targetBankType: 'game', actionLabel: 'Synced' });
     }, 'Could not sync the question bank.');
 
   const importQuizSheet = async () =>
@@ -24154,18 +24437,7 @@ function ProductionApp() {
 
   const syncQuizSheet = async () =>
     withBusy(async () => {
-      const result = await syncGoogleSheetQuestions({
-        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
-        existingQuestions: bankQuestions,
-        overwriteExisting: true,
-        targetBankType: 'quiz',
-      });
-      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
-      const nextBankCount = quizBankQuestions.length + result.summary.imported;
-      setSyncNotice(
-        `Synced quiz bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. Quiz bank now tracks about ${nextBankCount} questions.`,
-      );
-      setNotice('Quiz bank synced from Google Sheet.');
+      await replaceQuestionBankFromSheet({ targetBankType: 'quiz', actionLabel: 'Synced' });
     }, 'Could not sync the quiz bank.');
 
   const importThisOrThatSheet = async () =>
@@ -24186,18 +24458,7 @@ function ProductionApp() {
 
   const syncThisOrThatSheet = async () =>
     withBusy(async () => {
-      const result = await syncGoogleSheetQuestions({
-        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
-        existingQuestions: bankQuestions,
-        overwriteExisting: true,
-        targetBankType: 'thisOrThatGame',
-      });
-      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
-      const nextBankCount = thisOrThatBankQuestions.length + result.summary.imported;
-      setSyncNotice(
-        `Synced This or That bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. This or That bank now tracks about ${nextBankCount} questions.`,
-      );
-      setNotice('This or That bank synced from Google Sheet.');
+      await replaceQuestionBankFromSheet({ targetBankType: 'thisOrThatGame', actionLabel: 'Synced' });
     }, 'Could not sync the This or That bank.');
 
   const importMostLikelySheet = async () =>
@@ -24218,18 +24479,7 @@ function ProductionApp() {
 
   const syncMostLikelySheet = async () =>
     withBusy(async () => {
-      const result = await syncGoogleSheetQuestions({
-        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
-        existingQuestions: bankQuestions,
-        overwriteExisting: true,
-        targetBankType: 'mostLikelyGame',
-      });
-      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
-      const nextBankCount = mostLikelyBankQuestions.length + result.summary.imported;
-      setSyncNotice(
-        `Synced Most Likely To bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. Most Likely To bank now tracks about ${nextBankCount} questions.`,
-      );
-      setNotice('Most Likely To bank synced from Google Sheet.');
+      await replaceQuestionBankFromSheet({ targetBankType: 'mostLikelyGame', actionLabel: 'Synced' });
     }, 'Could not sync the Most Likely To bank.');
 
   const importPutYourPointsSheet = async () =>
@@ -24250,47 +24500,11 @@ function ProductionApp() {
 
   const syncPutYourPointsSheet = async () =>
     withBusy(async () => {
-      const result = await syncGoogleSheetQuestions({
-        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
-        existingQuestions: bankQuestions,
-        overwriteExisting: true,
-        targetBankType: 'putYourPointsGame',
-      });
-      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
-      const nextBankCount = putYourPointsBankQuestions.length + result.summary.imported;
-      setSyncNotice(
-        `Synced Put Your Points bank: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} duplicates, ${result.summary.invalid} invalid. Put Your Points bank now tracks about ${nextBankCount} questions.`,
-      );
-      setNotice('Put Your Points bank synced from Google Sheet.');
+      await replaceQuestionBankFromSheet({ targetBankType: 'putYourPointsGame', actionLabel: 'Synced' });
     }, 'Could not sync the Put Your Points bank.');
 
   const replaceTrueFalseBankFromSheet = async (actionLabel = 'Synced') => {
-    const result = await syncGoogleSheetQuestions({
-      sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
-      existingQuestions: bankQuestions,
-      overwriteExisting: true,
-      targetBankType: 'trueFalseGame',
-    });
-    const replacementQuestions = getSheetReplacementQuestions(result, 'trueFalseGame');
-    if (!replacementQuestions.length) {
-      throw new Error('The True or False sheet did not contain any active valid questions.');
-    }
-    const replaceResult = await replaceQuestionBankSegmentBatch(
-      firestore,
-      'trueFalseGame',
-      bankQuestions,
-      replacementQuestions,
-    );
-    setBankQuestions((current) =>
-      mergeQuestionBankRecords(
-        current.filter((question) => normalizeQuestionBankType(question?.bankType) !== 'trueFalseGame'),
-        replacementQuestions,
-      ),
-    );
-    setSyncNotice(
-      `${actionLabel} True or False bank from Google Sheet: ${replaceResult.replaced} active questions kept, ${replaceResult.removed} old questions removed, ${result.summary.invalid} invalid, ${result.summary.duplicates} duplicate rows.`,
-    );
-    setNotice(`${actionLabel} True or False bank from Google Sheet. Removed ${replaceResult.removed} old questions.`);
+    await replaceQuestionBankFromSheet({ targetBankType: 'trueFalseGame', actionLabel });
   };
 
   const importTrueFalseSheet = async () =>
@@ -24470,6 +24684,7 @@ function ProductionApp() {
         onSyncMostLikelyBank={syncMostLikelySheet}
         onSyncPutYourPointsBank={syncPutYourPointsSheet}
         onSyncTrueFalseBank={syncTrueFalseSheet}
+        onSyncAllQuestionBanks={syncAllQuestionBanks}
         onImportQuestions={importSheet}
         onImportQuizQuestions={importQuizSheet}
         onImportThisOrThatQuestions={importThisOrThatSheet}

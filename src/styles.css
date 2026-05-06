@@ -1317,6 +1317,56 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.question-bank-master-control {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--section-accent, var(--accent)) 14%, transparent), transparent 58%),
+    rgba(255, 255, 255, 0.04);
+}
+
+.question-bank-master-control h3 {
+  margin: 2px 0 0;
+  font-size: 1rem;
+}
+
+.question-bank-sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.question-bank-sheet-row {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.question-bank-sheet-row strong,
+.question-bank-sheet-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.question-bank-sheet-row strong {
+  color: #fff;
+  font-size: 0.78rem;
+}
+
+.question-bank-sheet-row span {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.72rem;
+}
+
 .filter-card {
   display: grid;
   gap: 10px;
@@ -12590,6 +12640,7 @@ select:focus-visible {
 
   .game-lobby-grid,
   .question-bank-status-grid,
+  .question-bank-sheet-grid,
   .create-filters-grid {
     grid-template-columns: 1fr;
   }
@@ -12852,8 +12903,14 @@ select:focus-visible {
   .filter-chip-grid,
   .filter-chip-grid--categories,
   .live-round-grid,
-  .question-bank-status-grid {
+  .question-bank-status-grid,
+  .question-bank-sheet-grid {
     grid-template-columns: 1fr;
+  }
+
+  .question-bank-master-control {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .auth-screen {
