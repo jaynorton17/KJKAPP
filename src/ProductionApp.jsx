@@ -357,7 +357,7 @@ const QUIZ_SETUP_COUNTDOWN_MS = 3000;
 const QUIZ_REVEAL_FLASH_MS = 3000;
 const AI_CHAT_MESSAGE_LIMIT = 160;
 const AI_EVIDENCE_PREVIEW_LIMIT = 4;
-const AI_DIARY_PROMPT_VERSION = '2026-05-04-story-chat-v2';
+const AI_DIARY_PROMPT_VERSION = '2026-05-06-most-likely-votes-v1';
 const AI_DIARY_GAME_HIGHLIGHT_LIMIT = 8;
 const AI_DIARY_SIGNAL_LIMIT = 4;
 const AI_DIARY_CHAT_HIGHLIGHT_LIMIT = 8;
@@ -1522,6 +1522,67 @@ const buildDiaryQuizSummary = (quizAnswers = [], gameId = '') => {
   };
 };
 
+const buildDiaryMostLikelySummary = (rounds = []) => {
+  const normalizedRounds = normalizeStoredRounds(rounds || []);
+  if (!normalizedRounds.length) return null;
+
+  const voteOptions = getMostLikelyOptions();
+  const voteCounts = {
+    jay: Object.fromEntries(voteOptions.map((option) => [option, 0])),
+    kim: Object.fromEntries(voteOptions.map((option) => [option, 0])),
+  };
+  const summary = {
+    totalQuestions: normalizedRounds.length,
+    matchedVotes: 0,
+    splitVotes: 0,
+    missedVotes: 0,
+    jayPenaltyPoints: 0,
+    kimPenaltyPoints: 0,
+    splitHighlights: [],
+    matchedHighlights: [],
+    missedHighlights: [],
+  };
+
+  normalizedRounds.forEach((round, index) => {
+    const outcome = buildMostLikelyRoundOutcome(round, { useStoredPenalties: false });
+    const row = {
+      round: Number(round?.number || index + 1),
+      question: truncateAiText(round?.question || 'Question', 148),
+      category: normalizeText(round?.category || '') || 'Uncategorised',
+      jayVote: outcome.jayVote || 'No vote',
+      kimVote: outcome.kimVote || 'No vote',
+      jayPenalty: Number(outcome.jayPenalty || 0),
+      kimPenalty: Number(outcome.kimPenalty || 0),
+    };
+
+    if (outcome.agreed) {
+      summary.matchedVotes += 1;
+      if (summary.matchedHighlights.length < AI_DIARY_SIGNAL_LIMIT) summary.matchedHighlights.push(row);
+    }
+    if (outcome.splitVote) {
+      summary.splitVotes += 1;
+      if (summary.splitHighlights.length < AI_DIARY_SIGNAL_LIMIT) summary.splitHighlights.push(row);
+    }
+    if (outcome.jayMissingResponse || outcome.kimMissingResponse) {
+      summary.missedVotes += 1;
+      if (summary.missedHighlights.length < AI_DIARY_SIGNAL_LIMIT) summary.missedHighlights.push(row);
+    }
+    if (outcome.jayVote && voteCounts.jay[outcome.jayVote] !== undefined) voteCounts.jay[outcome.jayVote] += 1;
+    if (outcome.kimVote && voteCounts.kim[outcome.kimVote] !== undefined) voteCounts.kim[outcome.kimVote] += 1;
+    summary.jayPenaltyPoints += row.jayPenalty;
+    summary.kimPenaltyPoints += row.kimPenalty;
+  });
+
+  return {
+    ...summary,
+    voteRows: voteOptions.map((option) => ({
+      option,
+      jay: voteCounts.jay[option] || 0,
+      kim: voteCounts.kim[option] || 0,
+    })),
+  };
+};
+
 const buildDiaryChatSummary = (chatMessages = [], limit = AI_DIARY_CHAT_HIGHLIGHT_LIMIT) => {
   const rows = (Array.isArray(chatMessages) ? chatMessages : [])
     .map((entry, index) => {
@@ -1805,6 +1866,13 @@ const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = nul
     if (winnerLabel) specificCandidates.push(`${winnerLabel} Beat the Clock`, `${winnerLabel}'s Fast Finish`);
     if (categoryLabel) specificCandidates.push(`${categoryLabel} on the Clock`, `${categoryLabel} at Full Speed`);
     generalCandidates.push('Fast Fingers, Full Hearts', 'Buzzers and Bragging Rights', 'Quick Fire and Cute Chaos');
+  } else if (gameMode === MOST_LIKELY_GAME_MODE) {
+    const splitVoteCount = Number(facts?.mostLikely?.splitVotes || gameSummary?.mostLikelySummary?.splitVotes || 0);
+    if (splitVoteCount) specificCandidates.push('Split Votes and Side-Eyes', 'Most Likely, Least Agreed');
+    if (wasTie) specificCandidates.push('A Perfect Most Likely Deadlock', 'No One Escaped the Vote');
+    if (winnerLabel) specificCandidates.push(`${winnerLabel}'s Most Likely Edge`, `${winnerLabel} Dodged the Split`);
+    if (categoryLabel) specificCandidates.push(`${categoryLabel} Took the Vote`, `A ${categoryLabel} Vote Split`);
+    generalCandidates.push('Votes, Blushes, and Plot Twists', 'A Most Likely Scorecard', 'The Vote Said Everything');
   } else {
     if (wasTie) specificCandidates.push('Too Close to Call', 'A Perfect Little Deadlock');
     if (wasClose && winnerLabel) specificCandidates.push(`${winnerLabel} by a Whisper`, `${winnerLabel}'s Narrow Escape`);
@@ -1841,6 +1909,7 @@ const buildAiGameDiaryFacts = ({
   const feedbackSummary = buildDiaryFeedbackSummary(questionFeedback, gameSummary?.id || '');
   const replaySummary = buildDiaryReplaySummary(questionReplays, gameSummary?.id || '');
   const quizSummary = gameMode === 'quiz' ? buildDiaryQuizSummary(quizAnswers, gameSummary?.id || '') : null;
+  const mostLikelySummary = isMostLikelyGameMode(gameMode) ? buildDiaryMostLikelySummary(rounds) : null;
   const chatSummary = buildDiaryChatSummary(chatMessages);
   const topCategories = collectDiaryTopCategories(rounds);
 
@@ -1872,6 +1941,7 @@ const buildAiGameDiaryFacts = ({
     feedback: feedbackSummary,
     replayRequests: replaySummary,
     quiz: quizSummary,
+    mostLikely: mostLikelySummary,
     gameChat: chatSummary,
     privacy: {
       privateNotesIncluded: false,
@@ -1937,6 +2007,7 @@ const buildAiDiarySystemInstruction = (sourceType = 'game') => [
   'Make the headline short, playful, and specific to this exact chapter. Vary the wording between chapters and avoid repetitive winner-template titles.',
   'Mention the result and winner if the facts include one.',
   'Explain what Jay and Kim learned about each other, what went well, and who struggled where, while staying kind and playful.',
+  'For Most Likely To chapters, use facts.mostLikely to preserve matched votes, split votes, missed votes, and the exact Jay/Kim vote contrast on key split rounds.',
   'Do not sound clinical, robotic, mean, or generic.',
   'Keep quiz scoring and penalty-point scoring separate: quiz points are higher-is-better, penalty points are lower-is-better.',
   'Do not mention private notes, prompts, raw JSON, Firestore, databases, or internal tooling.',
@@ -1949,6 +2020,7 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   const replayRequests = facts?.replayRequests || [];
   const analytics = facts?.analytics || null;
   const quiz = facts?.quiz || null;
+  const mostLikely = facts?.mostLikely || null;
   const chatHighlights = Array.isArray(facts?.gameChat?.highlights) ? facts.gameChat.highlights : [];
   const firstMoment = facts?.questionHighlights?.[0] || null;
   const secondMoment = facts?.questionHighlights?.[1] || null;
@@ -1962,8 +2034,10 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   const summary = game?.scoreSummary || `${game?.gameModeLabel || 'Game night'} finished with plenty to talk about.`;
 
   const opening = `By the time ${game?.name || 'this game'} became a diary chapter, the scoreboard already had a plot. ${summary} ${game?.name ? `${game.name} gave them ${Math.max(1, Number(game?.roundsPlayed || 0))} rounds of answers, second-guesses, and little moments worth keeping.` : ''}`.trim();
-  const middle = analytics
-    ? `${analytics.leaderboardSummary || 'The score stayed lively.'} Jay looked strongest in ${analytics.strongestCategoryJay || 'a few familiar lanes'}, while Kim shone in ${analytics.strongestCategoryKim || 'some sharp little moments'}. ${analytics.weakestCategoryJay ? `Jay had a wobble around ${analytics.weakestCategoryJay}.` : ''} ${analytics.weakestCategoryKim ? `Kim had a wobble around ${analytics.weakestCategoryKim}.` : ''}`.trim()
+  const middle = mostLikely
+    ? `Most Likely To left a clear little trail: ${mostLikely.matchedVotes || 0} matched votes, ${mostLikely.splitVotes || 0} split votes, and ${mostLikely.missedVotes || 0} missed votes. The split-vote penalties finished at Jay ${formatScore(mostLikely.jayPenaltyPoints || 0)} and Kim ${formatScore(mostLikely.kimPenaltyPoints || 0)}.`
+    : analytics
+      ? `${analytics.leaderboardSummary || 'The score stayed lively.'} Jay looked strongest in ${analytics.strongestCategoryJay || 'a few familiar lanes'}, while Kim shone in ${analytics.strongestCategoryKim || 'some sharp little moments'}. ${analytics.weakestCategoryJay ? `Jay had a wobble around ${analytics.weakestCategoryJay}.` : ''} ${analytics.weakestCategoryKim ? `Kim had a wobble around ${analytics.weakestCategoryKim}.` : ''}`.trim()
     : quiz
       ? `Quick Fire stayed true to its name: Jay finished on ${quiz.bySeat?.jay?.points || 0} points with ${quiz.bySeat?.jay?.accuracy || 0}% accuracy, while Kim landed ${quiz.bySeat?.kim?.points || 0} points at ${quiz.bySeat?.kim?.accuracy || 0}% accuracy. ${quiz.strongestCategories?.jay?.[0]?.category ? `Jay looked especially comfortable in ${quiz.strongestCategories.jay[0].category}.` : ''} ${quiz.strongestCategories?.kim?.[0]?.category ? `Kim looked especially comfortable in ${quiz.strongestCategories.kim[0].category}.` : ''}`.trim()
       : 'The scoreline told one story, but the answers underneath it were where the real charm lived.';
@@ -1973,6 +2047,7 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   const learning = [
     firstMoment ? `One memorable clue came when Jay answered "${firstMoment.jayAnswer}" and Kim answered "${firstMoment.kimAnswer}" to "${firstMoment.question}".` : '',
     secondMoment ? `Later, "${secondMoment.question}" quietly added another layer: Jay went with "${secondMoment.jayAnswer}", while Kim went with "${secondMoment.kimAnswer}".` : '',
+    mostLikely?.splitHighlights?.[0] ? `The clearest split came on "${mostLikely.splitHighlights[0].question}", where Jay voted ${mostLikely.splitHighlights[0].jayVote} and Kim voted ${mostLikely.splitHighlights[0].kimVote}.` : '',
     sharedLikedQuestion ? `They were nicely in sync on "${sharedLikedQuestion}", which feels like a very good sign for future plotting.` : '',
     splitQuestion ? `They were less aligned on "${splitQuestion}", which honestly is half the fun and gives them something to tease each other about later.` : '',
     replayQuestion ? `"${replayQuestion}" even earned a replay request, which is basically the app version of saying, "we are absolutely not done with this conversation."` : '',
@@ -3236,7 +3311,19 @@ const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat 
       : isMostLikelyGameMode(gameMode)
         ? hasCompletedMostLikelyRoundAnswer(round, seat)
         : hasSubmittedRoundAnswer(round, seat);
-const buildTrueFalseRoundOutcome = (round = {}) => {
+
+const getStoredPenaltyOverride = (...values) => {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'string' && !normalizeText(value)) continue;
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) return numericValue;
+  }
+  return null;
+};
+
+const buildTrueFalseRoundOutcome = (round = {}, outcomeOptions = {}) => {
+  const useStoredPenalties = outcomeOptions.useStoredPenalties !== false;
   const jayGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '');
   const kimGuess = normalizeTrueFalseChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '');
   const jayActual = normalizeTrueFalseChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
@@ -3255,12 +3342,10 @@ const buildTrueFalseRoundOutcome = (round = {}) => {
     + (jayMissingResponse ? TRUE_FALSE_UNANSWERED_PENALTY : 0);
   const kimDefaultPenalty = (kimGuessScorable && !kimCorrect ? TRUE_FALSE_WRONG_PENALTY : 0)
     + (kimMissingResponse ? TRUE_FALSE_UNANSWERED_PENALTY : 0);
-  const jayPenalty = Number.isFinite(Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay))
-    ? Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay)
-    : jayDefaultPenalty;
-  const kimPenalty = Number.isFinite(Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim))
-    ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
-    : kimDefaultPenalty;
+  const jayStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.jay, round?.penalties?.jay) : null;
+  const kimStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.kim, round?.penalties?.kim) : null;
+  const jayPenalty = jayStoredPenalty ?? jayDefaultPenalty;
+  const kimPenalty = kimStoredPenalty ?? kimDefaultPenalty;
   return {
     jayGuess,
     kimGuess,
@@ -3280,7 +3365,8 @@ const buildTrueFalseRoundOutcome = (round = {}) => {
     kimPenalty,
   };
 };
-const buildThisOrThatRoundOutcome = (round = {}) => {
+const buildThisOrThatRoundOutcome = (round = {}, outcomeOptions = {}) => {
+  const useStoredPenalties = outcomeOptions.useStoredPenalties !== false;
   const options = getThisOrThatOptions(round);
   const jayGuess = normalizeThisOrThatChoice(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '', round);
   const kimGuess = normalizeThisOrThatChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '', round);
@@ -3300,12 +3386,10 @@ const buildThisOrThatRoundOutcome = (round = {}) => {
     + (jayMissingResponse ? THIS_OR_THAT_UNANSWERED_PENALTY : 0);
   const kimDefaultPenalty = (kimGuessScorable && !kimCorrect ? THIS_OR_THAT_WRONG_PENALTY : 0)
     + (kimMissingResponse ? THIS_OR_THAT_UNANSWERED_PENALTY : 0);
-  const jayPenalty = Number.isFinite(Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay))
-    ? Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay)
-    : jayDefaultPenalty;
-  const kimPenalty = Number.isFinite(Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim))
-    ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
-    : kimDefaultPenalty;
+  const jayStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.jay, round?.penalties?.jay) : null;
+  const kimStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.kim, round?.penalties?.kim) : null;
+  const jayPenalty = jayStoredPenalty ?? jayDefaultPenalty;
+  const kimPenalty = kimStoredPenalty ?? kimDefaultPenalty;
   return {
     options,
     jayGuess,
@@ -3326,7 +3410,8 @@ const buildThisOrThatRoundOutcome = (round = {}) => {
     kimPenalty,
   };
 };
-const buildMostLikelyRoundOutcome = (round = {}) => {
+const buildMostLikelyRoundOutcome = (round = {}, outcomeOptions = {}) => {
+  const useStoredPenalties = outcomeOptions.useStoredPenalties !== false;
   const jayVote = normalizeMostLikelyChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
   const kimVote = normalizeMostLikelyChoice(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '');
   const jayMissingOwnAnswer = !Boolean(jayVote);
@@ -3344,12 +3429,10 @@ const buildMostLikelyRoundOutcome = (round = {}) => {
     : splitVote
       ? MOST_LIKELY_DISAGREE_PENALTY
       : 0;
-  const jayPenalty = Number.isFinite(Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay))
-    ? Number(round?.penaltyAdded?.jay ?? round?.penalties?.jay)
-    : jayDefaultPenalty;
-  const kimPenalty = Number.isFinite(Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim))
-    ? Number(round?.penaltyAdded?.kim ?? round?.penalties?.kim)
-    : kimDefaultPenalty;
+  const jayStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.jay, round?.penalties?.jay) : null;
+  const kimStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.kim, round?.penalties?.kim) : null;
+  const jayPenalty = jayStoredPenalty ?? jayDefaultPenalty;
+  const kimPenalty = kimStoredPenalty ?? kimDefaultPenalty;
   return {
     options: getMostLikelyOptions(),
     jayVote,
@@ -3365,6 +3448,30 @@ const buildMostLikelyRoundOutcome = (round = {}) => {
     kimPenalty,
   };
 };
+const buildAutoScoredRoundPenaltyMap = (gameMode = 'standard', round = {}, options = {}) => {
+  if (isTrueFalseGameMode(gameMode)) {
+    const outcome = buildTrueFalseRoundOutcome(round, options);
+    return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
+  }
+  if (isThisOrThatGameMode(gameMode)) {
+    const outcome = buildThisOrThatRoundOutcome(round, options);
+    return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
+  }
+  if (isMostLikelyGameMode(gameMode)) {
+    const outcome = buildMostLikelyRoundOutcome(round, options);
+    return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
+  }
+  return null;
+};
+const buildRoundPenaltyMapForArchive = (gameMode = 'standard', round = {}, manualPenaltyDraft = defaultPenaltyDraft) =>
+  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: false })
+  || toPenaltyScores(manualPenaltyDraft || defaultPenaltyDraft);
+const buildPendingRoundPenaltyMapForFinalize = (gameMode = 'standard', round = {}, pendingRoundPenaltyOverride = null) =>
+  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: false })
+  || {
+    jay: toScore(pendingRoundPenaltyOverride?.jay ?? round?.penalties?.jay ?? 0),
+    kim: toScore(pendingRoundPenaltyOverride?.kim ?? round?.penalties?.kim ?? 0),
+  };
 const getTrueFalseRetiredQuestionIdsForGame = (game = {}) => {
   const playedQuestionIds = getPlayedQuestionIdsForGame(game);
   const bankType = normalizeQuestionBankType(game?.questionBankType || getQuestionBankTypeForGameMode(game?.gameMode || 'standard'));
@@ -5031,6 +5138,92 @@ function LobbyScreen({
     };
   }, [activeGames, previousGames]);
 
+  const mostLikelyAnalytics = useMemo(() => {
+    const mergedById = new Map();
+    [...(activeGames || []), ...(previousGames || [])].forEach((entry) => {
+      if (!entry?.id || !isMostLikelyGameMode(entry?.gameMode || 'standard')) return;
+      if (!mergedById.has(entry.id)) mergedById.set(entry.id, entry);
+    });
+    const sessions = [...mergedById.values()];
+    const completedSessions = sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || ''));
+    const activeSessions = sessions.filter((entry) => ACTIVE_GAME_STATUSES.includes(entry?.status || ''));
+    const roundsData = sessions.flatMap((entry) =>
+      normalizeStoredRounds(entry?.rounds || []).map((round) => ({
+        ...round,
+        gameId: entry.id,
+        gameName: entry.name || entry.gameName || entry.joinCode || 'Most Likely To',
+      })),
+    );
+    const voteOptions = getMostLikelyOptions();
+    const voteCounts = {
+      jay: Object.fromEntries(voteOptions.map((option) => [option, 0])),
+      kim: Object.fromEntries(voteOptions.map((option) => [option, 0])),
+    };
+    const categoryStats = new Map();
+    const totals = {
+      sessionsTracked: sessions.length,
+      totalGamesPlayed: completedSessions.length,
+      activeGames: activeSessions.length,
+      totalQuestionsAnswered: roundsData.length,
+      matchedVotes: 0,
+      splitVotes: 0,
+      missedVotes: 0,
+      jayPenaltyPoints: 0,
+      kimPenaltyPoints: 0,
+    };
+
+    roundsData.forEach((round) => {
+      const outcome = buildMostLikelyRoundOutcome(round, { useStoredPenalties: false });
+      const categoryKey = normalizeText(round?.category) || 'uncategorised';
+      const categoryEntry = categoryStats.get(categoryKey) || {
+        category: round?.category || 'Uncategorised',
+        rounds: 0,
+        matchedVotes: 0,
+        splitVotes: 0,
+        missedVotes: 0,
+        jayPenalty: 0,
+        kimPenalty: 0,
+      };
+      categoryEntry.rounds += 1;
+
+      if (outcome.agreed) {
+        totals.matchedVotes += 1;
+        categoryEntry.matchedVotes += 1;
+      }
+      if (outcome.splitVote) {
+        totals.splitVotes += 1;
+        categoryEntry.splitVotes += 1;
+      }
+      if (outcome.jayMissingResponse || outcome.kimMissingResponse) {
+        totals.missedVotes += 1;
+        categoryEntry.missedVotes += 1;
+      }
+      if (outcome.jayVote && voteCounts.jay[outcome.jayVote] !== undefined) voteCounts.jay[outcome.jayVote] += 1;
+      if (outcome.kimVote && voteCounts.kim[outcome.kimVote] !== undefined) voteCounts.kim[outcome.kimVote] += 1;
+
+      totals.jayPenaltyPoints += Number(outcome.jayPenalty || 0);
+      totals.kimPenaltyPoints += Number(outcome.kimPenalty || 0);
+      categoryEntry.jayPenalty += Number(outcome.jayPenalty || 0);
+      categoryEntry.kimPenalty += Number(outcome.kimPenalty || 0);
+      categoryStats.set(categoryKey, categoryEntry);
+    });
+
+    return {
+      ...totals,
+      voteRows: voteOptions.map((option) => ({
+        option,
+        jay: voteCounts.jay[option] || 0,
+        kim: voteCounts.kim[option] || 0,
+      })),
+      categoryRows: [...categoryStats.values()].sort(
+        (left, right) =>
+          right.rounds - left.rounds
+          || right.splitVotes - left.splitVotes
+          || left.category.localeCompare(right.category),
+      ),
+    };
+  }, [activeGames, previousGames]);
+
   const questionBankLoadedCount = questionBankSegment === 'quiz'
     ? quizQuestionCount
     : questionBankSegment === 'thisOrThat'
@@ -6382,6 +6575,9 @@ function LobbyScreen({
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('trueFalse')}>
                   True or False
                 </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'mostLikely' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('mostLikely')}>
+                  Most Likely To
+                </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'holdem' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('holdem')}>
                   Texas Hold Em
                 </button>
@@ -6772,6 +6968,114 @@ function LobbyScreen({
                           ))
                         ) : (
                           <p className="empty-copy">No True or False rounds have been recorded yet.</p>
+                        )}
+                      </div>
+                    </section>
+                  </div>
+                </section>
+              ) : analyticsSegment === 'mostLikely' ? (
+                <section className="analytics-questions-panel">
+                  <div className="question-bank-status-grid">
+                    <article className="stat-tile">
+                      <small>Total Games Played</small>
+                      <strong>{mostLikelyAnalytics.totalGamesPlayed}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Total Questions</small>
+                      <strong>{mostLikelyAnalytics.totalQuestionsAnswered}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Matched Votes</small>
+                      <strong>{mostLikelyAnalytics.matchedVotes}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Split Votes</small>
+                      <strong>{mostLikelyAnalytics.splitVotes}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Missed Votes</small>
+                      <strong>{mostLikelyAnalytics.missedVotes}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Penalty</small>
+                      <strong>{formatScore(mostLikelyAnalytics.jayPenaltyPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Penalty</small>
+                      <strong>{formatScore(mostLikelyAnalytics.kimPenaltyPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Tracked Games</small>
+                      <strong>{mostLikelyAnalytics.sessionsTracked}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Active Games</small>
+                      <strong>{mostLikelyAnalytics.activeGames}</strong>
+                    </article>
+                  </div>
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Most Likely To</span>
+                          <h3>Vote Outcomes</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Matched votes</strong><span>{mostLikelyAnalytics.matchedVotes}</span></article>
+                        <article className="mini-list-row"><strong>Split votes</strong><span>{mostLikelyAnalytics.splitVotes}</span></article>
+                        <article className="mini-list-row"><strong>Missed votes</strong><span>{mostLikelyAnalytics.missedVotes}</span></article>
+                        <article className="mini-list-row"><strong>Questions tracked</strong><span>{mostLikelyAnalytics.totalQuestionsAnswered}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Penalty Points</span>
+                          <h3>Split Vote Scoring</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Jay total penalty</strong><span>{formatScore(mostLikelyAnalytics.jayPenaltyPoints)}</span></article>
+                        <article className="mini-list-row"><strong>Kim total penalty</strong><span>{formatScore(mostLikelyAnalytics.kimPenaltyPoints)}</span></article>
+                        <article className="mini-list-row"><strong>Split vote charge</strong><span>{formatScore(MOST_LIKELY_DISAGREE_PENALTY)} each</span></article>
+                        <article className="mini-list-row"><strong>Missed vote charge</strong><span>{formatScore(MOST_LIKELY_UNANSWERED_PENALTY)}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Votes</span>
+                          <h3>Jay vs Kim Picks</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        {mostLikelyAnalytics.voteRows.map((row) => (
+                          <article className="mini-list-row" key={`most-likely-vote-${row.option}`}>
+                            <strong>{row.option}</strong>
+                            <span>{`Jay ${row.jay} · Kim ${row.kim}`}</span>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading">
+                        <div>
+                          <span>Categories</span>
+                          <h3>Split Hotspots</h3>
+                        </div>
+                      </div>
+                      <div className="summary-list">
+                        {mostLikelyAnalytics.categoryRows.length ? (
+                          mostLikelyAnalytics.categoryRows.slice(0, 14).map((row) => (
+                            <article className="mini-list-row" key={`most-likely-cat-${row.category}`}>
+                              <strong>{row.category}</strong>
+                              <span>{`${row.rounds} rounds · ${row.splitVotes} split`}</span>
+                              <small>{`Matched ${row.matchedVotes} · Missed ${row.missedVotes} · Jay ${formatScore(row.jayPenalty)} / Kim ${formatScore(row.kimPenalty)}`}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="empty-copy">No Most Likely To rounds have been recorded yet.</p>
                         )}
                       </div>
                     </section>
@@ -8952,16 +9256,14 @@ function RoomActiveFrameBase({
   const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
   const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
   const penaltyPreview = useMemo(
-    () => ((isTrueFalseGame || isThisOrThatGame || isMostLikelyGame)
-      ? {
-          jay: parseNumber(currentRound?.penalties?.jay, 0),
-          kim: parseNumber(currentRound?.penalties?.kim, 0),
-        }
-      : {
+    () => (
+      (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: false }) : null)
+      || {
           jay: parseNumber(penaltyDraft?.jay, 0),
           kim: parseNumber(penaltyDraft?.kim, 0),
-        }),
-    [currentRound?.penalties?.jay, currentRound?.penalties?.kim, isMostLikelyGame, isTrueFalseGame, isThisOrThatGame, penaltyDraft?.jay, penaltyDraft?.kim],
+        }
+    ),
+    [currentRound, game?.gameMode, penaltyDraft?.jay, penaltyDraft?.kim],
   );
   const previewRoundResult = useMemo(() => {
     if (!revealIsReady || !currentRound) return null;
@@ -11569,6 +11871,7 @@ function DiaryDashboardSection({
   const selectedGameFeedbackHighlights = selectedChapter?.feedbackHighlights || {};
   const selectedGameReplayHighlights = Array.isArray(selectedChapter?.replayHighlights) ? selectedChapter.replayHighlights : [];
   const selectedGameQuestionHighlights = Array.isArray(selectedChapter?.questionHighlights) ? selectedChapter.questionHighlights : [];
+  const selectedGameMostLikelySummary = selectedChapter?.mostLikelySummary || null;
 
   return (
     <section className="panel lobby-panel lobby-panel--archive lobby-diary-card dashboard-page-card">
@@ -11922,6 +12225,29 @@ function DiaryDashboardSection({
                           ))}
                         </div>
                         {analyticsSnapshot?.capturedAt ? <p className="diary-analytics-note-caption">Frozen at {formatShortDateTime(analyticsSnapshot.capturedAt)}</p> : null}
+                      </div>
+                    ) : null}
+
+                    {selectedChapter.entryType === 'game' && selectedGameMostLikelySummary ? (
+                      <div className="diary-appendix">
+                        <strong>Most Likely To summary</strong>
+                        <div className="summary-list">
+                          <article className="mini-list-row">
+                            <strong>Vote outcomes</strong>
+                            <span>{`${selectedGameMostLikelySummary.matchedVotes || 0} matched · ${selectedGameMostLikelySummary.splitVotes || 0} split · ${selectedGameMostLikelySummary.missedVotes || 0} missed`}</span>
+                          </article>
+                          <article className="mini-list-row">
+                            <strong>Penalty points</strong>
+                            <span>{`Jay ${formatScore(selectedGameMostLikelySummary.jayPenaltyPoints || 0)} · Kim ${formatScore(selectedGameMostLikelySummary.kimPenaltyPoints || 0)}`}</span>
+                          </article>
+                          {(selectedGameMostLikelySummary.splitHighlights || []).slice(0, AI_DIARY_SIGNAL_LIMIT).map((entry) => (
+                            <article className="mini-list-row" key={`${selectedChapter.id}-most-likely-split-${entry.round}`}>
+                              <strong>Split vote: {entry.question}</strong>
+                              <span>{`Jay voted ${entry.jayVote} · Kim voted ${entry.kimVote}`}</span>
+                              <small>{entry.category}</small>
+                            </article>
+                          ))}
+                        </div>
                       </div>
                     ) : null}
 
@@ -16321,6 +16647,7 @@ function ProductionApp() {
       },
       replayHighlights: facts?.replayRequests || [],
       quizSummary: facts?.quiz || null,
+      mostLikelySummary: facts?.mostLikely || null,
       gameChatSummary: facts?.gameChat || { totalMessages: 0, bySeat: { jay: 0, kim: 0, other: 0 }, highlights: [] },
       privateNotesIncluded: false,
       createdAt: canonicalCreatedAt,
@@ -16772,12 +17099,15 @@ function ProductionApp() {
     let nextJayLifetime = Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0);
     let nextKimLifetime = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
     const pendingRound = gameDoc.currentRound || null;
+    const pendingRoundPenaltyMap = pendingRound
+      ? buildPendingRoundPenaltyMapForFinalize(gameDoc?.gameMode || 'standard', pendingRound, pendingRoundPenaltyOverride)
+      : null;
     const effectivePendingRound = pendingRound
       ? {
           ...pendingRound,
           penalties: {
-            jay: pendingRoundPenaltyOverride?.jay ?? pendingRound.penalties?.jay ?? '',
-            kim: pendingRoundPenaltyOverride?.kim ?? pendingRound.penalties?.kim ?? '',
+            jay: pendingRoundPenaltyMap?.jay ?? '',
+            kim: pendingRoundPenaltyMap?.kim ?? '',
           },
         }
       : null;
@@ -17056,6 +17386,9 @@ function ProductionApp() {
     const sourceGame = game;
     const pendingRoundPenaltyOverride = options.pendingRoundPenaltyOverride || null;
     const pendingRound = sourceGame.currentRound || null;
+    const pendingRoundPenaltyMap = pendingRound
+      ? buildPendingRoundPenaltyMapForFinalize(sourceGame?.gameMode || 'standard', pendingRound, pendingRoundPenaltyOverride)
+      : null;
     const alreadyArchivedCurrentRound = pendingRound
       ? sourceRounds.some((round) => round.id === pendingRound.id || (round.number === pendingRound.number && round.questionId === pendingRound.questionId))
       : true;
@@ -17068,12 +17401,12 @@ function ProductionApp() {
         {
           ...pendingRound,
           penaltyAdded: {
-            jay: toScore(pendingRoundPenaltyOverride?.jay ?? pendingRound.penalties?.jay ?? 0),
-            kim: toScore(pendingRoundPenaltyOverride?.kim ?? pendingRound.penalties?.kim ?? 0),
+            jay: toScore(pendingRoundPenaltyMap?.jay ?? 0),
+            kim: toScore(pendingRoundPenaltyMap?.kim ?? 0),
           },
           scores: {
-            jay: toScore(pendingRoundPenaltyOverride?.jay ?? pendingRound.penalties?.jay ?? 0),
-            kim: toScore(pendingRoundPenaltyOverride?.kim ?? pendingRound.penalties?.kim ?? 0),
+            jay: toScore(pendingRoundPenaltyMap?.jay ?? 0),
+            kim: toScore(pendingRoundPenaltyMap?.kim ?? 0),
           },
           actualAnswers: {
             jay: pendingRound.answers?.jay?.ownAnswer || '',
@@ -20772,25 +21105,13 @@ function ProductionApp() {
     };
   };
   const getTrueFalsePenaltyMap = useCallback((round = null) => {
-    const outcome = buildTrueFalseRoundOutcome(round || {});
-    return {
-      jay: outcome.jayPenalty,
-      kim: outcome.kimPenalty,
-    };
+    return buildAutoScoredRoundPenaltyMap(TRUE_FALSE_GAME_MODE, round || {}, { useStoredPenalties: false });
   }, []);
   const getThisOrThatPenaltyMap = useCallback((round = null) => {
-    const outcome = buildThisOrThatRoundOutcome(round || {});
-    return {
-      jay: outcome.jayPenalty,
-      kim: outcome.kimPenalty,
-    };
+    return buildAutoScoredRoundPenaltyMap(THIS_OR_THAT_GAME_MODE, round || {}, { useStoredPenalties: false });
   }, []);
   const getMostLikelyPenaltyMap = useCallback((round = null) => {
-    const outcome = buildMostLikelyRoundOutcome(round || {});
-    return {
-      jay: outcome.jayPenalty,
-      kim: outcome.kimPenalty,
-    };
+    return buildAutoScoredRoundPenaltyMap(MOST_LIKELY_GAME_MODE, round || {}, { useStoredPenalties: false });
   }, []);
 
   const markReady = async (seatToReady = '') =>
@@ -21850,12 +22171,7 @@ function ProductionApp() {
         if (game.currentRound) {
           const penalties = isQuizGame
             ? { jay: 0, kim: 0 }
-            : isTrueFalseGame || isThisOrThatGame || isMostLikelyGame
-              ? {
-                  jay: Number(game.currentRound.penalties?.jay || 0),
-                  kim: Number(game.currentRound.penalties?.kim || 0),
-                }
-              : toPenaltyScores(penaltyDraft);
+            : buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
           const roundResult = createRoundResult(
             {
               ...game.currentRound,
@@ -21975,12 +22291,7 @@ function ProductionApp() {
       if (game.currentRound) {
         const penalties = isQuizGame
           ? { jay: 0, kim: 0 }
-          : isTrueFalseGame || isThisOrThatGame || isMostLikelyGame
-            ? {
-                jay: Number(game.currentRound.penalties?.jay || 0),
-                kim: Number(game.currentRound.penalties?.kim || 0),
-              }
-            : toPenaltyScores(penaltyDraft);
+          : buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
 
         const roundResult = createRoundResult(
           {
