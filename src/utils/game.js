@@ -329,9 +329,9 @@ const LEGACY_DEFAULT_GOOGLE_SHEET = {
 };
 
 const DEFAULT_GOOGLE_SHEET = {
-  input: 'https://docs.google.com/spreadsheets/d/1uWV1v1uVv_SzVUYlLaJ01A5ymT8y1BuN/edit?gid=1585986873#gid=1585986873',
+  input: 'https://docs.google.com/spreadsheets/d/1uWV1v1uVv_SzVUYlLaJ01A5ymT8y1BuN/edit?usp=sharing&ouid=103281506146980166472&rtpof=true&sd=true',
   id: '1uWV1v1uVv_SzVUYlLaJ01A5ymT8y1BuN',
-  gid: '1585986873',
+  gid: '',
 };
 
 export const DEFAULT_SETTINGS = {
