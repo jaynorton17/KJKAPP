@@ -614,6 +614,38 @@ const pointsFromTimerMilliseconds = (millisecondsLeft = 0) => {
   const safeMs = Math.max(0, Math.min(QUIZ_TIMER_SECONDS * 1000, Number(millisecondsLeft || 0)));
   return Math.floor(safeMs / 10);
 };
+const normalizeQuizResult = (value = '') => {
+  const normalized = normalizeText(value).toLowerCase();
+  if (normalized === 'correct' || normalized === 'right') return 'correct';
+  if (normalized === 'incorrect' || normalized === 'wrong') return 'incorrect';
+  return '';
+};
+const getQuizAnswerFinalResult = (answer = {}, { includeSystemFallback = true } = {}) => {
+  const explicit = normalizeQuizResult(answer?.finalResult);
+  if (explicit) return explicit;
+  if (normalizeText(answer?.finalResult).toLowerCase() === 'pending') return '';
+  if (!includeSystemFallback) return '';
+  return normalizeQuizResult(answer?.originalSystemResult) || (answer?.wasCorrect ? 'correct' : '');
+};
+const getQuizAnswerSpeedPoints = (answer = {}) => {
+  const stored = Number(answer?.speedPointsAvailable ?? answer?.availableQuizPoints);
+  if (Number.isFinite(stored) && stored >= 0) return toScore(stored);
+  const answerTimeMs = Number(answer?.answerTimeMs ?? answer?.answerTime);
+  if (Number.isFinite(answerTimeMs)) {
+    return pointsFromTimerMilliseconds((QUIZ_TIMER_SECONDS * 1000) - answerTimeMs);
+  }
+  return pointsFromTimerSeconds(answer?.timerValue || 0);
+};
+const getQuizAnswerAwardedPoints = (answer = {}) =>
+  getQuizAnswerFinalResult(answer, { includeSystemFallback: false }) === 'correct'
+    ? getQuizAnswerSpeedPoints(answer)
+    : 0;
+const buildQuizRoundScoreMap = (round = {}) => ({
+  jay: getQuizAnswerAwardedPoints(round?.answers?.jay || {}),
+  kim: getQuizAnswerAwardedPoints(round?.answers?.kim || {}),
+});
+const hasCompletedQuizJudgement = (round = {}) =>
+  seats.every((seatName) => Boolean(getQuizAnswerFinalResult(round?.answers?.[seatName] || {}, { includeSystemFallback: false })));
 const defaultQuizReadyState = (stage = 'opening') => ({
   stage,
   ready: { jay: false, kim: false },
@@ -1429,13 +1461,13 @@ const buildGameDiaryScoreContext = (gameSummary = {}) => {
       kim: Number(gameSummary?.quizTotals?.kim || 0),
     };
     const summary = winnerSeat
-      ? `${winnerLabel} won the Quick Fire Quiz ${quizTotals.jay}-${quizTotals.kim} on manual quiz points.`
+      ? `${winnerLabel} won the Quick Fire Quiz ${quizTotals.jay}-${quizTotals.kim} on timer-based quiz points.`
       : `The Quick Fire Quiz finished level at ${quizTotals.jay}-${quizTotals.kim}.`;
     return {
       gameMode,
       winnerSeat,
       winnerLabel,
-      scoreLabel: 'Manual quiz points',
+      scoreLabel: 'Timer-based quiz points',
       scoreStyle: 'Higher quiz points wins.',
       scoreDisplay: `Jay ${quizTotals.jay} · Kim ${quizTotals.kim}`,
       summary,
@@ -8527,18 +8559,18 @@ function QuestionAnswerEntryBase({
     });
   };
 
-  const handleAnswerAction = async () => {
-    if (!isRoundOpen) return;
+  const handleAnswerAction = async (draftToSubmit = localDraft) => {
+    if (!isRoundOpen || isSubmittingAnswer) return;
     if (canEditSubmittedAnswer && hasSubmittedAnswer && !isEditingSubmittedAnswer) {
       setIsEditingSubmittedAnswer(true);
       const restoredDraft = (draftStorageKey ? readStoredAnswerDraft(draftStorageKey) : null) || buildSavedDraft();
       setLocalDraft(restoredDraft);
       return;
     }
-    if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, localDraft);
+    if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, draftToSubmit);
     setIsSubmittingAnswer(true);
     try {
-      const result = await onSubmitAnswer(localDraft);
+      const result = await onSubmitAnswer(draftToSubmit);
       if (result !== null) {
         draftTouchedRef.current = false;
         clearAnswerDraftTouched(draftStorageKey);
@@ -8550,9 +8582,24 @@ function QuestionAnswerEntryBase({
     }
   };
 
+  const chooseFieldOption = (fieldName, option, setter) => {
+    const nextDraft = { ...localDraft, [fieldName]: option };
+    setter(option);
+    if (
+      isQuizRound
+      && fieldName === 'ownAnswer'
+      && !hasSubmittedAnswer
+      && !isSubmittingAnswer
+      && isRoundOpen
+    ) {
+      handleAnswerAction(nextDraft);
+    }
+  };
+
   const primaryButtonLabel = hasSubmittedAnswer
     ? (isQuizRound ? 'Locked' : isEditingSubmittedAnswer ? 'Save Changes' : 'Edit Answer')
     : isQuizRound ? 'Submit Answer' : 'Submit Round';
+  const showPrimaryAnswerButton = !(isQuizRound && (isChoiceRound || isRatingRound));
 
   const renderField = (fieldName, value, setter, placeholder) => {
     if (usesNumberInputForQuestionType(roundType)) {
@@ -8585,7 +8632,7 @@ function QuestionAnswerEntryBase({
               key={`${fieldName}-rating-${option}`}
               type="button"
               className={`choice-button ${value === option ? 'is-on' : ''}`}
-              onClick={() => setter(option)}
+              onClick={() => chooseFieldOption(fieldName, option, setter)}
               disabled={isLocked || !isRoundOpen}
             >
               {option}
@@ -8603,7 +8650,7 @@ function QuestionAnswerEntryBase({
               key={`${option}-${optionIndex}`}
               type="button"
               className={`choice-button ${value === option ? 'is-on' : ''}`}
-              onClick={() => setter(option)}
+              onClick={() => chooseFieldOption(fieldName, option, setter)}
               disabled={isLocked || !isRoundOpen}
             >
               {option}
@@ -8690,24 +8737,26 @@ function QuestionAnswerEntryBase({
 
   const content = (
     <>
-      <div className={`button-row live-round-actions ${embedded ? 'live-round-actions--embedded' : ''}`}>
-        <Button
-          className={`primary-button compact next-question-button ${hasSubmittedAnswer && !isEditingSubmittedAnswer ? 'next-question-button--edit' : ''}`}
-          onClick={handleAnswerAction}
-          disabled={isSubmittingAnswer || (!isRoundOpen && !hasSubmittedAnswer) || (isQuizRound && hasSubmittedAnswer)}
-        >
-          {hasSubmittedAnswer && !isEditingSubmittedAnswer && !isQuizRound ? (
-            <span className="button-label-with-icon">
-              <span className="button-label-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
-                  <path d="M4 17.3V20h2.7l9.9-9.9-2.7-2.7L4 17.3Zm11.7-11.6 2.7 2.7 1.3-1.3a1 1 0 0 0 0-1.4l-1.3-1.3a1 1 0 0 0-1.4 0l-1.3 1.3Z" fill="currentColor" />
-                </svg>
+      {showPrimaryAnswerButton ? (
+        <div className={`button-row live-round-actions ${embedded ? 'live-round-actions--embedded' : ''}`}>
+          <Button
+            className={`primary-button compact next-question-button ${hasSubmittedAnswer && !isEditingSubmittedAnswer ? 'next-question-button--edit' : ''}`}
+            onClick={handleAnswerAction}
+            disabled={isSubmittingAnswer || (!isRoundOpen && !hasSubmittedAnswer) || (isQuizRound && hasSubmittedAnswer)}
+          >
+            {hasSubmittedAnswer && !isEditingSubmittedAnswer && !isQuizRound ? (
+              <span className="button-label-with-icon">
+                <span className="button-label-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                    <path d="M4 17.3V20h2.7l9.9-9.9-2.7-2.7L4 17.3Zm11.7-11.6 2.7 2.7 1.3-1.3a1 1 0 0 0 0-1.4l-1.3-1.3a1 1 0 0 0-1.4 0l-1.3 1.3Z" fill="currentColor" />
+                  </svg>
+                </span>
+                Edit Answer
               </span>
-              Edit Answer
-            </span>
-          ) : primaryButtonLabel}
-        </Button>
-      </div>
+            ) : primaryButtonLabel}
+          </Button>
+        </div>
+      ) : null}
       <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''} ${isQuizRound ? 'live-round-grid--quiz-answer' : ''}`}>
         <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
           <div className="mini-heading">
@@ -9385,7 +9434,7 @@ function QuizLiveStatus({ currentRound, revealIsReady }) {
           </article>
           <article className="quiz-status-card">
             <span>Scoring</span>
-            <strong>Manual</strong>
+            <strong>Speed</strong>
           </article>
         </div>
         <div className="quiz-timer-bar" aria-hidden="true">
@@ -9702,15 +9751,20 @@ function RoomRevealPlayerCard({
     const answer = currentRound?.answers?.[playerSeat] || {};
     const playerAnswerRaw = answer?.ownAnswer || '';
     const playerAnswer = formatRoundAnswerValue(playerAnswerRaw, currentRound?.roundType);
-    const finalResult = normalizeText(answer?.finalResult || answer?.originalSystemResult || (answer?.wasCorrect ? 'correct' : 'incorrect')) || 'incorrect';
+    const finalResult = getQuizAnswerFinalResult(answer, { includeSystemFallback: false });
     const wasCorrect = finalResult === 'correct';
+    const hasHostResult = Boolean(finalResult);
     const lockedPoints = Number(roundPenalty ?? answer?.quizPoints ?? answer?.pointsAwarded ?? 0);
     const lockedTimerValue = Number(answer?.timerValue || 0);
     const resultClass = quizRevealResolved
-      ? wasCorrect
+      ? !hasHostResult
+        ? 'room-reveal-player-card--pending'
+        : wasCorrect
         ? 'room-reveal-player-card--correct'
         : 'room-reveal-player-card--incorrect'
-      : wasCorrect
+      : !hasHostResult
+        ? 'room-reveal-player-card--quiz-flash-pending'
+        : wasCorrect
         ? 'room-reveal-player-card--quiz-flash-correct'
         : 'room-reveal-player-card--quiz-flash-incorrect';
     return (
@@ -9732,10 +9786,10 @@ function RoomRevealPlayerCard({
           <div className="room-reveal-answer-block room-reveal-answer-block--guess">
             <span>Result</span>
             <div className="room-reveal-answer-copy">
-              <strong>{quizRevealResolved ? (wasCorrect ? 'Correct' : 'Incorrect') : 'Revealing...'}</strong>
+              <strong>{quizRevealResolved ? (hasHostResult ? (wasCorrect ? 'Correct' : 'Incorrect') : 'Host check') : 'Revealing...'}</strong>
             </div>
-            <small className={`room-reveal-match room-reveal-match--${wasCorrect ? 'success' : 'warning'}`}>
-              {quizRevealResolved ? `Manual score +${formatScore(lockedPoints)}` : 'Result pending'}
+            <small className={`room-reveal-match room-reveal-match--${!hasHostResult ? 'neutral' : wasCorrect ? 'success' : 'warning'}`}>
+              {quizRevealResolved ? (hasHostResult ? `Speed score +${formatScore(lockedPoints)}` : `Worth +${formatScore(getQuizAnswerSpeedPoints(answer))} if correct`) : 'Result pending'}
             </small>
           </div>
         </div>
@@ -10073,6 +10127,7 @@ function RoomActiveFrameBase({
   onMarkReady,
   onRequestQuizOverride,
   onRespondQuizOverride,
+  onSetQuizAnswerResult,
   submissionState,
   revealIsReady,
   penaltyDraft,
@@ -10108,13 +10163,15 @@ function RoomActiveFrameBase({
   const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
   const penaltyPreview = useMemo(
     () => (
-      (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: isPutYourPointsGameMode(game?.gameMode || 'standard') }) : null)
+      isQuizGame
+        ? buildQuizRoundScoreMap(currentRound || {})
+        : (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: isPutYourPointsGameMode(game?.gameMode || 'standard') }) : null)
       || {
           jay: parseNumber(penaltyDraft?.jay, 0),
           kim: parseNumber(penaltyDraft?.kim, 0),
         }
     ),
-    [currentRound, game?.gameMode, penaltyDraft?.jay, penaltyDraft?.kim],
+    [currentRound, game?.gameMode, isQuizGame, penaltyDraft?.jay, penaltyDraft?.kim],
   );
   const previewRoundResult = useMemo(() => {
     if (!revealIsReady || !currentRound) return null;
@@ -10159,7 +10216,7 @@ function RoomActiveFrameBase({
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
   const viewerOverrideRequest = currentRound?.overrideRequests?.[currentPlayer] || null;
-  const viewerQuizResult = normalizeText(viewerAnswer?.finalResult || viewerAnswer?.originalSystemResult || (viewerAnswer?.wasCorrect ? 'correct' : 'incorrect'));
+  const viewerQuizResult = getQuizAnswerFinalResult(viewerAnswer, { includeSystemFallback: false });
   const quizRevealTotals = useMemo(
     () => ({
       jay: Number(game?.quizTotals?.jay || 0) + Number(penaltyPreview?.jay || 0),
@@ -10167,14 +10224,6 @@ function RoomActiveFrameBase({
     }),
     [game?.quizTotals?.jay, game?.quizTotals?.kim, penaltyPreview?.jay, penaltyPreview?.kim],
   );
-  const setQuizManualScore = (seatToScore = 'jay', value = '') => {
-    if (!setPenaltyDraft) return;
-    const normalizedSeat = seatToScore === 'kim' ? 'kim' : 'jay';
-    setPenaltyDraft({
-      jay: normalizedSeat === 'jay' ? value : (penaltyDraft?.jay ?? ''),
-      kim: normalizedSeat === 'kim' ? value : (penaltyDraft?.kim ?? ''),
-    });
-  };
   const trueFalseOutcome = useMemo(
     () => (isTrueFalseGame ? buildTrueFalseRoundOutcome(currentRound || {}) : null),
     [currentRound, isTrueFalseGame],
@@ -10191,6 +10240,7 @@ function RoomActiveFrameBase({
     () => (isPutYourPointsGame ? buildPutYourPointsRoundOutcome(currentRound || {}) : null),
     [currentRound, isPutYourPointsGame],
   );
+  const quizJudgementComplete = isQuizGame ? hasCompletedQuizJudgement(currentRound || {}) : false;
   const trueFalseSummaryLabel = !trueFalseOutcome
     ? ''
     : trueFalseOutcome.jayCorrect && trueFalseOutcome.kimCorrect
@@ -10238,7 +10288,7 @@ function RoomActiveFrameBase({
         {isThisOrThatGame ? <ThisOrThatLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
         {isMostLikelyGame ? <MostLikelyLiveStatus revealIsReady={revealIsReady} /> : null}
         {isPutYourPointsGame ? <PutYourPointsStakeTicker currentRound={currentRound} /> : null}
-        {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer ? (
+        {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer && viewerQuizResult ? (
           <div className="quiz-override-strip">
             <span className={`quiz-override-status ${viewerQuizResult === 'correct' ? 'is-correct' : 'is-incorrect'}`}>
               {viewerQuizResult === 'correct' ? 'System: Correct' : 'System: Incorrect'}
@@ -10425,13 +10475,9 @@ function RoomActiveFrameBase({
                     <span>Correct Answer</span>
                     <strong>{formatRoundAnswerValue(currentRound?.correctAnswer || currentRound?.normalizedCorrectAnswer || 'No answer provided', currentRound?.roundType)}</strong>
                     <p>
-                      {viewerLabel} {normalizeText(currentRound?.answers?.[currentPlayer]?.finalResult || currentRound?.answers?.[currentPlayer]?.originalSystemResult || (currentRound?.answers?.[currentPlayer]?.wasCorrect ? 'correct' : 'incorrect')) === 'correct'
-                        ? 'correct'
-                        : 'incorrect'}
+                      {viewerLabel} {getQuizAnswerFinalResult(currentRound?.answers?.[currentPlayer] || {}, { includeSystemFallback: false }) || 'pending'}
                       {' · '}
-                      {oppositeLabel} {normalizeText(currentRound?.answers?.[otherPlayer]?.finalResult || currentRound?.answers?.[otherPlayer]?.originalSystemResult || (currentRound?.answers?.[otherPlayer]?.wasCorrect ? 'correct' : 'incorrect')) === 'correct'
-                        ? 'correct'
-                        : 'incorrect'}
+                      {oppositeLabel} {getQuizAnswerFinalResult(currentRound?.answers?.[otherPlayer] || {}, { includeSystemFallback: false }) || 'pending'}
                     </p>
                     <small>
                       Quiz totals {viewerLabel} {formatScore(quizRevealTotals[currentPlayer])}
@@ -10439,22 +10485,44 @@ function RoomActiveFrameBase({
                       {oppositeLabel} {formatScore(quizRevealTotals[otherPlayer])}
                     </small>
                     {role === 'host' ? (
-                      <div className="quiz-manual-score-entry">
-                        <label className="field">
-                          <span>{viewerLabel} score</span>
-                          <input type="number" inputMode="decimal" step="any" value={penaltyDraft?.[currentPlayer] ?? ''} onChange={(event) => setQuizManualScore(currentPlayer, event.target.value)} placeholder="0" />
-                        </label>
-                        <label className="field">
-                          <span>{oppositeLabel} score</span>
-                          <input type="number" inputMode="decimal" step="any" value={penaltyDraft?.[otherPlayer] ?? ''} onChange={(event) => setQuizManualScore(otherPlayer, event.target.value)} placeholder="0" />
-                        </label>
-                        <Button className="primary-button compact" onClick={onNextQuestion} disabled={isBusy}>
+                      <div className="quiz-host-result-actions">
+                        {[currentPlayer, otherPlayer].map((playerSeat) => {
+                          const answer = currentRound?.answers?.[playerSeat] || {};
+                          const result = getQuizAnswerFinalResult(answer, { includeSystemFallback: false });
+                          const speedPoints = getQuizAnswerSpeedPoints(answer);
+                          const playerName = gameSeatDisplayName(game, playerSeat, currentRound);
+                          return (
+                            <article className="quiz-host-result-card" key={`quiz-host-result-${playerSeat}`}>
+                              <div>
+                                <strong>{playerName}</strong>
+                                <span>{answer?.ownAnswer ? `Worth +${formatScore(speedPoints)}` : 'No answer submitted'}</span>
+                              </div>
+                              <div className="button-row quiz-host-result-buttons">
+                                <Button
+                                  className={`ghost-button compact ${result === 'correct' ? 'is-on' : ''}`}
+                                  onClick={() => onSetQuizAnswerResult?.(playerSeat, 'correct')}
+                                  disabled={isBusy || !answer?.ownAnswer}
+                                >
+                                  Correct
+                                </Button>
+                                <Button
+                                  className={`ghost-button compact ${result === 'incorrect' ? 'is-on' : ''}`}
+                                  onClick={() => onSetQuizAnswerResult?.(playerSeat, 'incorrect')}
+                                  disabled={isBusy}
+                                >
+                                  Incorrect
+                                </Button>
+                              </div>
+                            </article>
+                          );
+                        })}
+                        <Button className="primary-button compact" onClick={onNextQuestion} disabled={isBusy || !quizJudgementComplete}>
                           Next Question
                         </Button>
                       </div>
                     ) : (
                       <div className="ready-gate-row ready-gate-row--reveal" role="status" aria-live="polite">
-                        <span className="ready-gate-copy">Waiting for the host to enter the quiz score and load the next question.</span>
+                        <span className="ready-gate-copy">Waiting for the host to mark the quiz answers and load the next question.</span>
                       </div>
                     )}
                   </>
@@ -14266,6 +14334,7 @@ function GameRoomView({
   onSetQuizWheelOptIn,
   onRequestQuizOverride,
   onRespondQuizOverride,
+  onSetQuizAnswerResult,
   quizWagerDraft,
   setQuizWagerDraft,
 }) {
@@ -14288,7 +14357,9 @@ function GameRoomView({
     : null;
   const currentGameMode = game?.gameMode || 'standard';
   const currentRoundPenaltyPreview = currentRound
-    ? buildAutoScoredRoundPenaltyMap(currentGameMode, currentRound, { useStoredPenalties: isPutYourPointsGameMode(currentGameMode) })
+    ? isQuizGameMode(currentGameMode)
+      ? buildQuizRoundScoreMap(currentRound)
+      : buildAutoScoredRoundPenaltyMap(currentGameMode, currentRound, { useStoredPenalties: isPutYourPointsGameMode(currentGameMode) })
       || {
         jay: parseNumber(penaltyDraft.jay || currentRound.penalties?.jay || 0, 0),
         kim: parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0),
@@ -14872,6 +14943,7 @@ function GameRoomView({
 	                  onMarkReady={onMarkReady}
 	                  onRequestQuizOverride={onRequestQuizOverride}
 	                  onRespondQuizOverride={onRespondQuizOverride}
+                    onSetQuizAnswerResult={onSetQuizAnswerResult}
                   submissionState={submissionState}
                   revealIsReady={revealIsReady}
                   penaltyDraft={penaltyDraft}
@@ -15216,6 +15288,7 @@ function GameRoomView({
                   onMarkReady={onMarkReady}
 	              onRequestQuizOverride={onRequestQuizOverride}
 	              onRespondQuizOverride={onRespondQuizOverride}
+                  onSetQuizAnswerResult={onSetQuizAnswerResult}
               submissionState={submissionState}
               revealIsReady={revealIsReady}
               penaltyDraft={penaltyDraft}
@@ -18161,14 +18234,17 @@ function ProductionApp() {
     seats.forEach((seat) => {
       const playerUid = round?.answers?.[seat]?.submittedBy || sourceGame?.seats?.[seat] || '';
       if (!playerUid) return;
+      const answer = round?.answers?.[seat] || {};
       const score = toScore(quizScores?.[seat] || 0);
       const quizAnswerId = `${sourceGame.id}-${roundQuestionId}-${playerUid}`;
       batch.set(
         doc(firestore, 'quizAnswers', quizAnswerId),
         {
+          finalResult: getQuizAnswerFinalResult(answer, { includeSystemFallback: false }) || 'incorrect',
+          wasCorrect: getQuizAnswerFinalResult(answer, { includeSystemFallback: false }) === 'correct',
           pointsAwarded: score,
-          manualScore: score,
-          scoringMode: 'manual',
+          speedPointsAvailable: getQuizAnswerSpeedPoints(answer),
+          scoringMode: 'timer-host',
           updatedAt: serverTimestamp(),
         },
         { merge: true },
@@ -18289,7 +18365,9 @@ function ProductionApp() {
     let nextKimLifetime = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
     const pendingRound = gameDoc.currentRound || null;
     const pendingRoundPenaltyMap = pendingRound
-      ? buildPendingRoundPenaltyMapForFinalize(gameMode, pendingRound, pendingRoundPenaltyOverride)
+      ? isQuizGame
+        ? buildQuizRoundScoreMap(pendingRound)
+        : buildPendingRoundPenaltyMapForFinalize(gameMode, pendingRound, pendingRoundPenaltyOverride)
       : null;
     const effectivePendingRound = pendingRound
       ? {
@@ -18605,7 +18683,9 @@ function ProductionApp() {
     const isQuizGame = isQuizGameMode(sourceGameMode);
     const pendingRound = sourceGame.currentRound || null;
     const pendingRoundPenaltyMap = pendingRound
-      ? buildPendingRoundPenaltyMapForFinalize(sourceGameMode, pendingRound, pendingRoundPenaltyOverride)
+      ? isQuizGame
+        ? buildQuizRoundScoreMap(pendingRound)
+        : buildPendingRoundPenaltyMapForFinalize(sourceGameMode, pendingRound, pendingRoundPenaltyOverride)
       : null;
     const alreadyArchivedCurrentRound = pendingRound
       ? sourceRounds.some((round) => round.id === pendingRound.id || (round.number === pendingRound.number && round.questionId === pendingRound.questionId))
@@ -21042,9 +21122,8 @@ function ProductionApp() {
       const shouldApprove = decision === 'approved';
       const gameRef = doc(firestore, 'games', game.id);
       const answer = game.currentRound.answers?.[normalizedSeat] || {};
-      const timerValue = Number(answer.timerValue || 0);
       const approvedCorrect = shouldApprove && requestedFinal === 'correct';
-      const nextPointsAwarded = approvedCorrect ? pointsFromTimerSeconds(timerValue) : 0;
+      const nextPointsAwarded = approvedCorrect ? getQuizAnswerSpeedPoints(answer) : 0;
       const nextFinal = shouldApprove ? requestedFinal : (request.originalFinalResult === 'correct' ? 'correct' : 'incorrect');
       await updateDoc(gameRef, {
         [`currentRound.overrideRequests.${normalizedSeat}`]: {
@@ -21083,6 +21162,118 @@ function ProductionApp() {
       }
       setNotice(shouldApprove ? 'Override approved.' : 'Override rejected.');
     }, 'Could not respond to override.');
+
+  const setQuizAnswerResult = async (seatToJudge = '', resultValue = '') =>
+    withBusy(async () => {
+      if (!game?.currentRound) throw new Error('No active quiz round.');
+      if ((game?.gameMode || 'standard') !== 'quiz') throw new Error('Quiz judging is only available in Quick Fire Quiz.');
+      const targetSeat = seatToJudge === 'kim' ? 'kim' : seatToJudge === 'jay' ? 'jay' : '';
+      if (!targetSeat) throw new Error('Choose Jay or Kim to judge.');
+      const finalResult = normalizeQuizResult(resultValue);
+      if (!finalResult) throw new Error('Choose Correct or Incorrect.');
+      const existingAnswer = game.currentRound.answers?.[targetSeat] || {};
+      if (finalResult === 'correct' && !normalizeText(existingAnswer?.ownAnswer || '')) {
+        throw new Error('Cannot mark a blank answer as correct.');
+      }
+      const speedPoints = getQuizAnswerSpeedPoints(existingAnswer);
+      const pointsAwarded = finalResult === 'correct' ? speedPoints : 0;
+      const nowIso = new Date().toISOString();
+      const hostSeat = seatForUid(game, user?.uid || '') || inferSeatFromUser(user, profile) || '';
+      const roundKeyAtStart = stableRoundIdentityKey(game.currentRound || {});
+      const submittedBy = existingAnswer.submittedBy || game?.seats?.[targetSeat] || fixedPlayerUids[targetSeat] || '';
+      const nextAnswerPatch = {
+        finalResult,
+        wasCorrect: finalResult === 'correct',
+        pointsAwarded,
+        scoringMode: 'timer-host',
+        hostJudgedAt: nowIso,
+        hostJudgedBy: user?.uid || '',
+        hostJudgedBySeat: hostSeat,
+        overrideStatus: existingAnswer.overrideStatus && existingAnswer.overrideStatus !== 'none'
+          ? existingAnswer.overrideStatus
+          : 'host',
+      };
+      const applyLocalQuizResult = () => {
+        setGame((current) => (
+          current?.currentRound
+          && (current?.gameMode || 'standard') === 'quiz'
+          && stableRoundIdentityKey(current.currentRound || {}) === roundKeyAtStart
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  answers: {
+                    ...(current.currentRound.answers || {}),
+                    [targetSeat]: {
+                      ...(current.currentRound.answers?.[targetSeat] || {}),
+                      ...nextAnswerPatch,
+                    },
+                  },
+                  updatedAt: nowIso,
+                },
+                updatedAt: nowIso,
+              }
+            : current
+        ));
+      };
+
+      if (isCurrentLocalTestGame) {
+        applyLocalQuizResult();
+        return true;
+      }
+
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) throw new Error('Room is missing.');
+      applyLocalQuizResult();
+      await updateDoc(gameRef, {
+        [`currentRound.answers.${targetSeat}.finalResult`]: finalResult,
+        [`currentRound.answers.${targetSeat}.wasCorrect`]: finalResult === 'correct',
+        [`currentRound.answers.${targetSeat}.pointsAwarded`]: pointsAwarded,
+        [`currentRound.answers.${targetSeat}.scoringMode`]: 'timer-host',
+        [`currentRound.answers.${targetSeat}.hostJudgedAt`]: serverTimestamp(),
+        [`currentRound.answers.${targetSeat}.hostJudgedBy`]: user?.uid || '',
+        [`currentRound.answers.${targetSeat}.hostJudgedBySeat`]: hostSeat,
+        [`currentRound.answers.${targetSeat}.overrideStatus`]: nextAnswerPatch.overrideStatus,
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const roundQuestionId = normalizeText(game.currentRound?.questionId || '') || sanitizeNoteKey(game.currentRound?.question || '');
+      if (roundQuestionId && submittedBy) {
+        const quizAnswerId = `${game.id}-${roundQuestionId}-${submittedBy}`;
+        await setDoc(
+          doc(firestore, 'quizAnswers', quizAnswerId),
+          {
+            quizAnswerId,
+            pairId: buildPairKey(),
+            quizSessionId: game.id,
+            gameId: game.id,
+            questionId: normalizeText(game.currentRound?.questionId || ''),
+            questionText: normalizeText(game.currentRound?.question || ''),
+            category: normalizeText(game.currentRound?.category || ''),
+            questionType: normalizeText(game.currentRound?.roundType || ''),
+            correctAnswer: normalizeText(game.currentRound?.correctAnswer || ''),
+            playerAnswer: normalizeText(existingAnswer?.ownAnswer || ''),
+            playerId: submittedBy,
+            playerSeat: targetSeat,
+            finalResult,
+            wasCorrect: finalResult === 'correct',
+            pointsAwarded,
+            speedPointsAvailable: speedPoints,
+            timerValue: Number(existingAnswer?.timerValue || 0),
+            answerTime: Number(existingAnswer?.answerTimeMs ?? existingAnswer?.answerTime ?? 0),
+            answerTimeMs: Number(existingAnswer?.answerTimeMs ?? existingAnswer?.answerTime ?? 0),
+            scoringMode: 'timer-host',
+            overrideStatus: nextAnswerPatch.overrideStatus,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        ).catch((error) => {
+          console.warn('Quiz answer judgement analytics write failed.', error);
+        });
+      }
+      return true;
+    }, 'Could not save the quiz result.');
 
   const createGame = async (options = {}) =>
     withBusy(async () => {
@@ -22970,7 +23161,7 @@ function ProductionApp() {
         : QUIZ_TIMER_SECONDS * 1000;
       const timerSecondsLeft = Math.max(0, Math.ceil(timerMsLeft / 1000));
       const quizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, serialisedOwnAnswer.trim()) : false;
-      const quizPointsAwarded = isQuizGame && quizWasCorrect ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
+      const quizSpeedPoints = isQuizGame ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
       const baseAnswerPayload = {
         ownAnswer: serialisedOwnAnswer.trim(),
         guessedOther: serialisedGuessedOther.trim(),
@@ -22979,12 +23170,15 @@ function ProductionApp() {
         submittedAt: submittedAtIso,
         ...(isQuizGame
           ? {
-              wasCorrect: quizWasCorrect,
+              wasCorrect: false,
+              originalSystemWasCorrect: quizWasCorrect,
               originalSystemResult: quizWasCorrect ? 'correct' : 'incorrect',
-              finalResult: quizWasCorrect ? 'correct' : 'incorrect',
+              finalResult: 'pending',
               answerTimeMs: Math.max(0, (QUIZ_TIMER_SECONDS * 1000) - timerMsLeft),
               timerValue: timerSecondsLeft,
-              pointsAwarded: quizPointsAwarded,
+              speedPointsAvailable: quizSpeedPoints,
+              pointsAwarded: 0,
+              scoringMode: 'timer-host-pending',
               overrideStatus: 'none',
             }
           : {}),
@@ -23005,7 +23199,7 @@ function ProductionApp() {
                 ? 'Item 1\nItem 2\nItem 3'
                 : choiceOptions[0] || 'Test mode response';
           const autoQuizWasCorrect = isQuizGame ? evaluateQuizAnswer(game.currentRound, autoOwnAnswer) : false;
-          const autoQuizPoints = isQuizGame && autoQuizWasCorrect ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
+          const autoQuizSpeedPoints = isQuizGame ? pointsFromTimerMilliseconds(timerMsLeft) : 0;
           nextAnswers[otherSeat] = {
             ownAnswer: autoOwnAnswer,
             guessedOther: isQuizGame ? '' : serialisedOwnAnswer.trim() || serialisedGuessedOther.trim() || choiceOptions[1] || choiceOptions[0] || 'Test guess',
@@ -23015,12 +23209,15 @@ function ProductionApp() {
             autoSubmitted: true,
             ...(isQuizGame
               ? {
-                  wasCorrect: autoQuizWasCorrect,
+                  wasCorrect: false,
+                  originalSystemWasCorrect: autoQuizWasCorrect,
                   originalSystemResult: autoQuizWasCorrect ? 'correct' : 'incorrect',
-                  finalResult: autoQuizWasCorrect ? 'correct' : 'incorrect',
+                  finalResult: 'pending',
                   answerTimeMs: Math.max(0, (QUIZ_TIMER_SECONDS * 1000) - timerMsLeft),
                   timerValue: timerSecondsLeft,
-                  pointsAwarded: autoQuizPoints,
+                  speedPointsAvailable: autoQuizSpeedPoints,
+                  pointsAwarded: 0,
+                  scoringMode: 'timer-host-pending',
                   overrideStatus: 'none',
                 }
               : {}),
@@ -23121,13 +23318,16 @@ function ProductionApp() {
             playerAnswer: serialisedOwnAnswer.trim(),
             playerId: user.uid,
             playerSeat: currentSeat,
-            wasCorrect: quizWasCorrect,
+            wasCorrect: false,
+            originalSystemWasCorrect: quizWasCorrect,
             originalSystemResult: quizWasCorrect ? 'correct' : 'incorrect',
-            finalResult: quizWasCorrect ? 'correct' : 'incorrect',
+            finalResult: 'pending',
             answerTime: Math.max(0, (QUIZ_TIMER_SECONDS * 1000) - timerMsLeft),
             answerTimeMs: Math.max(0, (QUIZ_TIMER_SECONDS * 1000) - timerMsLeft),
-            pointsAwarded: quizPointsAwarded,
+            speedPointsAvailable: quizSpeedPoints,
+            pointsAwarded: 0,
             timerValue: timerSecondsLeft,
+            scoringMode: 'timer-host-pending',
             overrideStatus: 'none',
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -23547,6 +23747,9 @@ function ProductionApp() {
       if (game.currentRound && isPutYourPointsGame && !hasCompletedPutYourPointsJudgement(game.currentRound)) {
         throw new Error('Mark Match or Miss for both players before loading the next question.');
       }
+      if (game.currentRound && isQuizGame && !hasCompletedQuizJudgement(game.currentRound)) {
+        throw new Error('Mark Correct or Incorrect for both players before loading the next question.');
+      }
       if (isCurrentLocalTestGame) {
         const completedRoundsBefore = Math.max(Number(game.roundsPlayed || 0), rounds.length);
         const totalQuestionGoal = getGameQuestionGoal(game, rounds);
@@ -23565,7 +23768,9 @@ function ProductionApp() {
         let savedCurrentRound = false;
 
         if (game.currentRound) {
-          const penalties = buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
+          const penalties = isQuizGame
+            ? buildQuizRoundScoreMap(game.currentRound)
+            : buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
           const quizPoints = isQuizGame
             ? penalties
             : {
@@ -23688,7 +23893,9 @@ function ProductionApp() {
       let savedCurrentRound = false;
 
       if (game.currentRound) {
-        const penalties = buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
+        const penalties = isQuizGame
+          ? buildQuizRoundScoreMap(game.currentRound)
+          : buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
         const quizPoints = isQuizGame
           ? penalties
           : {
@@ -23727,7 +23934,7 @@ function ProductionApp() {
         await setDoc(doc(firestore, 'games', gameId, 'rounds', roundResult.id), roundResult);
         if (isQuizGame) {
           await syncQuizManualScoresForRound(game, game.currentRound, quizPoints).catch((error) => {
-            console.warn('Quiz manual score analytics write failed.', error);
+            console.warn('Quiz timer score analytics write failed.', error);
           });
         }
         totalsAfterSave = getRoundPenaltyTotals(roundResult);
@@ -24979,6 +25186,7 @@ function ProductionApp() {
       onSetQuizWheelOptIn={setQuizWheelOptIn}
       onRequestQuizOverride={requestQuizOverride}
       onRespondQuizOverride={respondQuizOverride}
+      onSetQuizAnswerResult={setQuizAnswerResult}
       quizWagerDraft={quizWagerDraft}
       setQuizWagerDraft={setQuizWagerDraft}
     />
