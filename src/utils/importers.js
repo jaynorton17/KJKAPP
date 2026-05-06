@@ -45,10 +45,13 @@ const FIELD_ALIASES = {
 
 const GOOGLE_SHEET_DIRECT_ID = /^[A-Za-z0-9-_]{20,}$/;
 const GOOGLE_SHEET_GID_REGEX = /[?&#]gid=([0-9]+)/g;
+const GOOGLE_SHEET_IMPORT_ROW_LIMIT = 5000;
 const OPTION_FIELD_ALIASES = new Set(['options', 'choices', 'answeroptions', 'rankoptions', 'orderoptions', 'optionlist']);
 const OPTION_INDEX_FIELD_REGEX = /^(option|choice|item|rankitem|orderitem|answeroption|preferenceoption|thisorthatoption|multi|multioption|multianswer)([0-9]+|[a-z])$/;
 
 const normalizeHeader = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const limitGoogleSheetRows = (rows = []) => rows.slice(0, GOOGLE_SHEET_IMPORT_ROW_LIMIT);
 
 const mapRow = (row) => {
   const mapped = {};
@@ -410,7 +413,7 @@ export const parseGoogleSheetImport = ({
   sourceLabel = '',
 }) => {
   const parsed = parseCsvRows(rawText);
-  const rows = parsed.rows.map((row) => enrichMappedRow(row));
+  const rows = limitGoogleSheetRows(parsed.rows).map((row) => enrichMappedRow(row));
   const seenQuestions = [];
   const imports = [];
   const updates = [];
@@ -541,7 +544,7 @@ export const parseGoogleSheetPutYourPointsImport = ({
   sourceLabel = '',
 }) => {
   const parsed = parseCsvRows(rawText);
-  const rows = parsed.rows.map((row) => normalizePutYourPointsSheetRow(enrichMappedRow(row)));
+  const rows = limitGoogleSheetRows(parsed.rows).map((row) => normalizePutYourPointsSheetRow(enrichMappedRow(row)));
   const seenQuestions = [];
   const imports = [];
   const updates = [];
@@ -707,6 +710,7 @@ export const parseGoogleSheetQuizImport = ({
   sourceLabel = '',
 }) => {
   const parsed = parseCsvRows(rawText);
+  const rows = limitGoogleSheetRows(parsed.rows);
   const seenQuestions = [];
   const imports = [];
   const updates = [];
@@ -714,7 +718,7 @@ export const parseGoogleSheetQuizImport = ({
   let invalid = 0;
   let skipped = 0;
 
-  const preview = parsed.rows.map((rawRow, index) => {
+  const preview = rows.map((rawRow, index) => {
     const row = Object.fromEntries(Object.entries(rawRow).map(([key, value]) => [normalizeHeader(key), value]));
     const questionText = normalizeText(row.question || '');
     const category = normalizeText(row.category || '') || 'Uncategorised';
@@ -796,7 +800,7 @@ export const parseGoogleSheetQuizImport = ({
     imports,
     updates,
     summary: {
-      total: parsed.rows.length,
+      total: rows.length,
       imported: imports.length,
       updated: updates.length,
       duplicates,
@@ -814,7 +818,7 @@ export const parseGoogleSheetTrueFalseImport = ({
   sourceLabel = '',
 }) => {
   const parsed = parseCsvRows(rawText);
-  const rows = parsed.rows.map((row) => enrichMappedRow(row));
+  const rows = limitGoogleSheetRows(parsed.rows).map((row) => enrichMappedRow(row));
   const seenQuestions = [];
   const imports = [];
   const updates = [];
@@ -948,7 +952,7 @@ export const parseGoogleSheetThisOrThatImport = ({
   sourceLabel = '',
 }) => {
   const parsed = parseCsvRows(rawText);
-  const rows = parsed.rows.map((row) => enrichMappedRow(row));
+  const rows = limitGoogleSheetRows(parsed.rows).map((row) => enrichMappedRow(row));
   const seenQuestions = [];
   const imports = [];
   const updates = [];
@@ -1082,7 +1086,7 @@ export const parseGoogleSheetMostLikelyImport = ({
   sourceLabel = '',
 }) => {
   const parsed = parseCsvRows(rawText);
-  const rows = parsed.rows.map((row) => enrichMappedRow(row));
+  const rows = limitGoogleSheetRows(parsed.rows).map((row) => enrichMappedRow(row));
   const seenQuestions = [];
   const imports = [];
   const updates = [];
