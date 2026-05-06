@@ -180,9 +180,19 @@ const hasQuestionTemplateChanged = (existingQuestion, nextQuestion) => {
   return comparable(existingQuestion) !== comparable(nextQuestion);
 };
 
-const findSheetQuestionMatch = (questions = [], candidateQuestion, { allowTypeMigration = false } = {}) => {
-  const exactMatch = findMatchingQuestion(questions, candidateQuestion);
-  if (exactMatch || !allowTypeMigration) return exactMatch;
+const findSheetQuestionMatch = (
+  questions = [],
+  candidateQuestion,
+  { allowTypeMigration = false, allowTemplateMatch = true } = {},
+) => {
+  const candidateId = normalizeText(candidateQuestion?.id).toLowerCase();
+  const exactIdMatch = candidateId
+    ? questions.find((question) => normalizeText(question?.id).toLowerCase() === candidateId) || null
+    : null;
+  if (exactIdMatch || !allowTemplateMatch) return exactIdMatch;
+
+  const exactTemplateMatch = findMatchingQuestion(questions, candidateQuestion);
+  if (exactTemplateMatch || !allowTypeMigration) return exactTemplateMatch;
   const candidateCategoryKey = normalizeQuestionCategoryKey(candidateQuestion?.question, candidateQuestion?.category);
   if (!candidateCategoryKey) return null;
   return questions.find((question) => {
@@ -190,6 +200,26 @@ const findSheetQuestionMatch = (questions = [], candidateQuestion, { allowTypeMi
     if (normalizeQuestionCategoryKey(question?.question, question?.category) !== candidateCategoryKey) return false;
     return Boolean(question?.importedFromGoogleSheet || question?.source === 'googleSheet' || question?.source === 'googleSheetQuiz');
   }) || null;
+};
+
+const sanitizeQuestionIdPart = (value = '') =>
+  normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const createGoogleSheetQuestionTemplate = (input = {}, { sourceLabel = '', index = 0, bankType = '' } = {}) => {
+  const question = createQuestionTemplate(input);
+  const normalizedBankType = normalizeQuestionBankType(bankType || question.bankType);
+  const rowNumber = index + 2;
+  const sourcePart = sanitizeQuestionIdPart(sourceLabel || question.sourceLabel || question.source || 'sheet').slice(0, 180) || 'sheet';
+  const rowKey = `${sourceLabel || question.sourceLabel || question.source || 'sheet'}:row:${rowNumber}`;
+  return {
+    ...question,
+    id: `question-${normalizedBankType}-${sourcePart}-row-${rowNumber}`,
+    sheetRowNumber: rowNumber,
+    sheetRowKey: rowKey,
+  };
 };
 
 export const parseGoogleSheetReference = (value) => {
@@ -397,7 +427,7 @@ export const parseGoogleSheetImport = ({
 
     if (!rawQuestion) errors.push('Missing question text');
 
-    const question = createQuestionTemplate({
+    const question = createGoogleSheetQuestionTemplate({
       ...row,
       category: rawCategory,
       roundType: rawType,
@@ -406,7 +436,7 @@ export const parseGoogleSheetImport = ({
       addedBy: row.addedBy,
       importedFromGoogleSheet: true,
       importDate: importedAt,
-    });
+    }, { sourceLabel, index, bankType: 'game' });
 
     if (errors.length) {
       invalid += 1;
@@ -428,19 +458,12 @@ export const parseGoogleSheetImport = ({
       };
     }
 
-    const duplicateImport = seenQuestions.some((seenQuestion) => matchesQuestionTemplate(seenQuestion, question));
-    if (duplicateImport) {
-      duplicates += 1;
-      return {
-        index,
-        question,
-        errors,
-        status: 'duplicate',
-      };
-    }
     seenQuestions.push(question);
 
-    const existingMatch = findSheetQuestionMatch(existingQuestions, question, { allowTypeMigration: overwriteExisting });
+    const existingMatch = findSheetQuestionMatch(existingQuestions, question, {
+      allowTypeMigration: overwriteExisting,
+      allowTemplateMatch: false,
+    });
     if (!existingMatch) {
       imports.push(question);
       return {
@@ -535,7 +558,7 @@ export const parseGoogleSheetPutYourPointsImport = ({
 
     if (!rawQuestion) errors.push('Missing question text');
 
-    const question = createQuestionTemplate({
+    const question = createGoogleSheetQuestionTemplate({
       ...row,
       category: rawCategory,
       roundType: rawType,
@@ -545,7 +568,7 @@ export const parseGoogleSheetPutYourPointsImport = ({
       importedFromGoogleSheet: true,
       importDate: importedAt,
       bankType: 'putYourPointsGame',
-    });
+    }, { sourceLabel, index, bankType: 'putYourPointsGame' });
 
     if (errors.length) {
       invalid += 1;
@@ -567,22 +590,12 @@ export const parseGoogleSheetPutYourPointsImport = ({
       };
     }
 
-    const duplicateImport = seenQuestions.some((seenQuestion) => matchesQuestionTemplate(seenQuestion, question));
-    if (duplicateImport) {
-      duplicates += 1;
-      return {
-        index,
-        question,
-        errors,
-        status: 'duplicate',
-      };
-    }
     seenQuestions.push(question);
 
     const existingMatch = findSheetQuestionMatch(
       existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'putYourPointsGame'),
       question,
-      { allowTypeMigration: overwriteExisting },
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
     );
     if (!existingMatch) {
       imports.push(question);
@@ -719,7 +732,7 @@ export const parseGoogleSheetQuizImport = ({
     if (!correctAnswer) errors.push('Missing correct answer');
     if (roundType === 'multipleChoice' && options.length < 2) errors.push('Multiple choice needs at least 2 options');
 
-    const question = createQuestionTemplate({
+    const question = createGoogleSheetQuestionTemplate({
       ...row,
       question: questionText,
       category,
@@ -734,21 +747,19 @@ export const parseGoogleSheetQuizImport = ({
       bankType: 'quiz',
       correctAnswer,
       normalizedCorrectAnswer: normalizeLooseAnswer(correctAnswer),
-    });
+    }, { sourceLabel, index, bankType: 'quiz' });
 
     if (errors.length) {
       invalid += 1;
       return { index, question, errors, status: 'invalid' };
     }
 
-    const duplicateImport = seenQuestions.some((entry) => matchesQuestionTemplate(entry, question));
-    if (duplicateImport) {
-      duplicates += 1;
-      return { index, question, errors, status: 'duplicate' };
-    }
     seenQuestions.push(question);
 
-    const existingMatch = findSheetQuestionMatch(existingQuestions, question, { allowTypeMigration: overwriteExisting });
+    const existingMatch = findSheetQuestionMatch(existingQuestions, question, {
+      allowTypeMigration: overwriteExisting,
+      allowTemplateMatch: false,
+    });
     if (!existingMatch) {
       imports.push(question);
       return { index, question, errors, status: 'import' };
@@ -819,7 +830,7 @@ export const parseGoogleSheetTrueFalseImport = ({
 
     if (!rawQuestion) errors.push('Missing question text');
 
-    const question = createQuestionTemplate({
+    const question = createGoogleSheetQuestionTemplate({
       ...row,
       category: rawCategory,
       roundType: 'trueFalse',
@@ -831,7 +842,7 @@ export const parseGoogleSheetTrueFalseImport = ({
       importedFromGoogleSheet: true,
       importDate: importedAt,
       bankType: 'trueFalseGame',
-    });
+    }, { sourceLabel, index, bankType: 'trueFalseGame' });
 
     if (errors.length) {
       invalid += 1;
@@ -853,22 +864,12 @@ export const parseGoogleSheetTrueFalseImport = ({
       };
     }
 
-    const duplicateImport = seenQuestions.some((seenQuestion) => matchesQuestionTemplate(seenQuestion, question));
-    if (duplicateImport) {
-      duplicates += 1;
-      return {
-        index,
-        question,
-        errors,
-        status: 'duplicate',
-      };
-    }
     seenQuestions.push(question);
 
     const existingMatch = findSheetQuestionMatch(
       existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'trueFalseGame'),
       question,
-      { allowTypeMigration: overwriteExisting },
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
     );
     if (!existingMatch) {
       imports.push(question);
@@ -963,7 +964,7 @@ export const parseGoogleSheetThisOrThatImport = ({
 
     if (!rawQuestion) errors.push('Missing question text');
 
-    const question = createQuestionTemplate({
+    const question = createGoogleSheetQuestionTemplate({
       ...row,
       category: rawCategory,
       roundType: 'preference',
@@ -975,7 +976,7 @@ export const parseGoogleSheetThisOrThatImport = ({
       importedFromGoogleSheet: true,
       importDate: importedAt,
       bankType: 'thisOrThatGame',
-    });
+    }, { sourceLabel, index, bankType: 'thisOrThatGame' });
 
     if (errors.length) {
       invalid += 1;
@@ -997,22 +998,12 @@ export const parseGoogleSheetThisOrThatImport = ({
       };
     }
 
-    const duplicateImport = seenQuestions.some((seenQuestion) => matchesQuestionTemplate(seenQuestion, question));
-    if (duplicateImport) {
-      duplicates += 1;
-      return {
-        index,
-        question,
-        errors,
-        status: 'duplicate',
-      };
-    }
     seenQuestions.push(question);
 
     const existingMatch = findSheetQuestionMatch(
       existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'thisOrThatGame'),
       question,
-      { allowTypeMigration: overwriteExisting },
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
     );
     if (!existingMatch) {
       imports.push(question);
@@ -1107,7 +1098,7 @@ export const parseGoogleSheetMostLikelyImport = ({
 
     if (!rawQuestion) errors.push('Missing question text');
 
-    const question = createQuestionTemplate({
+    const question = createGoogleSheetQuestionTemplate({
       ...row,
       category: rawCategory,
       roundType: 'multipleChoice',
@@ -1120,7 +1111,7 @@ export const parseGoogleSheetMostLikelyImport = ({
       importedFromGoogleSheet: true,
       importDate: importedAt,
       bankType: 'mostLikelyGame',
-    });
+    }, { sourceLabel, index, bankType: 'mostLikelyGame' });
 
     if (errors.length) {
       invalid += 1;
@@ -1142,22 +1133,12 @@ export const parseGoogleSheetMostLikelyImport = ({
       };
     }
 
-    const duplicateImport = seenQuestions.some((seenQuestion) => matchesQuestionTemplate(seenQuestion, question));
-    if (duplicateImport) {
-      duplicates += 1;
-      return {
-        index,
-        question,
-        errors,
-        status: 'duplicate',
-      };
-    }
     seenQuestions.push(question);
 
     const existingMatch = findSheetQuestionMatch(
       existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'mostLikelyGame'),
       question,
-      { allowTypeMigration: overwriteExisting },
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
     );
     if (!existingMatch) {
       imports.push(question);

@@ -169,9 +169,9 @@ const QUESTION_BANK_SYNC_TARGETS = [
   },
   {
     bankType: PUT_YOUR_POINTS_GAME_MODE,
-    gameName: 'Put Your Money Where Your Mouth Is',
-    label: 'Put Your Money Where Your Mouth Is Bank',
-    importLabel: 'Put Your Money Questions',
+    gameName: 'Put Your Points Where Your Mouth Is',
+    label: 'Put Your Points Where Your Mouth Is Bank',
+    importLabel: 'Put Your Points Questions',
     sheetName: 'Put Your Money Where Your Mouth Is',
   },
   {
@@ -3361,6 +3361,8 @@ const normalizeStoredQuestion = (raw = {}, fallbackId = '') => {
     retiredFromSheet: Boolean(raw?.retiredFromSheet),
     retiredFromSheetAt: isValidDateString(raw?.retiredFromSheetAt) ? raw.retiredFromSheetAt : null,
     retiredReason: normalizeText(raw?.retiredReason || ''),
+    sheetRowNumber: Number.parseInt(raw?.sheetRowNumber || 0, 10) || null,
+    sheetRowKey: normalizeText(raw?.sheetRowKey || ''),
   };
 };
 
