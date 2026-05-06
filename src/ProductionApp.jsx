@@ -3749,12 +3749,36 @@ const isJoinableGameSnapshot = (data = {}) => {
     && !data.endedAt;
 };
 
+const hasObjectFields = (value) =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length);
+
+const mergeRoomIdentitySnapshot = (currentGame = {}, incomingGame = {}) => {
+  const currentSeats = hasObjectFields(currentGame?.seats) ? currentGame.seats : {};
+  const incomingSeats = hasObjectFields(incomingGame?.seats) ? incomingGame.seats : {};
+  const currentProfiles = hasObjectFields(currentGame?.playerProfiles) ? currentGame.playerProfiles : {};
+  const incomingProfiles = hasObjectFields(incomingGame?.playerProfiles) ? incomingGame.playerProfiles : {};
+  return {
+    ...incomingGame,
+    hostUid: incomingGame?.hostUid || currentGame?.hostUid || '',
+    hostDisplayName: incomingGame?.hostDisplayName || currentGame?.hostDisplayName || '',
+    hostPhotoURL: incomingGame?.hostPhotoURL || currentGame?.hostPhotoURL || '',
+    seats: hasObjectFields(incomingSeats) ? { ...currentSeats, ...incomingSeats } : currentSeats,
+    playerUids: Array.isArray(incomingGame?.playerUids) && incomingGame.playerUids.length
+      ? incomingGame.playerUids
+      : (Array.isArray(currentGame?.playerUids) ? currentGame.playerUids : []),
+    playerProfiles: hasObjectFields(incomingProfiles) ? { ...currentProfiles, ...incomingProfiles } : currentProfiles,
+    pairId: incomingGame?.pairId || currentGame?.pairId || '',
+    gameMode: incomingGame?.gameMode || currentGame?.gameMode || 'standard',
+    questionBankType: incomingGame?.questionBankType || currentGame?.questionBankType || getQuestionBankTypeForGameMode(incomingGame?.gameMode || currentGame?.gameMode || 'standard'),
+  };
+};
+
 const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
   if (currentGame?.id === incomingGame?.id && currentGame?.currentRound && !incomingGame?.currentRound) {
     const incomingStatus = incomingGame?.status || 'active';
     if (!COMPLETED_GAME_STATUSES.includes(incomingStatus) && !incomingGame?.endedAt) {
       return {
-        ...incomingGame,
+        ...mergeRoomIdentitySnapshot(currentGame, incomingGame),
         currentRound: currentGame.currentRound,
       };
     }
@@ -3764,7 +3788,7 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
       const preserveCurrentAgreement = shouldPreserveCurrentQuizAgreement(currentGame, incomingGame);
       const isHoldemRoom = isHoldemGameMode(incomingGame?.gameMode || currentGame?.gameMode || 'standard');
       const mergedGame = {
-        ...incomingGame,
+        ...mergeRoomIdentitySnapshot(currentGame, incomingGame),
         ...(isHoldemRoom
           ? {
               holdemState: mergeHoldemSnapshotState(currentGame?.holdemState || null, incomingGame?.holdemState || null),
@@ -3881,7 +3905,7 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     answers: nextAnswers,
   };
   const mergedGame = {
-    ...incomingGame,
+    ...mergeRoomIdentitySnapshot(currentGame, incomingGame),
     currentRound: stableRoundFields
       ? currentGame.currentRound
       : mergedRound,
@@ -16103,7 +16127,9 @@ function ProductionApp() {
     }
   }, []);
 
-  const currentUserRole = roleForUid(game, user?.uid);
+  const currentUserRole = roleForUid(game, user?.uid)
+    || (game?.hostUid && game.hostUid === user?.uid ? 'host' : null)
+    || (user?.uid && Array.isArray(game?.playerUids) && game.playerUids.includes(user.uid) ? 'player' : null);
   const currentSeat = seatForUid(game, user?.uid)
     || (game?.playerProfiles?.[user?.uid]?.seat === 'kim' ? 'kim' : game?.playerProfiles?.[user?.uid]?.seat === 'jay' ? 'jay' : null)
     || inferSeatFromUser(user, profile)
@@ -20762,7 +20788,9 @@ function ProductionApp() {
           warning = queueResult.warning;
           actualCount = queueResult.actualCount;
           if (!queue.length) {
-            throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
+            throw new Error(isPutYourPointsGame
+              ? 'No Put Your Points questions are available. Add questions to the Put Your Money Where Your Mouth Is sheet, then sync the Put Your Points bank.'
+              : selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
             if (actualCount < requestedQuestionCount) {
               if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame) {
@@ -20929,9 +20957,6 @@ function ProductionApp() {
       autoResumedGameIdRef.current = '';
       leavePendingGameRef.current = '';
       resetRoomLoadState();
-      setGame(optimisticOpeningGameState);
-      setRounds([]);
-      setChatMessages([]);
       setNotice(`Opening ${effectiveGameName || 'new game'}…`);
       let roomCreated = false;
 
@@ -20952,7 +20977,9 @@ function ProductionApp() {
           warning = queueResult.warning;
           actualCount = queueResult.actualCount;
           if (!queue.length) {
-            throw new Error(selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
+            throw new Error(isPutYourPointsGame
+              ? 'No Put Your Points questions are available. Add questions to the Put Your Money Where Your Mouth Is sheet, then sync the Put Your Points bank.'
+              : selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
           if (actualCount < requestedQuestionCount) {
             if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame) {
@@ -21080,9 +21107,9 @@ function ProductionApp() {
             { merge: true },
           );
         }
-        armRoomLoadTimeout(gameRef.id, 'opening game');
         await batch.commit();
         roomCreated = true;
+        armRoomLoadTimeout(gameRef.id, 'opening game');
         setGame(createdGameState);
         setRounds([]);
         setChatMessages([]);
