@@ -1120,6 +1120,46 @@ const inferChoiceOptions = (round = {}) => {
     options: round?.multipleChoiceOptions || [],
   });
 };
+
+const normalizePlayerChoiceKey = (value = '') =>
+  String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const getPlayerChoiceDisplayNames = (game = null, round = null) => ({
+  jay: gameSeatDisplayName(game, 'jay', round),
+  kim: gameSeatDisplayName(game, 'kim', round),
+});
+
+const shouldUseRoomPlayerNamesForChoices = (options = [], round = {}, game = null, isPutYourPointsRound = false) => {
+  const isPutYourPointsContext =
+    isPutYourPointsRound
+    || isPutYourPointsGameMode(game?.gameMode || 'standard')
+    || normalizeQuestionBankType(round?.bankType) === PUT_YOUR_POINTS_GAME_MODE;
+  if (!isPutYourPointsContext) return false;
+  const optionKeys = options.map(normalizePlayerChoiceKey);
+  return optionKeys.includes('player1')
+    || optionKeys.includes('player2')
+    || /who is (more|most) likely/i.test(normalizeText(round?.question || ''))
+    || (optionKeys.includes('jay') && optionKeys.includes('kim') && (optionKeys.includes('both') || optionKeys.includes('neither')));
+};
+
+const resolvePlayerChoiceLabel = (value = '', playerNames = {}) => {
+  const key = normalizePlayerChoiceKey(value);
+  if (key === 'player1' || key === 'p1' || key === 'jay') return playerNames.jay || 'Jay';
+  if (key === 'player2' || key === 'p2' || key === 'kim') return playerNames.kim || 'Kim';
+  return value;
+};
+
+const resolvePlayerChoiceOptionsForRound = (options = [], game = null, round = {}, { isPutYourPointsRound = false } = {}) => {
+  if (!shouldUseRoomPlayerNamesForChoices(options, round, game, isPutYourPointsRound)) return options;
+  const playerNames = getPlayerChoiceDisplayNames(game, round);
+  return options.map((option) => resolvePlayerChoiceLabel(option, playerNames));
+};
+
+const resolvePlayerChoiceAnswerForRound = (value = '', game = null, round = {}, { isPutYourPointsRound = false } = {}) => {
+  const options = inferChoiceOptions(round);
+  if (!shouldUseRoomPlayerNamesForChoices(options, round, game, isPutYourPointsRound)) return value;
+  return resolvePlayerChoiceLabel(value, getPlayerChoiceDisplayNames(game, round));
+};
 const isThisOrThatQuestionCompatible = (question = {}) =>
   getThisOrThatOptions(question).length >= 2;
 
@@ -8266,6 +8306,7 @@ function PutYourPointsHostDesk({ currentRound, onSetResult, onNextQuestion, onPa
 }
 
 function QuestionAnswerEntryBase({
+  game = null,
   gameId,
   seat,
   viewerSeat,
@@ -8279,7 +8320,7 @@ function QuestionAnswerEntryBase({
 }) {
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
   const roundType = normalizeQuestionType(currentRound?.roundType, 'text');
-  const choiceOptions = inferChoiceOptions(currentRound);
+  const choiceOptions = resolvePlayerChoiceOptionsForRound(inferChoiceOptions(currentRound), game, currentRound);
   const otherPlayer = currentPlayer === 'jay' ? 'kim' : 'jay';
   const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const currentPlayerGuessForOther = currentPlayerAnswer?.guessedOther || '';
@@ -8649,13 +8690,16 @@ const QuestionAnswerEntry = memo(QuestionAnswerEntryBase, (previous, next) => {
   const previousRoundKey = stableRoundIdentityKey(previous.currentRound || {});
   const nextRoundKey = stableRoundIdentityKey(next.currentRound || {});
   return previous.gameId === next.gameId
+    && previous.game?.id === next.game?.id
     && previousPlayer === nextPlayer
     && previousRoundKey === nextRoundKey
     && previous.currentRound?.roundType === next.currentRound?.roundType
     && previous.currentRound?.questionId === next.currentRound?.questionId
     && previous.currentRound?.question === next.currentRound?.question
     && previous.currentRound?.category === next.currentRound?.category
-    && JSON.stringify(inferChoiceOptions(previous.currentRound)) === JSON.stringify(inferChoiceOptions(next.currentRound))
+    && JSON.stringify(resolvePlayerChoiceOptionsForRound(inferChoiceOptions(previous.currentRound), previous.game, previous.currentRound)) === JSON.stringify(resolvePlayerChoiceOptionsForRound(inferChoiceOptions(next.currentRound), next.game, next.currentRound))
+    && gameSeatDisplayName(previous.game, 'jay', previous.currentRound) === gameSeatDisplayName(next.game, 'jay', next.currentRound)
+    && gameSeatDisplayName(previous.game, 'kim', previous.currentRound) === gameSeatDisplayName(next.game, 'kim', next.currentRound)
     && previous.answerLabel === next.answerLabel
     && previous.oppositeLabel === next.oppositeLabel
     && previous.submissionState === next.submissionState
@@ -10239,6 +10283,7 @@ function RoomActiveFrameBase({
               />
             ) : (
               <QuestionAnswerEntry
+                game={game}
                 gameId={game?.id || ''}
                 embedded
                 seat={currentPlayer}
@@ -22296,11 +22341,21 @@ function ProductionApp() {
     const nowIso = new Date(now).toISOString();
     const quizRoundKey = sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question';
     const roundType = normalizeQuestionType(nextQuestionItem.roundType, 'text');
-    const multipleChoiceOptions = inferChoiceOptions({
+    const rawMultipleChoiceOptions = inferChoiceOptions({
       roundType,
       question: nextQuestionItem.question,
       multipleChoiceOptions: nextQuestionItem.multipleChoiceOptions || [],
     });
+    const multipleChoiceOptions = resolvePlayerChoiceOptionsForRound(
+      rawMultipleChoiceOptions,
+      game,
+      {
+        ...nextQuestionItem,
+        roundType,
+        bankType: normalizeQuestionBankType(nextQuestionItem.bankType),
+      },
+      { isPutYourPointsRound: isPutYourPointsGame },
+    );
     return {
       id: isQuizGame ? `round-quiz-${nextRoundNumber}-${quizRoundKey}` : makeId('round'),
       number: nextRoundNumber,
@@ -22815,8 +22870,18 @@ function ProductionApp() {
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
       const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
       const roundType = normalizeQuestionType(game.currentRound?.roundType, 'text');
-      const serialisedOwnAnswer = serialiseAnswerForQuestionType(roundType, draft.ownAnswer);
-      const serialisedGuessedOther = isQuizGame ? '' : serialiseAnswerForQuestionType(roundType, draft.guessedOther);
+      const serialisedOwnAnswer = resolvePlayerChoiceAnswerForRound(
+        serialiseAnswerForQuestionType(roundType, draft.ownAnswer),
+        game,
+        game.currentRound,
+        { isPutYourPointsRound: isPutYourPointsGame },
+      );
+      const serialisedGuessedOther = isQuizGame ? '' : resolvePlayerChoiceAnswerForRound(
+        serialiseAnswerForQuestionType(roundType, draft.guessedOther),
+        game,
+        game.currentRound,
+        { isPutYourPointsRound: isPutYourPointsGame },
+      );
       if (!normalizeText(serialisedOwnAnswer)) throw new Error('Enter your answer before submitting.');
       if (isPutYourPointsGame && !normalizeText(serialisedGuessedOther)) {
         throw new Error('Enter your guess for the other player before submitting.');
