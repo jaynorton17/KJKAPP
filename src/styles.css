@@ -9303,6 +9303,11 @@ button:disabled {
   padding: 0;
 }
 
+.lobby-carousel-stage .lobby-carousel-stage-arrow:hover,
+.lobby-carousel-stage .lobby-carousel-stage-arrow:focus-visible {
+  transform: translateY(-50%);
+}
+
 .primary-button:hover,
 .ghost-button:hover,
 .danger-button:hover {
