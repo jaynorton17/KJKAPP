@@ -9716,8 +9716,8 @@ function ThisOrThatAutoAnswerEntryBase({
         <span className="status-pill">{lockedChoiceLabel}</span>
       </div>
       <div className={`live-round-grid ${embedded ? 'live-round-grid--embedded' : ''}`}>
-        {renderChoiceField('guessedOther', guessedOther, 'Their Pick', `What I think ${oppositeLabel} will choose`)}
         {renderChoiceField('ownAnswer', ownAnswer, 'Your Pick', 'What I would actually choose')}
+        {renderChoiceField('guessedOther', guessedOther, 'Their Pick', `What I think ${oppositeLabel} will choose`)}
       </div>
     </div>
   );
