@@ -413,7 +413,7 @@ const getAnalyticsGameScoreModeId = (value = 'standard') => {
   if (gameMode === HOLDEM_GAME_MODE) return 'holdem';
   return 'standard';
 };
-const QUIZ_TIMER_SECONDS = 10;
+const QUIZ_TIMER_SECONDS = 20;
 const QUIZ_WHEEL_SLOT_COUNT = 20;
 const QUIZ_WHEEL_MAX_AMOUNT = 2500;
 const QUIZ_WHEEL_COUNTDOWN_MS = 5000;
@@ -1173,8 +1173,8 @@ const shouldUseRoomPlayerNamesForChoices = (options = [], round = {}, game = nul
   const optionKeys = options.map(normalizePlayerChoiceKey);
   return optionKeys.includes('player1')
     || optionKeys.includes('player2')
-    || /who is (more|most) likely/i.test(normalizeText(round?.question || ''))
-    || (optionKeys.includes('jay') && optionKeys.includes('kim') && (optionKeys.includes('both') || optionKeys.includes('neither')));
+    || /\bwho\b.*\b(more|most)\s+likely\b/i.test(normalizeText(round?.question || ''))
+    || /\bwhich\s+(?:player|one\s+of\s+you|of\s+you|of\s+us)\b/i.test(normalizeText(round?.question || ''));
 };
 
 const resolvePlayerChoiceLabel = (value = '', playerNames = {}) => {
@@ -8452,6 +8452,7 @@ function QuestionAnswerEntryBase({
   const [isEditingSubmittedAnswer, setIsEditingSubmittedAnswer] = useState(false);
   const [localSubmittedAnswer, setLocalSubmittedAnswer] = useState(hasServerSubmittedAnswer);
   const [localDraft, setLocalDraft] = useState(() => buildInitialDraft());
+  const localDraftRef = useRef(localDraft);
   const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
   const answerEntryRef = useRef(null);
   const ownAnswerRef = useRef(null);
@@ -8476,6 +8477,7 @@ function QuestionAnswerEntryBase({
       submitted: hasServerSubmittedAnswer,
     };
     setLocalDraft(nextDraft);
+    localDraftRef.current = nextDraft;
   }, [draftStorageKey]);
 
   useEffect(() => {
@@ -8501,12 +8503,14 @@ function QuestionAnswerEntryBase({
         draftTouchedRef.current = false;
         clearAnswerDraftTouched(draftStorageKey);
         setLocalDraft(savedDraft);
+        localDraftRef.current = savedDraft;
       }
       return;
     }
 
     if (!draftTouchedRef.current) {
       setLocalDraft(savedDraft);
+      localDraftRef.current = savedDraft;
     }
   }, [draftStorageKey, hasServerSubmittedAnswer, currentPlayerAnswer?.ownAnswer, currentPlayerAnswer?.guessedOther, isEditingSubmittedAnswer]);
 
@@ -8554,17 +8558,19 @@ function QuestionAnswerEntryBase({
     markAnswerDraftTouched(draftStorageKey);
     setLocalDraft((current) => {
       const next = typeof patch === 'function' ? patch(current) : { ...current, ...patch };
+      localDraftRef.current = next;
       if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, next);
       return next;
     });
   };
 
-  const handleAnswerAction = async (draftToSubmit = localDraft) => {
+  const handleAnswerAction = async (draftToSubmit = localDraftRef.current) => {
     if (!isRoundOpen || isSubmittingAnswer) return;
     if (canEditSubmittedAnswer && hasSubmittedAnswer && !isEditingSubmittedAnswer) {
       setIsEditingSubmittedAnswer(true);
       const restoredDraft = (draftStorageKey ? readStoredAnswerDraft(draftStorageKey) : null) || buildSavedDraft();
       setLocalDraft(restoredDraft);
+      localDraftRef.current = restoredDraft;
       return;
     }
     if (draftStorageKey) writeStoredAnswerDraft(draftStorageKey, draftToSubmit);
@@ -21181,6 +21187,18 @@ function ProductionApp() {
       const hostSeat = seatForUid(game, user?.uid || '') || inferSeatFromUser(user, profile) || '';
       const roundKeyAtStart = stableRoundIdentityKey(game.currentRound || {});
       const submittedBy = existingAnswer.submittedBy || game?.seats?.[targetSeat] || fixedPlayerUids[targetSeat] || '';
+      const hasSubmittedAnswer = Boolean(normalizeText(existingAnswer?.ownAnswer || ''));
+      const timedOutAnswerFallback = {
+        ownAnswer: '',
+        guessedOther: '',
+        submittedBy,
+        displayName: gameSeatDisplayName(game, targetSeat, game.currentRound),
+        submittedAt: normalizeText(game.currentRound?.quizTimerEndsAt || '') || nowIso,
+        answerTimeMs: QUIZ_TIMER_SECONDS * 1000,
+        timerValue: 0,
+        speedPointsAvailable: 0,
+        timedOut: true,
+      };
       const nextAnswerPatch = {
         finalResult,
         wasCorrect: finalResult === 'correct',
@@ -21193,6 +21211,12 @@ function ProductionApp() {
           ? existingAnswer.overrideStatus
           : 'host',
       };
+      const nextAnswerPayload = {
+        ...(hasSubmittedAnswer ? {} : timedOutAnswerFallback),
+        ...existingAnswer,
+        ...nextAnswerPatch,
+        timedOut: hasSubmittedAnswer ? Boolean(existingAnswer.timedOut) : true,
+      };
       const applyLocalQuizResult = () => {
         setGame((current) => (
           current?.currentRound
@@ -21204,10 +21228,7 @@ function ProductionApp() {
                   ...current.currentRound,
                   answers: {
                     ...(current.currentRound.answers || {}),
-                    [targetSeat]: {
-                      ...(current.currentRound.answers?.[targetSeat] || {}),
-                      ...nextAnswerPatch,
-                    },
+                    [targetSeat]: nextAnswerPayload,
                   },
                   updatedAt: nowIso,
                 },
@@ -21226,14 +21247,11 @@ function ProductionApp() {
       if (!gameRef || !firestore) throw new Error('Room is missing.');
       applyLocalQuizResult();
       await updateDoc(gameRef, {
-        [`currentRound.answers.${targetSeat}.finalResult`]: finalResult,
-        [`currentRound.answers.${targetSeat}.wasCorrect`]: finalResult === 'correct',
-        [`currentRound.answers.${targetSeat}.pointsAwarded`]: pointsAwarded,
-        [`currentRound.answers.${targetSeat}.scoringMode`]: 'timer-host',
-        [`currentRound.answers.${targetSeat}.hostJudgedAt`]: serverTimestamp(),
-        [`currentRound.answers.${targetSeat}.hostJudgedBy`]: user?.uid || '',
-        [`currentRound.answers.${targetSeat}.hostJudgedBySeat`]: hostSeat,
-        [`currentRound.answers.${targetSeat}.overrideStatus`]: nextAnswerPatch.overrideStatus,
+        [`currentRound.answers.${targetSeat}`]: {
+          ...nextAnswerPayload,
+          hostJudgedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
         'currentRound.updatedAt': serverTimestamp(),
         updatedAt: serverTimestamp(),
       });

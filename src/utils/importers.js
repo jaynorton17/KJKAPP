@@ -94,21 +94,67 @@ const parseImportedOptionList = (value) => {
     .filter(Boolean);
 };
 
-const normalizePutYourPointsSheetRow = (row = {}) => {
-  const roundType = normalizeQuestionType(row.roundType, 'text');
-  const questionText = normalizeText(row.question);
-  const nextRow = { ...row };
+const isGenericPlayerChoiceOptionList = (options = []) => {
+  const keys = options.map((option) => normalizeHeader(option));
+  const hasFirstPlayer = keys.includes('jay') || keys.includes('player1') || keys.includes('p1');
+  const hasSecondPlayer = keys.includes('kim') || keys.includes('player2') || keys.includes('p2');
+  const hasSharedChoice = keys.includes('both') || keys.includes('neither') || keys.includes('either');
+  return hasFirstPlayer && hasSecondPlayer && hasSharedChoice;
+};
 
-  if (roundType === 'trueFalse') {
+const isPutYourPointsPlayerChoicePrompt = (questionText = '') =>
+  /\bwho\b.*\b(more|most)\s+likely\b/i.test(questionText)
+  || /\bwhich\s+(?:player|one\s+of\s+you|of\s+you|of\s+us)\b/i.test(questionText)
+  || /\b(jay|kim|player\s*1|player\s*2)\b.*\b(jay|kim|player\s*1|player\s*2)\b/i.test(questionText);
+
+const inferPutYourPointsQuestionType = (questionText = '', fallbackType = 'text', options = []) => {
+  const normalizedQuestion = normalizeText(questionText);
+  if (!normalizedQuestion) return fallbackType;
+  if (/\btrue\s+or\s+false\b|\btrue\/false\b/i.test(normalizedQuestion)) return 'trueFalse';
+  if (isPutYourPointsPlayerChoicePrompt(normalizedQuestion)) return 'multipleChoice';
+  if (/\b(would\s+you\s+rather|which\s+would\s+you\s+choose|do\s+you\s+prefer|prefer|this\s+or\s+that|either\s+or)\b/i.test(normalizedQuestion)) {
+    return 'preference';
+  }
+  if (/\b(top\s*\d+|top\s+three|name\s+(?:your\s+)?(?:top\s+)?three|list\s+three|three\s+.+memories|rank(?:ed|ing)?|sort|put\s+.+\s+in\s+order|order\s+(?:these|the|them))\b/i.test(normalizedQuestion)) {
+    return 'ranked';
+  }
+  if (/\b(1\s*(?:-|to)\s*10|one\s*(?:-|to)\s*ten|out\s+of\s+10|rate|rating|scale)\b/i.test(normalizedQuestion)) {
+    return 'rating';
+  }
+  if (/\b(how\s+many|how\s+much|what\s+(?:number|age|year|percentage|percent|amount)|age\b|year\b|percentage|percent|amount|count)\b/i.test(normalizedQuestion)) {
+    return 'numeric';
+  }
+  if (/\bfavou?rite\b/i.test(normalizedQuestion)) return 'favourite';
+  if (/\b(pet\s+peeve|annoy|irritat|turns?\s+you\s+off)\b/i.test(normalizedQuestion)) return 'petPeeve';
+  if (options.length >= 2 && !isGenericPlayerChoiceOptionList(options)) return fallbackType;
+  return fallbackType === 'multipleChoice' ? 'text' : fallbackType;
+};
+
+const normalizePutYourPointsSheetRow = (row = {}) => {
+  const questionText = normalizeText(row.question);
+  const providedOptions = parseImportedOptionList(row.multipleChoiceOptions);
+  const roundType = normalizeQuestionType(row.roundType, 'text');
+  const hasGenericPlayerOptions = isGenericPlayerChoiceOptionList(providedOptions);
+  const inferredType = inferPutYourPointsQuestionType(questionText, roundType, providedOptions);
+  const nextRow = { ...row };
+  nextRow.roundType = inferredType;
+
+  if (inferredType === 'trueFalse') {
     nextRow.multipleChoiceOptions = DEFAULT_TRUE_FALSE_OPTIONS.join('\n');
     return nextRow;
   }
 
-  if (roundType === 'multipleChoice' && /who is (more|most) likely/i.test(questionText)) {
-    const optionKeys = parseImportedOptionList(row.multipleChoiceOptions).map((option) => normalizeHeader(option));
+  if (inferredType === 'multipleChoice' && isPutYourPointsPlayerChoicePrompt(questionText)) {
+    const optionKeys = providedOptions.map((option) => normalizeHeader(option));
     if (optionKeys[0] === 'player1' && optionKeys[1] === 'player2') {
       nextRow.multipleChoiceOptions = DEFAULT_PLAYER_CHOICE_OPTIONS.join('\n');
     }
+    if (!providedOptions.length) nextRow.multipleChoiceOptions = DEFAULT_PLAYER_CHOICE_OPTIONS.join('\n');
+    return nextRow;
+  }
+
+  if (hasGenericPlayerOptions) {
+    nextRow.multipleChoiceOptions = '';
   }
 
   return nextRow;
