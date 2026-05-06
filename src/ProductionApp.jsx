@@ -132,7 +132,10 @@ const MOST_LIKELY_DISAGREE_PENALTY = 10;
 const MOST_LIKELY_UNANSWERED_PENALTY = 20;
 const PUT_YOUR_POINTS_STAKE_MIN = 1;
 const PUT_YOUR_POINTS_STAKE_MAX = 200;
-const PUT_YOUR_POINTS_STAKE_FLICK_COUNT = 5;
+const PUT_YOUR_POINTS_STAKE_FLICK_COUNT = 32;
+const PUT_YOUR_POINTS_STAKE_FLICK_INTERVAL_MS = 42;
+const PUT_YOUR_POINTS_STAKE_FINAL_HOLD_MS = 520;
+const PUT_YOUR_POINTS_STAKE_DOCK_MS = 720;
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
 const MOST_LIKELY_AUTO_SYNC_MIN_COUNT = 20;
@@ -3695,10 +3698,10 @@ const buildAutoScoredRoundPenaltyMap = (gameMode = 'standard', round = {}, optio
   return null;
 };
 const buildRoundPenaltyMapForArchive = (gameMode = 'standard', round = {}, manualPenaltyDraft = defaultPenaltyDraft) =>
-  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: false })
+  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: isPutYourPointsGameMode(gameMode) })
   || toPenaltyScores(manualPenaltyDraft || defaultPenaltyDraft);
 const buildPendingRoundPenaltyMapForFinalize = (gameMode = 'standard', round = {}, pendingRoundPenaltyOverride = null) =>
-  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: false })
+  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: isPutYourPointsGameMode(gameMode) })
   || {
     jay: toScore(pendingRoundPenaltyOverride?.jay ?? round?.penalties?.jay ?? 0),
     kim: toScore(pendingRoundPenaltyOverride?.kim ?? round?.penalties?.kim ?? 0),
@@ -8210,35 +8213,92 @@ function QuickDesk({ currentRound, penaltyDraft, setPenaltyDraft, onNextQuestion
 
 function PutYourPointsStakeTicker({ currentRound }) {
   const roundKey = stableRoundIdentityKey(currentRound || {});
+  const tickerRef = useRef(null);
   const finalStake = getPutYourPointsStake(currentRound || {});
   const sequence = Array.isArray(currentRound?.putYourPointsStakeSequence) && currentRound.putYourPointsStakeSequence.length
     ? currentRound.putYourPointsStakeSequence.map((value) => clampPutYourPointsStake(value))
     : [finalStake];
   const sequenceKey = sequence.join(':');
   const [displayStake, setDisplayStake] = useState(sequence[0] || finalStake);
+  const [animationPhase, setAnimationPhase] = useState('docked');
+  const [dockOffset, setDockOffset] = useState({ x: '0px', y: '-34vh' });
+  const shouldAnimateStake = Boolean(currentRound && sequence.length > 1);
+  const measureDockOffset = () => {
+    if (typeof window === 'undefined') return { x: '0px', y: '-34vh' };
+    const node = tickerRef.current;
+    if (!node) return { x: '0px', y: '-34vh' };
+    const rect = node.getBoundingClientRect();
+    return {
+      x: `${Math.round(rect.left + (rect.width / 2) - (window.innerWidth / 2))}px`,
+      y: `${Math.round(rect.top + (rect.height / 2) - (window.innerHeight / 2))}px`,
+    };
+  };
 
   useEffect(() => {
     let cancelled = false;
     const timers = [];
     const values = sequence.length ? sequence : [finalStake];
     setDisplayStake(values[0] || finalStake);
+    setDockOffset({ x: '0px', y: '-34vh' });
+    if (!shouldAnimateStake) {
+      setDisplayStake(finalStake);
+      setAnimationPhase('docked');
+      return undefined;
+    }
+    setAnimationPhase('summoning');
     values.slice(1).forEach((value, index) => {
       timers.push(window.setTimeout(() => {
         if (!cancelled) setDisplayStake(value);
-      }, 120 + (index * 115)));
+      }, PUT_YOUR_POINTS_STAKE_FLICK_INTERVAL_MS * (index + 1)));
     });
+    const settleDelay = (PUT_YOUR_POINTS_STAKE_FLICK_INTERVAL_MS * values.length) + PUT_YOUR_POINTS_STAKE_FINAL_HOLD_MS;
+    timers.push(window.setTimeout(() => {
+      if (cancelled) return;
+      setDisplayStake(finalStake);
+      setDockOffset(measureDockOffset());
+      setAnimationPhase('settling');
+    }, settleDelay));
+    timers.push(window.setTimeout(() => {
+      if (!cancelled) setAnimationPhase('docked');
+    }, settleDelay + PUT_YOUR_POINTS_STAKE_DOCK_MS));
     return () => {
       cancelled = true;
       timers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, [finalStake, roundKey, sequenceKey]);
+  }, [finalStake, roundKey, sequenceKey, shouldAnimateStake]);
+
+  useLayoutEffect(() => {
+    if (animationPhase === 'settling') setDockOffset(measureDockOffset());
+  }, [animationPhase, roundKey]);
 
   if (!currentRound) return null;
+  const showSummon = shouldAnimateStake && animationPhase !== 'docked';
+  const summonOverlay = showSummon && typeof document !== 'undefined'
+    ? createPortal(
+        <div
+          className={`put-points-stake-summon put-points-stake-summon--${animationPhase}`}
+          style={{
+            '--put-points-dock-x': dockOffset.x,
+            '--put-points-dock-y': dockOffset.y,
+          }}
+          aria-hidden="true"
+        >
+          <div className="put-points-stake-summon__number">
+            {formatScore(displayStake)}
+          </div>
+          <div className="put-points-stake-summon__label">points at stake</div>
+        </div>,
+        document.body,
+      )
+    : null;
   return (
-    <div className="put-points-stake-ticker" aria-live="polite">
-      <span>Round stake</span>
-      <strong>{formatScore(displayStake)}</strong>
-    </div>
+    <>
+      {summonOverlay}
+      <div ref={tickerRef} className={`put-points-stake-ticker ${showSummon ? 'is-waiting-for-summon' : ''}`} aria-live="polite">
+        <span>Round stake</span>
+        <strong>{formatScore(displayStake)}</strong>
+      </div>
+    </>
   );
 }
 
@@ -10046,7 +10106,7 @@ function RoomActiveFrameBase({
   const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
   const penaltyPreview = useMemo(
     () => (
-      (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: false }) : null)
+      (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: isPutYourPointsGameMode(game?.gameMode || 'standard') }) : null)
       || {
           jay: parseNumber(penaltyDraft?.jay, 0),
           kim: parseNumber(penaltyDraft?.kim, 0),
@@ -14226,7 +14286,7 @@ function GameRoomView({
     : null;
   const currentGameMode = game?.gameMode || 'standard';
   const currentRoundPenaltyPreview = currentRound
-    ? buildAutoScoredRoundPenaltyMap(currentGameMode, currentRound, { useStoredPenalties: false })
+    ? buildAutoScoredRoundPenaltyMap(currentGameMode, currentRound, { useStoredPenalties: isPutYourPointsGameMode(currentGameMode) })
       || {
         jay: parseNumber(penaltyDraft.jay || currentRound.penalties?.jay || 0, 0),
         kim: parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0),
@@ -22817,14 +22877,12 @@ function ProductionApp() {
       const stake = getPutYourPointsStake(game.currentRound);
       const penalty = result === 'missed' ? stake : 0;
       const nowIso = new Date().toISOString();
-      setPenaltyDraft((current) => ({
-        jay: targetSeat === 'jay' ? String(penalty) : current.jay,
-        kim: targetSeat === 'kim' ? String(penalty) : current.kim,
-      }));
-
-      if (isCurrentLocalTestGame) {
+      const roundKeyAtStart = stableRoundIdentityKey(game.currentRound || {});
+      const applyLocalResult = () => {
         setGame((current) => (
-          current?.currentRound && isPutYourPointsGameMode(current?.gameMode || 'standard')
+          current?.currentRound
+          && isPutYourPointsGameMode(current?.gameMode || 'standard')
+          && stableRoundIdentityKey(current.currentRound || {}) === roundKeyAtStart
             ? {
                 ...current,
                 currentRound: {
@@ -22837,20 +22895,34 @@ function ProductionApp() {
                     ...(current.currentRound.penalties || {}),
                     [targetSeat]: penalty,
                   },
+                  penaltyAdded: {
+                    ...(current.currentRound.penaltyAdded || {}),
+                    [targetSeat]: penalty,
+                  },
                   updatedAt: nowIso,
                 },
                 updatedAt: nowIso,
               }
             : current
         ));
+      };
+      setPenaltyDraft((current) => ({
+        jay: targetSeat === 'jay' ? String(penalty) : current.jay,
+        kim: targetSeat === 'kim' ? String(penalty) : current.kim,
+      }));
+
+      if (isCurrentLocalTestGame) {
+        applyLocalResult();
         return true;
       }
 
       const gameRef = makeGameRef();
       if (!gameRef || !firestore) throw new Error('Room is missing.');
+      applyLocalResult();
       await updateDoc(gameRef, {
         [`currentRound.putYourPointsResults.${targetSeat}`]: result,
         [`currentRound.penalties.${targetSeat}`]: penalty,
+        [`currentRound.penaltyAdded.${targetSeat}`]: penalty,
         'currentRound.updatedAt': serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
