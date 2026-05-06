@@ -37,6 +37,7 @@ import {
 import AnalyticsPanel from './components/AnalyticsPanel.jsx';
 import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
 import normalGameTileImage from './assets/lobby-normal-game.webp';
+import mostLikelyTileImage from './assets/lobby-most-likely.png';
 import pokerTileImage from './assets/lobby-poker.webp';
 import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
 import thisOrThatTileImage from './assets/lobby-this-or-that.webp';
@@ -5319,7 +5320,7 @@ function LobbyScreen({
     { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
     { id: 'trueFalse', label: 'True or False', image: trueOrFalseTileImage },
     { id: 'thisOrThat', label: 'This or That', image: thisOrThatTileImage },
-    { id: 'mostLikely', label: 'Most Likely To', image: thisOrThatTileImage },
+    { id: 'mostLikely', label: 'Most Likely To', image: mostLikelyTileImage },
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
 
@@ -6028,7 +6029,7 @@ function LobbyScreen({
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--most-likely"
-                      style={getLobbyTileImageStyle(thisOrThatTileImage)}
+                      style={getLobbyTileImageStyle(mostLikelyTileImage)}
                     >
                       <div className={`lobby-image-tile-flip ${isMostLikelyTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
