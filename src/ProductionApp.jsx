@@ -138,6 +138,7 @@ const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
 const MOST_LIKELY_AUTO_SYNC_MIN_COUNT = 20;
 const PUT_YOUR_POINTS_AUTO_SYNC_MIN_COUNT = 20;
+const QUESTION_BANK_LOW_AVAILABLE_THRESHOLD = 50;
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const MOST_LIKELY_STARTER_QUESTIONS = [
   'Who is most likely to turn a tiny plan into a full adventure?',
@@ -15023,6 +15024,7 @@ function ProductionApp() {
   const [game, setGame] = useState(null);
   const [rounds, setRounds] = useState([]);
   const [bankQuestions, setBankQuestions] = useState([]);
+  const [questionBankDataLoaded, setQuestionBankDataLoaded] = useState(false);
   const [gameLibrary, setGameLibrary] = useState([]);
   const [localArchivedGames, setLocalArchivedGames] = useState([]);
   const [pairHistory, setPairHistory] = useState({ playedQuestionIds: [], completedGameIds: [] });
@@ -15082,6 +15084,7 @@ function ProductionApp() {
   const completedLiveRoomHandledRef = useRef(new Set());
   const gameLibraryRoundsCacheRef = useRef(new Map());
   const gameLibrarySnapshotRequestRef = useRef(0);
+  const lowQuestionBankWarningShownRef = useRef('');
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
   const hiddenGameIdSet = useMemo(() => new Set(pendingDeletedGameIds), [pendingDeletedGameIds]);
@@ -15089,7 +15092,12 @@ function ProductionApp() {
   const shouldLoadQuestionBankData = Boolean(
     user
     && firestore
-    && (hasOpenRoomSession || dashboardTabState === 'gameLobby' || dashboardTabState === 'questionBank'),
+    && (
+      hasOpenRoomSession
+      || dashboardTabState === 'gameLobby'
+      || dashboardTabState === 'questionBank'
+      || (deferredLobbyDataReady && !hasOpenRoomSession)
+    ),
   );
   const shouldLoadStoreCollections = Boolean(
     user
@@ -15890,11 +15898,16 @@ function ProductionApp() {
   }, [firestore, shouldLoadQuizAnswerHistory, user, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
 
   useEffect(() => {
-    if (!shouldLoadQuestionBankData) return undefined;
+    if (!shouldLoadQuestionBankData) {
+      setQuestionBankDataLoaded(false);
+      return undefined;
+    }
     if (shouldPauseBackgroundFirestore) return undefined;
     const bankRef = collection(firestore, 'questionBank');
     const unsubscribe = onSnapshot(query(bankRef, orderBy('question', 'asc')), async (snapshot) => {
+      setQuestionBankDataLoaded(true);
       if (snapshot.empty) {
+        setBankQuestions([]);
         if (!gameId && !game?.id) await seedBankIfNeeded();
         return;
       }
@@ -16679,6 +16692,54 @@ function ProductionApp() {
     () => activeGames.filter((entry) => !isHoldemGameMode(entry?.gameMode || 'standard') && !isTrueFalseGameMode(entry?.gameMode || 'standard')),
     [activeGames],
   );
+  useEffect(() => {
+    if (
+      !user?.uid
+      || !firestore
+      || !deferredLobbyDataReady
+      || !questionBankDataLoaded
+      || !shouldLoadQuestionBankData
+      || hasOpenRoomSession
+    ) {
+      return undefined;
+    }
+
+    const lowQuestionBanks = [
+      { id: 'game', label: 'Normal Game', remaining: remainingQuestionCount },
+      { id: 'quiz', label: 'Quick Fire Quiz', remaining: remainingQuizQuestionCount },
+      { id: 'thisOrThat', label: 'This or That', remaining: remainingThisOrThatQuestionCount },
+      { id: 'mostLikely', label: 'Most Likely To', remaining: remainingMostLikelyQuestionCount },
+      { id: 'putYourPoints', label: 'Put Your Points', remaining: remainingPutYourPointsQuestionCount },
+      { id: 'trueFalse', label: 'True or False', remaining: remainingTrueFalseQuestionCount },
+    ].filter(({ remaining }) => Number(remaining || 0) < QUESTION_BANK_LOW_AVAILABLE_THRESHOLD);
+
+    if (!lowQuestionBanks.length || lowQuestionBankWarningShownRef.current === user.uid) {
+      return undefined;
+    }
+
+    const warningTimer = window.setTimeout(() => {
+      lowQuestionBankWarningShownRef.current = user.uid;
+      const bankSummary = lowQuestionBanks
+        .map(({ label, remaining }) => `${label} (${Math.max(0, Number(remaining || 0))})`)
+        .join(', ');
+      setNotice(`Question bank warning: under ${QUESTION_BANK_LOW_AVAILABLE_THRESHOLD} available in ${bankSummary}. Top each bank up to at least ${QUESTION_BANK_LOW_AVAILABLE_THRESHOLD}.`);
+    }, 1800);
+
+    return () => window.clearTimeout(warningTimer);
+  }, [
+    deferredLobbyDataReady,
+    firestore,
+    hasOpenRoomSession,
+    questionBankDataLoaded,
+    remainingMostLikelyQuestionCount,
+    remainingPutYourPointsQuestionCount,
+    remainingQuestionCount,
+    remainingQuizQuestionCount,
+    remainingThisOrThatQuestionCount,
+    remainingTrueFalseQuestionCount,
+    shouldLoadQuestionBankData,
+    user?.uid,
+  ]);
   const holdemAnalytics = useMemo(() => {
     const mergedById = new Map();
     [...enrichedLocalArchivedGames, ...enrichedGameLibrary].forEach((entry) => {
