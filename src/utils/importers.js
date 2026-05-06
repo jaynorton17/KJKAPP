@@ -118,6 +118,11 @@ const isPutYourPointsPlayerChoicePrompt = (questionText = '', typeText = '') =>
   || /\bwhich\s+(?:player|one\s+of\s+you|of\s+you|of\s+us)\b/i.test(questionText)
   || /\b(jay|kim|player\s*1|player\s*2)\b.*\b(jay|kim|player\s*1|player\s*2)\b/i.test(questionText);
 
+const isPutYourPointsOrderingPrompt = (questionText = '') =>
+  /\b(sort|sequence|arrange)\b/i.test(questionText)
+  || /\bput\s+.+\s+in\s+order\b/i.test(questionText)
+  || /\border\s+(?:these|the|them)\b/i.test(questionText);
+
 const inferPutYourPointsQuestionType = (questionText = '', fallbackType = 'text', options = [], typeText = '') => {
   const normalizedQuestion = normalizeText(questionText);
   if (!normalizedQuestion) return fallbackType;
@@ -126,11 +131,14 @@ const inferPutYourPointsQuestionType = (questionText = '', fallbackType = 'text'
   if (/\b(would\s+you\s+rather|which\s+would\s+you\s+choose|do\s+you\s+prefer|prefer|this\s+or\s+that|either\s+or)\b/i.test(normalizedQuestion)) {
     return 'preference';
   }
-  if (/\b(top\s*\d+|top\s+three|name\s+(?:your\s+)?(?:top\s+)?three|list\s+three|three\s+.+memories|rank(?:ed|ing)?|sort|put\s+.+\s+in\s+order|order\s+(?:these|the|them))\b/i.test(normalizedQuestion)) {
-    return 'ranked';
-  }
   if (/\b(1\s*(?:-|to)\s*10|one\s*(?:-|to)\s*ten|out\s+of\s+10|rate|rating|scale)\b/i.test(normalizedQuestion)) {
     return 'rating';
+  }
+  if (isPutYourPointsOrderingPrompt(normalizedQuestion)) {
+    return 'sortIntoOrder';
+  }
+  if (/\b(top\s*\d+|top\s+three|name\s+(?:your\s+)?(?:top\s+)?three|list\s+three|three\s+.+memories|rank(?:ed|ing)?)\b/i.test(normalizedQuestion)) {
+    return 'ranked';
   }
   if (/\b(how\s+many|how\s+much|what\s+(?:number|age|year|percentage|percent|amount)|age\b|year\b|percentage|percent|amount|count)\b/i.test(normalizedQuestion)) {
     return 'numeric';

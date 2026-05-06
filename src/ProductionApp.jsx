@@ -1165,6 +1165,11 @@ const isPutYourPointsPlayerChoicePrompt = (questionText = '') =>
   /\bwho\b.*\b(more|most)\s+likely\b/i.test(normalizeText(questionText))
   || /\bwhich\s+(?:player|one\s+of\s+you|of\s+you|of\s+us)\b/i.test(normalizeText(questionText));
 
+const isPutYourPointsOrderingPrompt = (questionText = '') =>
+  /\b(sort|sequence|arrange)\b/i.test(normalizeText(questionText))
+  || /\bput\s+.+\s+in\s+order\b/i.test(normalizeText(questionText))
+  || /\border\s+(?:these|the|them)\b/i.test(normalizeText(questionText));
+
 const inferPutYourPointsAnswerRoundType = (round = {}) => {
   const rawRoundType = normalizeQuestionType(round?.roundType, 'text');
   const questionText = normalizeText(round?.question || '');
@@ -1173,8 +1178,9 @@ const inferPutYourPointsAnswerRoundType = (round = {}) => {
   if (/\btrue\s+or\s+false\b|\btrue\/false\b/i.test(questionText)) return 'trueFalse';
   if (isPutYourPointsPlayerChoicePrompt(questionText)) return 'multipleChoice';
   if (/\b(would\s+you\s+rather|which\s+would\s+you\s+choose|do\s+you\s+prefer|prefer|this\s+or\s+that|either\s+or)\b/i.test(questionText)) return 'preference';
-  if (/\b(top\s*\d+|top\s+three|name\s+(?:your\s+)?(?:top\s+)?three|list\s+three|three\s+.+memories|rank(?:ed|ing)?|sort|put\s+.+\s+in\s+order|order\s+(?:these|the|them))\b/i.test(questionText)) return 'ranked';
   if (/\b(1\s*(?:-|to)\s*10|one\s*(?:-|to)\s*ten|out\s+of\s+10|rate|rating|scale)\b/i.test(questionText)) return 'rating';
+  if (isPutYourPointsOrderingPrompt(questionText)) return 'sortIntoOrder';
+  if (/\b(top\s*\d+|top\s+three|name\s+(?:your\s+)?(?:top\s+)?three|list\s+three|three\s+.+memories|rank(?:ed|ing)?)\b/i.test(questionText)) return 'ranked';
   if (/\b(how\s+many|how\s+much|what\s+(?:number|age|year|percentage|percent|amount)|age\b|year\b|percentage|percent|amount|count)\b/i.test(questionText)) return 'numeric';
   if (/\bfavou?rite\b/i.test(questionText)) return 'favourite';
   if (/\b(pet\s+peeve|annoy|irritat|turns?\s+you\s+off)\b/i.test(questionText)) return 'petPeeve';
