@@ -3282,6 +3282,20 @@ const dedupeQuestionsById = (questions = []) => {
   });
 };
 
+const mergeQuestionBankRecords = (...questionLists) => {
+  const byId = new Map();
+  questionLists.flat().filter(Boolean).forEach((question) => {
+    const questionId = normalizeText(question?.id);
+    if (!questionId) return;
+    byId.set(questionId, {
+      ...(byId.get(questionId) || {}),
+      ...question,
+      id: question.id,
+    });
+  });
+  return [...byId.values()];
+};
+
 const normalizeStoredRounds = (rounds = []) =>
   recalculateRounds(
     [...rounds].sort(
@@ -13915,6 +13929,7 @@ function GameRoomView({
   onLockTrueFalseAnswer,
   onLockThisOrThatAnswer,
   onLockMostLikelyAnswer,
+  onSetPutYourPointsResult,
   onMarkReady,
   onAddQuestion,
   onSyncSheet,
@@ -16808,16 +16823,20 @@ function ProductionApp() {
 
   const ensureQuestionBankReadyForQueue = async (targetBankType = 'game') => {
     const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
-    if (normalizedTargetBankType === 'game' && standardSelectableQuestions.length) return;
+    const localPool = getLocalQuestionPoolForBankType(normalizedTargetBankType);
+    if (normalizedTargetBankType === 'game' && standardSelectableQuestions.length) return standardSelectableQuestions;
     const shouldTrySheetBeforeFallback = (
       (normalizedTargetBankType === 'mostLikelyGame' && !mostLikelyBankQuestions.length)
       || (normalizedTargetBankType === 'putYourPointsGame' && !putYourPointsBankQuestions.length)
     );
     if (shouldTrySheetBeforeFallback) {
-      await seedBankIfNeeded(normalizedTargetBankType);
-      return;
+      const seededQuestions = await seedBankIfNeeded(normalizedTargetBankType);
+      const seededPool = Array.isArray(seededQuestions)
+        ? seededQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType)
+        : [];
+      return seededPool.length ? seededPool : localPool;
     }
-    if (getLocalQuestionPoolForBankType(normalizedTargetBankType).length) return;
+    if (localPool.length) return localPool;
     const seedTimeoutMarker = { timedOut: true };
     let timeoutId = 0;
     try {
@@ -16832,9 +16851,14 @@ function ProductionApp() {
           targetBankType: normalizedTargetBankType,
         });
       }
+      if (Array.isArray(result)) {
+        const seededPool = result.filter((question) => normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType);
+        if (seededPool.length) return seededPool;
+      }
     } finally {
       if (timeoutId) window.clearTimeout(timeoutId);
     }
+    return getLocalQuestionPoolForBankType(normalizedTargetBankType);
   };
 
   const buildQuestionQueue = async (requestedCount = 10, filters = {}) => {
@@ -16843,7 +16867,12 @@ function ProductionApp() {
     const isThisOrThatQueue = isThisOrThatGameMode(requestedGameMode);
     const isMostLikelyQueue = isMostLikelyGameMode(requestedGameMode);
     const isPutYourPointsQueue = isPutYourPointsGameMode(requestedGameMode);
-    const questionBankPool = requestedBankType === 'game'
+    const overrideQuestionPool = Array.isArray(filters.questionPool)
+      ? filters.questionPool.filter((question) => normalizeQuestionBankType(question?.bankType) === requestedBankType)
+      : [];
+    const questionBankPool = overrideQuestionPool.length
+      ? overrideQuestionPool
+      : requestedBankType === 'game'
       ? standardSelectableQuestions
       : getLocalQuestionPoolForBankType(requestedBankType);
     const retiredQuestionIds = requestedBankType === 'quiz'
@@ -19680,6 +19709,9 @@ function ProductionApp() {
         });
         if (result.imports.length || result.updates.length) {
           await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+          const nextQuestions = mergeQuestionBankRecords(existingQuestions, result.imports, result.updates);
+          setBankQuestions(nextQuestions);
+          return nextQuestions;
         }
       } catch (error) {
         console.warn('True or False bank sync failed while topping up the dedicated sheet tab.', error);
@@ -19700,6 +19732,9 @@ function ProductionApp() {
         });
         if (result.imports.length || result.updates.length) {
           await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+          const nextQuestions = mergeQuestionBankRecords(existingQuestions, result.imports, result.updates);
+          setBankQuestions(nextQuestions);
+          return nextQuestions;
         }
       } catch (error) {
         console.warn('This or That bank sync failed while topping up the dedicated sheet tab.', error);
@@ -19720,6 +19755,9 @@ function ProductionApp() {
         });
         if (result.imports.length || result.updates.length) {
           await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+          const nextQuestions = mergeQuestionBankRecords(existingQuestions, result.imports, result.updates);
+          setBankQuestions(nextQuestions);
+          return nextQuestions;
         }
       } catch (error) {
         console.warn('Most Likely To bank sync failed while topping up the dedicated sheet tab.', error);
@@ -19740,6 +19778,9 @@ function ProductionApp() {
         });
         if (result.imports.length || result.updates.length) {
           await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+          const nextQuestions = mergeQuestionBankRecords(existingQuestions, result.imports, result.updates);
+          setBankQuestions(nextQuestions);
+          return nextQuestions;
         }
       } catch (error) {
         console.warn('Put Your Points bank sync failed while topping up the dedicated sheet tab.', error);
@@ -19757,16 +19798,18 @@ function ProductionApp() {
       });
       if (result.imports.length || result.updates.length) {
         await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
-        return;
+        const nextQuestions = mergeQuestionBankRecords(existingQuestions, result.imports, result.updates);
+        setBankQuestions(nextQuestions);
+        return nextQuestions;
       }
     } catch (error) {
       console.warn('Question bank sync failed, falling back where possible.', error);
     }
     if (!snap.empty) return existingQuestions;
-    await upsertQuestionBankBatch(
-      firestore,
-      STARTER_QUESTIONS.map((question) => createQuestionTemplate(question)),
-    );
+    const starterQuestions = STARTER_QUESTIONS.map((question) => createQuestionTemplate(question));
+    await upsertQuestionBankBatch(firestore, starterQuestions);
+    setBankQuestions(starterQuestions);
+    return starterQuestions;
   };
 
   const topUpTrueFalseBankFromDedicatedSheet = useCallback(async () => {
@@ -20707,12 +20750,13 @@ function ProductionApp() {
         let warning = '';
         let actualCount = 0;
         if (!isHoldemGame) {
-          await ensureQuestionBankReadyForQueue(targetBankType);
+          const readyQuestionPool = await ensureQuestionBankReadyForQueue(targetBankType);
           const queueResult = await buildQuestionQueue(requestedQuestionCount, {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
             bankType: targetBankType,
             gameMode,
+            questionPool: readyQuestionPool,
           });
           queue = queueResult.queue;
           warning = queueResult.warning;
@@ -20896,12 +20940,13 @@ function ProductionApp() {
         let warning = '';
         let actualCount = 0;
         if (!isHoldemGame) {
-          await ensureQuestionBankReadyForQueue(targetBankType);
+          const readyQuestionPool = await ensureQuestionBankReadyForQueue(targetBankType);
           const queueResult = await buildQuestionQueue(requestedQuestionCount, {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
             bankType: targetBankType,
             gameMode,
+            questionPool: readyQuestionPool,
           });
           queue = queueResult.queue;
           warning = queueResult.warning;
