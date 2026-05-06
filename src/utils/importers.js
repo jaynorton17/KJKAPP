@@ -7,7 +7,12 @@ import {
   normalizeQuestionBankType,
   normalizeText,
 } from './game.js';
-import { DEFAULT_PLAYER_CHOICE_OPTIONS, QUESTION_TYPE_CONFIGS, normalizeQuestionType } from './questionTypes.js';
+import {
+  DEFAULT_PLAYER_CHOICE_OPTIONS,
+  DEFAULT_TRUE_FALSE_OPTIONS,
+  QUESTION_TYPE_CONFIGS,
+  normalizeQuestionType,
+} from './questionTypes.js';
 
 const FIELD_ALIASES = {
   question: ['question', 'text', 'prompt', 'title'],
@@ -76,6 +81,34 @@ const extractOptionsFromRawRow = (row = {}) => {
   });
 
   return [...new Set(options.filter(Boolean))];
+};
+
+const parseImportedOptionList = (value) => {
+  if (Array.isArray(value)) return value.map((item) => normalizeText(item)).filter(Boolean);
+  return String(value || '')
+    .split(/\n|,|;|\|/)
+    .map((item) => normalizeText(item))
+    .filter(Boolean);
+};
+
+const normalizePutYourPointsSheetRow = (row = {}) => {
+  const roundType = normalizeQuestionType(row.roundType, 'text');
+  const questionText = normalizeText(row.question);
+  const nextRow = { ...row };
+
+  if (roundType === 'trueFalse') {
+    nextRow.multipleChoiceOptions = DEFAULT_TRUE_FALSE_OPTIONS.join('\n');
+    return nextRow;
+  }
+
+  if (roundType === 'multipleChoice' && /who is (more|most) likely/i.test(questionText)) {
+    const optionKeys = parseImportedOptionList(row.multipleChoiceOptions).map((option) => normalizeHeader(option));
+    if (optionKeys[0] === 'player1' && optionKeys[1] === 'player2') {
+      nextRow.multipleChoiceOptions = DEFAULT_PLAYER_CHOICE_OPTIONS.join('\n');
+    }
+  }
+
+  return nextRow;
 };
 
 const enrichMappedRow = (row = {}) => {
@@ -485,7 +518,7 @@ export const parseGoogleSheetPutYourPointsImport = ({
   sourceLabel = '',
 }) => {
   const parsed = parseCsvRows(rawText);
-  const rows = parsed.rows.map((row) => enrichMappedRow(row));
+  const rows = parsed.rows.map((row) => normalizePutYourPointsSheetRow(enrichMappedRow(row)));
   const seenQuestions = [];
   const imports = [];
   const updates = [];

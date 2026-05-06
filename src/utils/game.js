@@ -602,9 +602,13 @@ export const normalizeQuestionBankType = (value = 'game') => {
   if (
     normalized === 'putyourpointsgame'
     || normalized === 'putyourpoints'
+    || normalized === 'putyourpointswhereyourmouth'
     || normalized === 'putyourpointswhereyourmouthis'
+    || normalized === 'putyourmoneywhereyourmouth'
     || normalized === 'putyourmoneywhereyourmouthis'
+    || normalized === 'pointswhereyourmouth'
     || normalized === 'pointswhereyourmouthis'
+    || normalized === 'moneywhereyourmouth'
     || normalized === 'moneywhereyourmouthis'
   ) {
     return 'putYourPointsGame';

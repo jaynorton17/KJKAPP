@@ -19602,22 +19602,28 @@ function ProductionApp() {
     const reference = parseGoogleSheetReference(sheetValue);
     if (!reference) throw new Error('Enter a valid Google Sheet URL or ID.');
     const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
-    const sheetName = normalizedTargetBankType === 'quiz'
-      ? 'Quiz'
+    const sheetNames = normalizedTargetBankType === 'quiz'
+      ? ['Quiz']
       : normalizedTargetBankType === 'thisOrThatGame'
-        ? 'This or That'
+        ? ['This or That']
       : normalizedTargetBankType === 'mostLikelyGame'
-        ? 'Most Like To'
+        ? ['Most Like To']
       : normalizedTargetBankType === 'putYourPointsGame'
-        ? 'Put Your Money Where Your Mouth Is'
+        ? [
+            'Put Your Money Where Your Mouth Is',
+            'Put Your Money Where Your Mouth',
+            'Put Your Points Where Your Mouth Is',
+            'Put Your Points Where Your Mouth',
+            'Put Your Points',
+          ]
       : normalizedTargetBankType === 'trueFalseGame'
-        ? 'True or False'
-        : 'Questions';
-    const targets = [{
+        ? ['True or False']
+        : ['Questions'];
+    const targets = sheetNames.map((sheetName) => ({
       gid: '',
       csvUrl: `https://docs.google.com/spreadsheets/d/${reference.id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`,
       sheetName,
-    }];
+    }));
     const nextExistingQuestions = [...existingQuestions].filter(
       (question) => normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType,
     );
@@ -19630,9 +19636,16 @@ function ProductionApp() {
     let invalidTotal = 0;
     let skippedTotal = 0;
 
+    let didLoadTarget = false;
+    let lastTargetError = null;
     for (const target of targets) {
       const response = await fetch(target.csvUrl);
-      if (!response.ok) throw new Error(`Google Sheet tab fetch failed (${response.status}) for gid ${target.gid || 'default'}.`);
+      if (!response.ok) {
+        lastTargetError = new Error(`Google Sheet tab fetch failed (${response.status}) for sheet "${target.sheetName}".`);
+        if (targets.length > 1) continue;
+        throw lastTargetError;
+      }
+      didLoadTarget = true;
       const rawText = await response.text();
       const parsedResult = normalizedTargetBankType === 'quiz'
         ? parseGoogleSheetQuizImport({
@@ -19691,7 +19704,10 @@ function ProductionApp() {
       invalidTotal += parsedResult.summary.invalid;
       skippedTotal += parsedResult.summary.skipped;
       nextExistingQuestions.push(...parsedResult.imports, ...parsedResult.updates);
+      break;
     }
+
+    if (!didLoadTarget && lastTargetError) throw lastTargetError;
 
     return {
       reference,
