@@ -470,6 +470,19 @@ const getAnalyticsGameScoreModeId = (value = 'standard') => {
   if (gameMode === HOLDEM_GAME_MODE) return 'holdem';
   return 'standard';
 };
+const getAnalyticsSessionScorePair = (gameEntry = {}) => {
+  const gameMode = resolveGameMode(gameEntry?.gameMode || 'standard');
+  if (gameMode === 'quiz') {
+    return {
+      jay: Number(gameEntry?.quizTotals?.jay || 0),
+      kim: Number(gameEntry?.quizTotals?.kim || 0),
+    };
+  }
+  return {
+    jay: Number(gameEntry?.finalScores?.jay ?? gameEntry?.totals?.jay ?? 0),
+    kim: Number(gameEntry?.finalScores?.kim ?? gameEntry?.totals?.kim ?? 0),
+  };
+};
 const QUIZ_TIMER_SECONDS = 20;
 const QUIZ_WHEEL_SLOT_COUNT = 20;
 const QUIZ_WHEEL_MAX_AMOUNT = 2500;
@@ -19497,6 +19510,10 @@ function ProductionApp() {
 
   const lobbyAnalytics = useMemo(() => {
     const completed = previousCompletedGames;
+    const completedScoreEntries = completed.map((gameEntry) => ({
+      gameEntry,
+      scores: getAnalyticsSessionScorePair(gameEntry),
+    }));
     const gameModeScoreMap = new Map(
       ANALYTICS_GAME_SCORE_MODES.map((mode) => [
         mode.id,
@@ -19524,7 +19541,7 @@ function ProductionApp() {
       },
       { jay: 0, kim: 0, draws: 0 },
     );
-    const completedFinals = completed.map((gameEntry) => gameEntry.finalScores || gameEntry.totals || { jay: 0, kim: 0 });
+    const completedFinals = completedScoreEntries.map(({ scores }) => scores);
     const averageFinalJay = completedFinals.length ? completedFinals.reduce((sum, scores) => sum + Number(scores.jay || 0), 0) / completedFinals.length : 0;
     const averageFinalKim = completedFinals.length ? completedFinals.reduce((sum, scores) => sum + Number(scores.kim || 0), 0) / completedFinals.length : 0;
     const completedRedemptions = redemptionHistory.filter((entry) => ['redeemed', 'seen', 'completed'].includes(entry.status));
@@ -19581,6 +19598,14 @@ function ProductionApp() {
       else activeStreak = { winner: entry.winner, count: 1 };
       if (activeStreak.winner !== 'tie' && activeStreak.count > longestStreak.count) longestStreak = { ...activeStreak };
     });
+    const closestScoreEntry = completedScoreEntries
+      .slice()
+      .sort((left, right) => Math.abs((left.scores.jay || 0) - (left.scores.kim || 0)) - Math.abs((right.scores.jay || 0) - (right.scores.kim || 0)))[0]
+      || null;
+    const biggestScoreEntry = completedScoreEntries
+      .slice()
+      .sort((left, right) => Math.abs((right.scores.jay || 0) - (right.scores.kim || 0)) - Math.abs((left.scores.jay || 0) - (left.scores.kim || 0)))[0]
+      || null;
     return {
       totalGamesPlayed: completed.length,
       activeGames: analyticsActiveGames.length,
@@ -19600,8 +19625,8 @@ function ProductionApp() {
         jay: lobbyRounds.length ? ((lobbyRoundAnalytics.roundWins?.jay || 0) / lobbyRounds.length) * 100 : 0,
         kim: lobbyRounds.length ? ((lobbyRoundAnalytics.roundWins?.kim || 0) / lobbyRounds.length) * 100 : 0,
       },
-      closestGame: completed.slice().sort((a, b) => Math.abs((a.finalScores?.jay || 0) - (a.finalScores?.kim || 0)) - Math.abs((b.finalScores?.jay || 0) - (b.finalScores?.kim || 0)))[0] || null,
-      biggestWinMargin: completed.slice().sort((a, b) => Math.abs((b.finalScores?.jay || 0) - (b.finalScores?.kim || 0)) - Math.abs((a.finalScores?.jay || 0) - (a.finalScores?.kim || 0)))[0] || null,
+      closestGame: closestScoreEntry?.gameEntry || null,
+      biggestWinMargin: biggestScoreEntry?.gameEntry || null,
       currentStreakLabel: streakCount ? `${PLAYER_LABEL[streakWinner] || streakWinner} x${streakCount}` : 'No streak',
       strongestCategoryJay: lobbyRoundAnalytics.bestCategory?.jay || '-',
       strongestCategoryKim: lobbyRoundAnalytics.bestCategory?.kim || '-',
@@ -19615,11 +19640,11 @@ function ProductionApp() {
       pointsSpentAgainstKim: redemptionSpent.kim,
       mostExpensiveRedemptionLabel: redemptionSpent.expensive ? `${redemptionSpent.expensive.title} · ${formatScore(redemptionSpent.expensive.cost)}` : 'N/A',
       mostRedeemedItemLabel: mostRedeemedItem ? `${mostRedeemedItem.title} x${mostRedeemedItem.count}` : 'N/A',
-      closestGameLabel: completed.length
-        ? `${completed.slice().sort((a, b) => Math.abs((a.finalScores?.jay || 0) - (a.finalScores?.kim || 0)) - Math.abs((b.finalScores?.jay || 0) - (b.finalScores?.kim || 0)))[0]?.gameName || completed[0]?.joinCode || 'N/A'}`
+      closestGameLabel: closestScoreEntry?.gameEntry
+        ? `${closestScoreEntry.gameEntry?.gameName || closestScoreEntry.gameEntry?.joinCode || 'N/A'}`
         : 'N/A',
-      biggestWinMarginLabel: completed.length
-        ? `${completed.slice().sort((a, b) => Math.abs((b.finalScores?.jay || 0) - (b.finalScores?.kim || 0)) - Math.abs((a.finalScores?.jay || 0) - (a.finalScores?.kim || 0)))[0]?.gameName || completed[0]?.joinCode || 'N/A'}`
+      biggestWinMarginLabel: biggestScoreEntry?.gameEntry
+        ? `${biggestScoreEntry.gameEntry?.gameName || biggestScoreEntry.gameEntry?.joinCode || 'N/A'}`
         : 'N/A',
       longestStreakLabel: longestStreak.count ? `${PLAYER_LABEL[longestStreak.winner] || longestStreak.winner} x${longestStreak.count}` : 'No streak',
       gameModeScoreRows: ANALYTICS_GAME_SCORE_MODES.map((mode) => gameModeScoreMap.get(mode.id)),
