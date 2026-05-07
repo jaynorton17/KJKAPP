@@ -255,15 +255,32 @@ const hasQuestionTemplateChanged = (existingQuestion, nextQuestion) => {
 const findSheetQuestionMatch = (
   questions = [],
   candidateQuestion,
-  { allowTypeMigration = false, allowTemplateMatch = true } = {},
+  { allowTypeMigration = false, allowTemplateMatch = true, allowIdMatch = true } = {},
 ) => {
   const candidateId = normalizeText(candidateQuestion?.id).toLowerCase();
-  const exactIdMatch = candidateId
+  const exactIdMatch = allowIdMatch && candidateId
     ? questions.find((question) => normalizeText(question?.id).toLowerCase() === candidateId) || null
     : null;
   if (exactIdMatch || !allowTemplateMatch) return exactIdMatch;
 
-  const exactTemplateMatch = findMatchingQuestion(questions, candidateQuestion);
+  const exactTemplateMatch = allowIdMatch
+    ? findMatchingQuestion(questions, candidateQuestion)
+    : questions.find((question) => {
+      if (normalizeQuestionBankType(question?.bankType) !== normalizeQuestionBankType(candidateQuestion?.bankType)) return false;
+      const existingQuestionKey = normalizeQuestionKey(question?.question);
+      const candidateQuestionKey = normalizeQuestionKey(candidateQuestion?.question);
+      const existingCategoryKey = normalizeQuestionCategoryKey(question?.question, question?.category);
+      const candidateCategoryKey = normalizeQuestionCategoryKey(candidateQuestion?.question, candidateQuestion?.category);
+      if (existingCategoryKey && candidateCategoryKey && existingCategoryKey === candidateCategoryKey) {
+        return normalizeQuestionType(question?.roundType, 'text') === normalizeQuestionType(candidateQuestion?.roundType, 'text');
+      }
+      return Boolean(
+        existingQuestionKey
+          && candidateQuestionKey
+          && existingQuestionKey === candidateQuestionKey
+          && normalizeQuestionType(question?.roundType, 'text') === normalizeQuestionType(candidateQuestion?.roundType, 'text'),
+      );
+    }) || null;
   if (exactTemplateMatch || !allowTypeMigration) return exactTemplateMatch;
   const candidateCategoryKey = normalizeQuestionCategoryKey(candidateQuestion?.question, candidateQuestion?.category);
   if (!candidateCategoryKey) return null;
@@ -480,6 +497,8 @@ export const parseGoogleSheetImport = ({
   overwriteExisting = false,
   importedAt = new Date().toISOString(),
   sourceLabel = '',
+  allowIdMatch = true,
+  allowTemplateMatch = false,
 }) => {
   const parsed = parseCsvRows(rawText);
   const rows = limitGoogleSheetRows(parsed.rows).map((row) => enrichMappedRow(row));
@@ -534,7 +553,8 @@ export const parseGoogleSheetImport = ({
 
     const existingMatch = findSheetQuestionMatch(existingQuestions, question, {
       allowTypeMigration: overwriteExisting,
-      allowTemplateMatch: false,
+      allowTemplateMatch,
+      allowIdMatch,
     });
     if (!existingMatch) {
       imports.push(question);
@@ -611,6 +631,8 @@ export const parseGoogleSheetPutYourPointsImport = ({
   overwriteExisting = true,
   importedAt = new Date().toISOString(),
   sourceLabel = '',
+  allowIdMatch = true,
+  allowTemplateMatch = false,
 }) => {
   const parsed = parseCsvRows(rawText);
   const rows = limitGoogleSheetRows(parsed.rows).map((row) => normalizePutYourPointsSheetRow(enrichMappedRow(row)));
@@ -667,7 +689,7 @@ export const parseGoogleSheetPutYourPointsImport = ({
     const existingMatch = findSheetQuestionMatch(
       existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'putYourPointsGame'),
       question,
-      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch, allowIdMatch },
     );
     if (!existingMatch) {
       imports.push(question);
@@ -777,6 +799,8 @@ export const parseGoogleSheetQuizImport = ({
   overwriteExisting = true,
   importedAt = new Date().toISOString(),
   sourceLabel = '',
+  allowIdMatch = true,
+  allowTemplateMatch = false,
 }) => {
   const parsed = parseCsvRows(rawText);
   const rows = limitGoogleSheetRows(parsed.rows);
@@ -839,7 +863,8 @@ export const parseGoogleSheetQuizImport = ({
 
     const existingMatch = findSheetQuestionMatch(existingQuestions, question, {
       allowTypeMigration: overwriteExisting,
-      allowTemplateMatch: false,
+      allowTemplateMatch,
+      allowIdMatch,
     });
     if (!existingMatch) {
       imports.push(question);
@@ -893,6 +918,8 @@ export const parseGoogleSheetTrueFalseImport = ({
   overwriteExisting = true,
   importedAt = new Date().toISOString(),
   sourceLabel = '',
+  allowIdMatch = true,
+  allowTemplateMatch = false,
 }) => {
   const parsed = parseCsvRows(rawText);
   const rows = limitGoogleSheetRows(parsed.rows).map((row) => enrichMappedRow(row));
@@ -950,7 +977,7 @@ export const parseGoogleSheetTrueFalseImport = ({
     const existingMatch = findSheetQuestionMatch(
       existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'trueFalseGame'),
       question,
-      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch, allowIdMatch },
     );
     if (!existingMatch) {
       imports.push(question);
@@ -1027,6 +1054,8 @@ export const parseGoogleSheetThisOrThatImport = ({
   overwriteExisting = true,
   importedAt = new Date().toISOString(),
   sourceLabel = '',
+  allowIdMatch = true,
+  allowTemplateMatch = false,
 }) => {
   const parsed = parseCsvRows(rawText);
   const rows = limitGoogleSheetRows(parsed.rows).map((row) => enrichMappedRow(row));
@@ -1084,7 +1113,7 @@ export const parseGoogleSheetThisOrThatImport = ({
     const existingMatch = findSheetQuestionMatch(
       existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'thisOrThatGame'),
       question,
-      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch, allowIdMatch },
     );
     if (!existingMatch) {
       imports.push(question);
@@ -1161,6 +1190,8 @@ export const parseGoogleSheetMostLikelyImport = ({
   overwriteExisting = true,
   importedAt = new Date().toISOString(),
   sourceLabel = '',
+  allowIdMatch = true,
+  allowTemplateMatch = false,
 }) => {
   const parsed = parseCsvRows(rawText);
   const rows = limitGoogleSheetRows(parsed.rows).map((row) => enrichMappedRow(row));
@@ -1219,7 +1250,7 @@ export const parseGoogleSheetMostLikelyImport = ({
     const existingMatch = findSheetQuestionMatch(
       existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === 'mostLikelyGame'),
       question,
-      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch, allowIdMatch },
     );
     if (!existingMatch) {
       imports.push(question);
@@ -1296,6 +1327,8 @@ export const parseGoogleSheetModeImport = ({
   overwriteExisting = true,
   importedAt = new Date().toISOString(),
   sourceLabel = '',
+  allowIdMatch = true,
+  allowTemplateMatch = false,
   bankType = 'game',
   source = 'googleSheetMode',
   defaultCategory = 'Uncategorised',
@@ -1348,7 +1381,7 @@ export const parseGoogleSheetModeImport = ({
     const existingMatch = findSheetQuestionMatch(
       existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === normalizedBankType),
       question,
-      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch, allowIdMatch },
     );
     if (!existingMatch) {
       imports.push(question);

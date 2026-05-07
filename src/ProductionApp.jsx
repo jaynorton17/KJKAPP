@@ -347,6 +347,21 @@ const makeQuestionBankUploadTemplateFilename = (target = QUESTION_BANK_SYNC_TARG
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'question-bank'}-upload-template.csv`;
+const makeQuestionBankUploadSourceLabel = (target = QUESTION_BANK_SYNC_TARGETS[0], fileName = '', rawText = '') => {
+  const sourceName = `${target.sheetName || target.gameName || 'question-bank'} ${fileName || 'csv-upload'}`
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'question-bank-upload';
+  let hash = 2166136261;
+  const text = String(rawText || '');
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `firestoreUpload:${sourceName}:${(hash >>> 0).toString(36)}`;
+};
 const QUESTION_BANK_EXPORT_TYPE_LABELS = {
   favourite: 'Favourite',
   manual: 'Manual / Custom',
@@ -904,6 +919,8 @@ const parseQuestionBankCsvForTarget = ({
   targetBankType = 'game',
   importedAt = new Date().toISOString(),
   sourceLabel = '',
+  allowIdMatch = true,
+  allowTemplateMatch = false,
 }) => {
   const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
   const target = getQuestionBankSyncTarget(normalizedTargetBankType);
@@ -919,6 +936,8 @@ const parseQuestionBankCsvForTarget = ({
       overwriteExisting,
       importedAt,
       sourceLabel: resolvedSourceLabel,
+      allowIdMatch,
+      allowTemplateMatch,
     });
   }
   if (normalizedTargetBankType === THIS_OR_THAT_GAME_MODE) {
@@ -928,6 +947,8 @@ const parseQuestionBankCsvForTarget = ({
       overwriteExisting,
       importedAt,
       sourceLabel: resolvedSourceLabel,
+      allowIdMatch,
+      allowTemplateMatch,
     });
   }
   if (normalizedTargetBankType === MOST_LIKELY_GAME_MODE) {
@@ -937,6 +958,8 @@ const parseQuestionBankCsvForTarget = ({
       overwriteExisting,
       importedAt,
       sourceLabel: resolvedSourceLabel,
+      allowIdMatch,
+      allowTemplateMatch,
     });
   }
   if (normalizedTargetBankType === PUT_YOUR_POINTS_GAME_MODE) {
@@ -946,6 +969,8 @@ const parseQuestionBankCsvForTarget = ({
       overwriteExisting,
       importedAt,
       sourceLabel: resolvedSourceLabel,
+      allowIdMatch,
+      allowTemplateMatch,
     });
   }
   if (normalizedTargetBankType === TRUE_FALSE_GAME_MODE) {
@@ -955,6 +980,8 @@ const parseQuestionBankCsvForTarget = ({
       overwriteExisting,
       importedAt,
       sourceLabel: resolvedSourceLabel,
+      allowIdMatch,
+      allowTemplateMatch,
     });
   }
   if (normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE) {
@@ -964,6 +991,8 @@ const parseQuestionBankCsvForTarget = ({
       overwriteExisting,
       importedAt,
       sourceLabel: resolvedSourceLabel,
+      allowIdMatch,
+      allowTemplateMatch,
       bankType: RED_FLAG_GREEN_FLAG_GAME_MODE,
       source: 'firestoreUploadRedFlagGreenFlag',
       defaultCategory: 'Red Flag Green Flag',
@@ -978,6 +1007,8 @@ const parseQuestionBankCsvForTarget = ({
       overwriteExisting,
       importedAt,
       sourceLabel: resolvedSourceLabel,
+      allowIdMatch,
+      allowTemplateMatch,
       bankType: COMPATIBILITY_METER_GAME_MODE,
       source: 'firestoreUploadCompatibility',
       defaultCategory: 'Compatibility',
@@ -991,6 +1022,8 @@ const parseQuestionBankCsvForTarget = ({
       overwriteExisting,
       importedAt,
       sourceLabel: resolvedSourceLabel,
+      allowIdMatch,
+      allowTemplateMatch,
       bankType: MEMORY_LANE_GAME_MODE,
       source: 'firestoreUploadMemoryLane',
       defaultCategory: 'Memory Lane',
@@ -1004,6 +1037,8 @@ const parseQuestionBankCsvForTarget = ({
     overwriteExisting,
     importedAt,
     sourceLabel: resolvedSourceLabel,
+    allowIdMatch,
+    allowTemplateMatch,
   });
 };
 const validateQuestionBankUploadResult = (result, targetBankType = 'game') => {
@@ -8111,9 +8146,9 @@ function LobbyScreen({
       return;
     }
     const summary = uploadResult.result?.summary || {};
-    const message = questionUploadMode === 'add'
-      ? `Upload complete: ${Number(summary.imported || 0)} new, ${Number(summary.updated || 0)} updated, ${Number(summary.duplicates || 0)} duplicates skipped.`
-      : `Upload complete: ${Number(uploadResult.replaceResult?.replaced || 0)} active, ${Number(uploadResult.replaceResult?.retired || 0)} used kept retired, ${Number(uploadResult.replaceResult?.removed || 0)} unused removed.`;
+    const message = questionUploadMode === 'replace'
+      ? `Upload complete: ${Number(uploadResult.replaceResult?.replaced || 0)} active, ${Number(uploadResult.replaceResult?.retired || 0)} used kept retired, ${Number(uploadResult.replaceResult?.removed || 0)} unused removed.`
+      : `Upload complete: ${Number(summary.imported || 0)} new, ${Number(summary.updated || 0)} updated, ${Number(summary.duplicates || 0)} duplicates skipped, ${Number(summary.skipped || 0)} unchanged.`;
     setQuestionUploadProgress({ status: 'done', percent: 100, message });
     setQuestionUploadDraft(null);
   };
@@ -9861,6 +9896,7 @@ function LobbyScreen({
                     <span>Mode</span>
                     <select value={questionUploadMode} onChange={(event) => setQuestionUploadMode(event.target.value)} disabled={isBusy}>
                       <option value="add">Add new questions only</option>
+                      <option value="upsert">Add new and update matches</option>
                       <option value="replace">Replace this game bank</option>
                     </select>
                   </label>
@@ -9904,7 +9940,13 @@ function LobbyScreen({
                     </div>
                     <p>{questionUploadProgress.message}</p>
                     {questionUploadDraft ? (
-                      <small>{`${questionUploadDraft.rowCount} rows selected for ${questionUploadTarget.gameName} in ${questionUploadMode === 'add' ? 'add new only' : 'replace'} mode.`}</small>
+                      <small>{`${questionUploadDraft.rowCount} rows selected for ${questionUploadTarget.gameName} in ${
+                        questionUploadMode === 'replace'
+                          ? 'replace'
+                          : questionUploadMode === 'upsert'
+                            ? 'add/update'
+                            : 'add new only'
+                      } mode.`}</small>
                     ) : null}
                   </div>
                 ) : null}
@@ -29355,7 +29397,8 @@ function ProductionApp() {
     fileName = 'CSV upload',
   } = {}) => {
     const target = getQuestionBankSyncTarget(targetBankType);
-    const shouldReplace = mode !== 'add';
+    const shouldReplace = mode === 'replace';
+    const shouldUpdateMatches = mode === 'upsert';
     if (!String(rawText || '').trim()) {
       const message = 'Choose a CSV file with question rows first.';
       setNotice(message);
@@ -29380,10 +29423,12 @@ function ProductionApp() {
       const result = parseQuestionBankCsvForTarget({
         rawText,
         existingQuestions: bankQuestions,
-        overwriteExisting: shouldReplace,
+        overwriteExisting: shouldReplace || shouldUpdateMatches,
         targetBankType: target.bankType,
         importedAt: new Date().toISOString(),
-        sourceLabel: `firestoreUpload:${target.sheetName}`,
+        sourceLabel: makeQuestionBankUploadSourceLabel(target, fileName, rawText),
+        allowIdMatch: shouldReplace,
+        allowTemplateMatch: !shouldReplace,
       });
       validateQuestionBankUploadResult(result, target.bankType);
 
@@ -29423,7 +29468,7 @@ function ProductionApp() {
       const upsertQuestions = dedupeQuestionsById([...result.imports, ...result.updates]);
       if (!upsertQuestions.length) {
         setSyncNotice(
-          `Uploaded ${fileName} into ${target.gameName}: 0 new, 0 updated, ${result.summary.duplicates} existing duplicates skipped.`,
+          `Uploaded ${fileName} into ${target.gameName}: 0 new, 0 updated, ${result.summary.duplicates} existing duplicates skipped, ${result.summary.skipped} unchanged.`,
         );
         setNotice(`${target.gameName} CSV upload complete. No new questions were added because the rows already exist.`);
         return {
@@ -29435,7 +29480,7 @@ function ProductionApp() {
       await upsertQuestionBankBatch(firestore, upsertQuestions);
       setBankQuestions((current) => mergeQuestionBankRecords(current, upsertQuestions));
       setSyncNotice(
-        `Uploaded ${fileName} into ${target.gameName}: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} existing duplicates skipped.`,
+        `Uploaded ${fileName} into ${target.gameName}: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} existing duplicates skipped, ${result.summary.skipped} unchanged.`,
       );
       setNotice(`${target.gameName} CSV upload complete.`);
       return {
