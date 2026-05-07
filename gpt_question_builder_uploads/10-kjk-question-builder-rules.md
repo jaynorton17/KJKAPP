@@ -85,6 +85,7 @@ Supported question types include:
 - No two rows may have the same options value after lowercasing and sorting the choices, except fixed-choice games where the app supplies the options.
 - No more than 5% of rows may begin with the same first 4 words.
 - Do not add filler words such as "right now", "tonight", "today", "secretly", or "honestly" repeatedly to make duplicates look unique.
+- Do not put generated labels, suffixes, IDs, or counters in question text. This includes `Variant 1`, `Q1`, `Row 1`, `Question 1`, batch labels, or numeric endings used only to make rows look unique.
 - Category, tone, relationship area, tags, game suitability, AI use case, and repeat group must be chosen because they fit the actual question.
 - Spread rows across the requested categories.
 - If the user asks for all categories, cover every recommended category at least once before repeating categories.
@@ -165,6 +166,7 @@ Supported question types include:
 Before returning a CSV, silently audit for:
 
 - duplicate questions
+- generated labels or suffixes in question text
 - repeated option pairs
 - repeated opening phrases
 - random or mismatched categories

@@ -827,6 +827,7 @@ const STRICT_QUESTION_BANK_GENERATION_RULES = [
   'No two rows may have the same Options value after lowercasing and sorting the choices, except fixed-choice games where the app supplies the options.',
   'No more than 5% of rows may begin with the same first 4 words.',
   'Do not add filler words such as "right now", "tonight", "today", "secretly", or "honestly" repeatedly to make duplicates look unique.',
+  'Do not put generated labels, suffixes, IDs, or counters in Question text, including Variant 1, Q1, Row 1, Question 1, batch labels, or numeric endings used only to make rows look unique.',
   'Category, Tone, Relationship Area, Tags, Game Suitability, AI Use Case, and Repeat Group must be chosen because they fit the actual question.',
   'Use varied sentence shapes: direct question, scenario, comparison, confession-style prompt, playful challenge, memory cue, values cue, and practical everyday choice where the game allows it.',
   'Spread rows across the recommended categories instead of clustering most rows in one or two categories.',
