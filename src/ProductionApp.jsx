@@ -228,6 +228,276 @@ const getQuestionBankSyncTarget = (targetBankType = 'game') => {
   return QUESTION_BANK_SYNC_TARGETS.find((target) => normalizeQuestionBankType(target.bankType) === normalizedTargetBankType)
     || QUESTION_BANK_SYNC_TARGETS[0];
 };
+const QUESTION_BANK_UPLOAD_COLUMNS = [
+  'Sheet',
+  'Game',
+  'Question',
+  'Category',
+  'Question Type',
+  'Options',
+  'Correct Answer',
+  'Active',
+  'Intensity',
+  'Tone',
+  'Relationship Area',
+  'Tags',
+  'Notes',
+  'Memory Lane Mode',
+  'Avoid If',
+  'Game Suitability',
+  'AI Use Case',
+  'Repeat Group',
+  'Default Answer Type',
+  'Answer Type',
+  'Unit Label',
+  'Scoring Divisor',
+  'Rounding Mode',
+  'Round Penalty Value',
+  'Fixed Penalty',
+  'Scoring Mode',
+  'Scoring Outcome Type',
+  'Source Label',
+  'Added By',
+  'Original Sheet',
+  'Original Question Type',
+];
+const QUESTION_BANK_UPLOAD_OPTION_TYPES = new Set(['multipleChoice', 'preference', 'sortIntoOrder']);
+const normalizeQuestionBankUploadHeader = (value) =>
+  String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+const parseQuestionBankUploadHeaderRow = (rawText = '') => {
+  const text = String(rawText || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const cells = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      field += '"';
+      index += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      cells.push(field.trim());
+      field = '';
+    } else if (char === '\n' && !inQuotes) {
+      cells.push(field.trim());
+      return cells;
+    } else {
+      field += char;
+    }
+  }
+
+  cells.push(field.trim());
+  return cells.filter(Boolean);
+};
+const validateQuestionBankUploadHeaders = (rawText = '') => {
+  const headers = parseQuestionBankUploadHeaderRow(rawText);
+  const headerKeys = new Set(headers.map(normalizeQuestionBankUploadHeader).filter(Boolean));
+  const missingColumns = QUESTION_BANK_UPLOAD_COLUMNS.filter(
+    (column) => !headerKeys.has(normalizeQuestionBankUploadHeader(column)),
+  );
+  if (missingColumns.length) {
+    const firstMissing = missingColumns.slice(0, 8).join(', ');
+    throw new Error(
+      `CSV is missing required template columns: ${firstMissing}${missingColumns.length > 8 ? '...' : ''}. Download the blank template first.`,
+    );
+  }
+};
+const escapeCsvCell = (value = '') => {
+  const text = String(value ?? '');
+  if (!/[",\n\r]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+};
+const buildQuestionBankUploadTemplateCsv = () =>
+  `${QUESTION_BANK_UPLOAD_COLUMNS.map(escapeCsvCell).join(',')}\n`;
+const makeQuestionBankUploadTemplateFilename = (target = QUESTION_BANK_SYNC_TARGETS[0]) =>
+  `${String(target.sheetName || target.gameName || 'question-bank')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'question-bank'}-upload-template.csv`;
+const downloadTextFile = (filename, text, type = 'text/plain;charset=utf-8') => {
+  if (typeof document === 'undefined') return;
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+const parseQuestionBankCsvForTarget = ({
+  rawText,
+  existingQuestions = [],
+  overwriteExisting = true,
+  targetBankType = 'game',
+  importedAt = new Date().toISOString(),
+  sourceLabel = '',
+}) => {
+  const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+  const target = getQuestionBankSyncTarget(normalizedTargetBankType);
+  const nextExistingQuestions = [...existingQuestions].filter(
+    (question) => normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType,
+  );
+  const resolvedSourceLabel = sourceLabel || `firestoreUpload:${target.sheetName}`;
+
+  if (normalizedTargetBankType === 'quiz') {
+    return parseGoogleSheetQuizImport({
+      rawText,
+      existingQuestions: nextExistingQuestions,
+      overwriteExisting,
+      importedAt,
+      sourceLabel: resolvedSourceLabel,
+    });
+  }
+  if (normalizedTargetBankType === THIS_OR_THAT_GAME_MODE) {
+    return parseGoogleSheetThisOrThatImport({
+      rawText,
+      existingQuestions: nextExistingQuestions,
+      overwriteExisting,
+      importedAt,
+      sourceLabel: resolvedSourceLabel,
+    });
+  }
+  if (normalizedTargetBankType === MOST_LIKELY_GAME_MODE) {
+    return parseGoogleSheetMostLikelyImport({
+      rawText,
+      existingQuestions: nextExistingQuestions,
+      overwriteExisting,
+      importedAt,
+      sourceLabel: resolvedSourceLabel,
+    });
+  }
+  if (normalizedTargetBankType === PUT_YOUR_POINTS_GAME_MODE) {
+    return parseGoogleSheetPutYourPointsImport({
+      rawText,
+      existingQuestions: nextExistingQuestions,
+      overwriteExisting,
+      importedAt,
+      sourceLabel: resolvedSourceLabel,
+    });
+  }
+  if (normalizedTargetBankType === TRUE_FALSE_GAME_MODE) {
+    return parseGoogleSheetTrueFalseImport({
+      rawText,
+      existingQuestions: nextExistingQuestions,
+      overwriteExisting,
+      importedAt,
+      sourceLabel: resolvedSourceLabel,
+    });
+  }
+  if (normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE) {
+    return parseGoogleSheetModeImport({
+      rawText,
+      existingQuestions: nextExistingQuestions,
+      overwriteExisting,
+      importedAt,
+      sourceLabel: resolvedSourceLabel,
+      bankType: RED_FLAG_GREEN_FLAG_GAME_MODE,
+      source: 'firestoreUploadRedFlagGreenFlag',
+      defaultCategory: 'Red Flag Green Flag',
+      defaultRoundType: 'multipleChoice',
+      fixedOptions: RED_FLAG_GREEN_FLAG_OPTIONS,
+    });
+  }
+  if (normalizedTargetBankType === COMPATIBILITY_METER_GAME_MODE) {
+    return parseGoogleSheetModeImport({
+      rawText,
+      existingQuestions: nextExistingQuestions,
+      overwriteExisting,
+      importedAt,
+      sourceLabel: resolvedSourceLabel,
+      bankType: COMPATIBILITY_METER_GAME_MODE,
+      source: 'firestoreUploadCompatibility',
+      defaultCategory: 'Compatibility',
+      defaultRoundType: 'text',
+    });
+  }
+  if (normalizedTargetBankType === MEMORY_LANE_GAME_MODE) {
+    return parseGoogleSheetModeImport({
+      rawText,
+      existingQuestions: nextExistingQuestions,
+      overwriteExisting,
+      importedAt,
+      sourceLabel: resolvedSourceLabel,
+      bankType: MEMORY_LANE_GAME_MODE,
+      source: 'firestoreUploadMemoryLane',
+      defaultCategory: 'Memory Lane',
+      defaultRoundType: 'text',
+    });
+  }
+
+  return parseGoogleSheetImport({
+    rawText,
+    existingQuestions: nextExistingQuestions,
+    overwriteExisting,
+    importedAt,
+    sourceLabel: resolvedSourceLabel,
+  });
+};
+const validateQuestionBankUploadResult = (result, targetBankType = 'game') => {
+  const target = getQuestionBankSyncTarget(targetBankType);
+  const normalizedTargetBankType = normalizeQuestionBankType(target.bankType);
+  const invalidRows = (result?.preview || []).filter((row) => row?.errors?.length || row?.status === 'invalid');
+  if (invalidRows.length) {
+    const firstRows = invalidRows
+      .slice(0, 5)
+      .map((row) => `row ${Number(row?.index || 0) + 2}: ${(row?.errors || ['Invalid row']).join('; ')}`)
+      .join(' | ');
+    throw new Error(`${target.gameName} upload has ${invalidRows.length} invalid row${invalidRows.length === 1 ? '' : 's'}. ${firstRows}`);
+  }
+
+  const activeRows = (result?.preview || []).filter((row) =>
+    row?.status !== 'inactive'
+    && row?.status !== 'invalid'
+    && !row?.errors?.length
+    && row?.question?.id
+    && normalizeQuestionBankType(row.question.bankType) === normalizedTargetBankType,
+  );
+  if (!activeRows.length) {
+    throw new Error(`${target.gameName} upload did not contain any active valid questions.`);
+  }
+
+  const seenQuestionRows = new Map();
+  const duplicateRows = [];
+  activeRows.forEach((row) => {
+    const questionKey = normalizeText(row?.question?.question).toLowerCase();
+    if (!questionKey) return;
+    const rowNumber = Number(row?.index || 0) + 2;
+    if (seenQuestionRows.has(questionKey)) {
+      duplicateRows.push(`${seenQuestionRows.get(questionKey)} and ${rowNumber}`);
+    } else {
+      seenQuestionRows.set(questionKey, rowNumber);
+    }
+  });
+  if (duplicateRows.length) {
+    throw new Error(
+      `${target.gameName} upload contains duplicate question text. First duplicate row pairs: ${duplicateRows.slice(0, 5).join(', ')}.`,
+    );
+  }
+
+  const missingOptionRows = [];
+  activeRows.forEach((row) => {
+    const question = row?.question || {};
+    const roundType = normalizeQuestionType(question.roundType, 'text');
+    if (!QUESTION_BANK_UPLOAD_OPTION_TYPES.has(roundType)) return;
+    const options = Array.isArray(question.multipleChoiceOptions)
+      ? question.multipleChoiceOptions.map(normalizeText).filter(Boolean)
+      : [];
+    if (options.length < 2) {
+      missingOptionRows.push(Number(row?.index || 0) + 2);
+    }
+  });
+  if (missingOptionRows.length) {
+    throw new Error(
+      `${target.gameName} upload has ${missingOptionRows.length} choice/order row${missingOptionRows.length === 1 ? '' : 's'} without at least two options. First rows: ${missingOptionRows.slice(0, 8).join(', ')}.`,
+    );
+  }
+};
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const MOST_LIKELY_STARTER_QUESTIONS = [
   'Who is most likely to turn a tiny plan into a full adventure?',
@@ -5591,6 +5861,7 @@ function LobbyScreen({
   onSyncCompatibilityMeterBank,
   onSyncMemoryLaneBank,
   onSyncAllQuestionBanks,
+  onUploadQuestionBankCsv,
   onImportQuestions,
   onImportQuizQuestions,
   onImportThisOrThatQuestions,
@@ -5729,6 +6000,8 @@ function LobbyScreen({
   const [lobbyTileImagesEnabled, setLobbyTileImagesEnabled] = useState(false);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
+  const [questionUploadBankType, setQuestionUploadBankType] = useState('game');
+  const [questionUploadMode, setQuestionUploadMode] = useState('replace');
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
   const [selectedRoundTypes, setSelectedRoundTypes] = useState([]);
   const [selectedCategories, setSelectedCategories] = useState([]);
@@ -5740,6 +6013,7 @@ function LobbyScreen({
   const [editingNoteDraft, setEditingNoteDraft] = useState('');
   const [mobileLobbyChatOpen, setMobileLobbyChatOpen] = useState(false);
   const dashboardMenuRef = useRef(null);
+  const questionUploadInputRef = useRef(null);
   const lobbyCarouselTouchStartXRef = useRef(null);
   const lobbyCarouselTouchInteractiveRef = useRef(false);
   const isMobileDashboardNav = useMediaQuery('(max-width: 900px)');
@@ -6833,6 +7107,7 @@ function LobbyScreen({
       ? MEMORY_LANE_GAME_MODE
       : 'game';
   const questionBankTarget = getQuestionBankSyncTarget(questionBankSegmentBankType);
+  const questionUploadTarget = getQuestionBankSyncTarget(questionUploadBankType);
   const questionBankSyncAction = questionBankSegment === 'quiz'
     ? onSyncQuizBank
     : questionBankSegment === 'thisOrThat'
@@ -6869,6 +7144,29 @@ function LobbyScreen({
       : onImportQuestions;
   const questionBankActionLabel = questionBankTarget.label;
   const questionBankImportLabel = questionBankTarget.importLabel;
+  const handleDownloadQuestionUploadTemplate = () => {
+    downloadTextFile(
+      makeQuestionBankUploadTemplateFilename(questionUploadTarget),
+      buildQuestionBankUploadTemplateCsv(),
+      'text/csv;charset=utf-8',
+    );
+  };
+  const handleQuestionUploadFileChange = async (event) => {
+    const file = event.target.files?.[0] || null;
+    event.target.value = '';
+    if (!file) return;
+    if (!onUploadQuestionBankCsv) {
+      window.alert('Question bank upload is not available.');
+      return;
+    }
+    const rawText = await file.text();
+    await onUploadQuestionBankCsv({
+      targetBankType: questionUploadTarget.bankType,
+      mode: questionUploadMode,
+      rawText,
+      fileName: file.name,
+    });
+  };
 
   useEffect(() => {
     setProfileNameDraft(normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
@@ -8577,6 +8875,44 @@ function LobbyScreen({
                   <strong>{syncNotice ? 'Needs review' : 'Connected'}</strong>
                   <span>{syncNotice || 'Google Sheet connected'}</span>
                 </article>
+              </div>
+
+              <div className="question-bank-upload-panel" aria-label="Firestore CSV question upload">
+                <div className="question-bank-upload-copy">
+                  <p className="eyebrow">Firestore Upload</p>
+                  <h3>Strict CSV Import</h3>
+                  <span>Upload a cleaned CSV directly into the selected game bank. Replace keeps used questions retired instead of deleting them.</span>
+                </div>
+                <div className="question-bank-upload-controls">
+                  <label className="field">
+                    <span>Game</span>
+                    <select value={questionUploadTarget.bankType} onChange={(event) => setQuestionUploadBankType(event.target.value)} disabled={isBusy}>
+                      {QUESTION_BANK_SYNC_TARGETS.map((target) => (
+                        <option key={target.bankType} value={target.bankType}>{target.gameName}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Mode</span>
+                    <select value={questionUploadMode} onChange={(event) => setQuestionUploadMode(event.target.value)} disabled={isBusy}>
+                      <option value="replace">Replace this game bank</option>
+                      <option value="add">Add new only</option>
+                    </select>
+                  </label>
+                  <Button className="ghost-button compact" onClick={handleDownloadQuestionUploadTemplate} disabled={isBusy}>
+                    Download Blank Template
+                  </Button>
+                  <Button className="primary-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={isBusy}>
+                    Upload CSV
+                  </Button>
+                  <input
+                    ref={questionUploadInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="question-bank-upload-input"
+                    onChange={handleQuestionUploadFileChange}
+                  />
+                </div>
               </div>
 
               <div className="button-row question-bank-actions">
@@ -27707,6 +28043,89 @@ function ProductionApp() {
       setNotice('All question banks synced from Google Sheet.');
     }, 'Could not sync all question banks.');
 
+  const uploadQuestionBankCsv = async ({
+    targetBankType = 'game',
+    mode = 'replace',
+    rawText = '',
+    fileName = 'CSV upload',
+  } = {}) => {
+    const target = getQuestionBankSyncTarget(targetBankType);
+    const shouldReplace = mode !== 'add';
+    if (!String(rawText || '').trim()) {
+      setNotice('Choose a CSV file with question rows first.');
+      return null;
+    }
+    if (
+      shouldReplace
+      && typeof window !== 'undefined'
+      && !window.confirm(`Replace the ${target.gameName} bank from "${fileName}"? Used questions stay retired so history is preserved.`)
+    ) {
+      return null;
+    }
+
+    return withBusy(async () => {
+      validateQuestionBankUploadHeaders(rawText);
+      const result = parseQuestionBankCsvForTarget({
+        rawText,
+        existingQuestions: bankQuestions,
+        overwriteExisting: shouldReplace,
+        targetBankType: target.bankType,
+        importedAt: new Date().toISOString(),
+        sourceLabel: `firestoreUpload:${target.sheetName}`,
+      });
+      validateQuestionBankUploadResult(result, target.bankType);
+
+      if (shouldReplace) {
+        const replacementQuestions = getSheetReplacementQuestions(result, target.bankType);
+        if (!replacementQuestions.length) {
+          throw new Error(`${target.gameName} upload did not contain any active valid questions.`);
+        }
+        const usedQuestionIdsForBank = getUsedQuestionIdsForBankType(target.bankType);
+        const replaceResult = await replaceQuestionBankSegmentBatch(
+          firestore,
+          target.bankType,
+          bankQuestions,
+          replacementQuestions,
+          usedQuestionIdsForBank,
+        );
+        const nextQuestions = applyQuestionBankSegmentReplacement(
+          bankQuestions,
+          target.bankType,
+          replacementQuestions,
+          usedQuestionIdsForBank,
+        );
+        setBankQuestions(nextQuestions);
+        setSyncNotice(
+          `Uploaded ${fileName} into ${target.gameName}: ${replaceResult.replaced} active, ${replaceResult.removed} unused removed, ${replaceResult.retired} used kept retired.`,
+        );
+        setNotice(`${target.gameName} question bank replaced from CSV.`);
+        return {
+          target,
+          result,
+          replaceResult,
+          replacementQuestions,
+          nextQuestions,
+        };
+      }
+
+      const upsertQuestions = dedupeQuestionsById([...result.imports, ...result.updates]);
+      if (!upsertQuestions.length) {
+        throw new Error(`${target.gameName} upload did not add any new questions. Existing duplicate rows were skipped.`);
+      }
+      await upsertQuestionBankBatch(firestore, upsertQuestions);
+      setBankQuestions((current) => mergeQuestionBankRecords(current, upsertQuestions));
+      setSyncNotice(
+        `Uploaded ${fileName} into ${target.gameName}: ${result.summary.imported} new, ${result.summary.updated} updated, ${result.summary.duplicates} existing duplicates skipped.`,
+      );
+      setNotice(`${target.gameName} CSV upload complete.`);
+      return {
+        target,
+        result,
+        upsertQuestions,
+      };
+    }, 'Could not upload question bank CSV.');
+  };
+
   const importSheet = async () =>
     withBusy(async () => {
       const result = await syncGoogleSheetQuestions({
@@ -28060,6 +28479,7 @@ function ProductionApp() {
         onSyncCompatibilityMeterBank={syncCompatibilityMeterSheet}
         onSyncMemoryLaneBank={syncMemoryLaneSheet}
         onSyncAllQuestionBanks={syncAllQuestionBanks}
+        onUploadQuestionBankCsv={uploadQuestionBankCsv}
         onImportQuestions={importSheet}
         onImportQuizQuestions={importQuizSheet}
         onImportThisOrThatQuestions={importThisOrThatSheet}

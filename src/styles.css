@@ -1480,6 +1480,56 @@ button:disabled {
   font-size: 0.72rem;
 }
 
+.question-bank-upload-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--section-accent, var(--accent)) 10%, transparent), transparent 56%),
+    rgba(0, 0, 0, 0.18);
+}
+
+.question-bank-upload-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.question-bank-upload-copy h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 1rem;
+}
+
+.question-bank-upload-copy span {
+  max-width: 860px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.question-bank-upload-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.1fr) minmax(170px, 0.9fr) repeat(2, minmax(150px, auto));
+  gap: 10px;
+  align-items: end;
+}
+
+.question-bank-upload-controls .field {
+  min-width: 0;
+  margin: 0;
+}
+
+.question-bank-upload-controls .field select {
+  width: 100%;
+}
+
+.question-bank-upload-input {
+  display: none;
+}
+
 .filter-card {
   display: grid;
   gap: 10px;
@@ -13120,6 +13170,7 @@ select:focus-visible {
   .game-lobby-grid,
   .question-bank-status-grid,
   .question-bank-sheet-grid,
+  .question-bank-upload-controls,
   .create-filters-grid {
     grid-template-columns: 1fr;
   }
@@ -13383,7 +13434,8 @@ select:focus-visible {
   .filter-chip-grid--categories,
   .live-round-grid,
   .question-bank-status-grid,
-  .question-bank-sheet-grid {
+  .question-bank-sheet-grid,
+  .question-bank-upload-controls {
     grid-template-columns: 1fr;
   }
 
