@@ -1280,3 +1280,109 @@ export const parseGoogleSheetMostLikelyImport = ({
     },
   };
 };
+
+export const parseGoogleSheetModeImport = ({
+  rawText,
+  existingQuestions = [],
+  overwriteExisting = true,
+  importedAt = new Date().toISOString(),
+  sourceLabel = '',
+  bankType = 'game',
+  source = 'googleSheetMode',
+  defaultCategory = 'Uncategorised',
+  defaultRoundType = 'text',
+  fixedOptions = null,
+}) => {
+  const normalizedBankType = normalizeQuestionBankType(bankType);
+  const parsed = parseCsvRows(rawText);
+  const rows = limitGoogleSheetRows(parsed.rows).map((row) => enrichMappedRow(row));
+  const imports = [];
+  const updates = [];
+  let duplicates = 0;
+  let invalid = 0;
+  let skipped = 0;
+
+  const preview = rows.map((row, index) => {
+    const rawQuestion = normalizeText(row.question);
+    const rawCategory = normalizeText(row.category) || defaultCategory;
+    const rawType = normalizeQuestionType(row.roundType, defaultRoundType);
+    const isActive = parseBooleanish(row.active, true);
+    const errors = [];
+
+    if (!rawQuestion) errors.push('Missing question text');
+
+    const question = createGoogleSheetQuestionTemplate({
+      ...row,
+      category: rawCategory,
+      roundType: rawType,
+      answerType: row.answerType || row.defaultAnswerType || rawType,
+      defaultAnswerType: row.defaultAnswerType || rawType,
+      multipleChoiceOptions: Array.isArray(fixedOptions) && fixedOptions.length ? fixedOptions : row.multipleChoiceOptions,
+      source,
+      sourceLabel,
+      addedBy: row.addedBy,
+      importedFromGoogleSheet: true,
+      importDate: importedAt,
+      bankType: normalizedBankType,
+    }, { sourceLabel, index, bankType: normalizedBankType });
+
+    if (errors.length) {
+      invalid += 1;
+      return { index, question, errors, status: 'invalid' };
+    }
+
+    if (!isActive) {
+      skipped += 1;
+      return { index, question, errors, status: 'inactive' };
+    }
+
+    const existingMatch = findSheetQuestionMatch(
+      existingQuestions.filter((entry) => normalizeQuestionBankType(entry?.bankType) === normalizedBankType),
+      question,
+      { allowTypeMigration: overwriteExisting, allowTemplateMatch: false },
+    );
+    if (!existingMatch) {
+      imports.push(question);
+      return { index, question, errors, status: 'import' };
+    }
+
+    if (!overwriteExisting) {
+      duplicates += 1;
+      return { index, question, errors, status: 'duplicate', existingId: existingMatch.id };
+    }
+
+    const updatedQuestion = createQuestionTemplate({
+      ...existingMatch,
+      ...question,
+      id: existingMatch.id,
+      used: existingMatch.used,
+      timesPlayed: existingMatch.timesPlayed,
+      lastPlayedAt: existingMatch.lastPlayedAt,
+      createdAt: existingMatch.createdAt,
+      importDate: importedAt,
+    });
+
+    if (hasQuestionTemplateChanged(existingMatch, updatedQuestion)) {
+      updates.push(updatedQuestion);
+      return { index, question: updatedQuestion, errors, status: 'update', existingId: existingMatch.id };
+    }
+
+    skipped += 1;
+    return { index, question: existingMatch, errors, status: 'skipped', existingId: existingMatch.id };
+  });
+
+  return {
+    format: `googleSheet${normalizedBankType}Csv`,
+    preview,
+    imports,
+    updates,
+    summary: {
+      total: rows.length,
+      imported: imports.length,
+      updated: updates.length,
+      duplicates,
+      invalid,
+      skipped,
+    },
+  };
+};

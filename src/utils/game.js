@@ -613,6 +613,26 @@ export const normalizeQuestionBankType = (value = 'game') => {
   ) {
     return 'putYourPointsGame';
   }
+  if (
+    normalized === 'redflaggreenflaggame'
+    || normalized === 'redflaggreenflag'
+    || normalized === 'redgreenflag'
+    || normalized === 'redgreenflaggame'
+  ) {
+    return 'redFlagGreenFlagGame';
+  }
+  if (
+    normalized === 'compatibilitymetergame'
+    || normalized === 'compatibilitymeter'
+    || normalized === 'compatibility'
+    || normalized === 'compatability'
+    || normalized === 'compatabilitymeter'
+  ) {
+    return 'compatibilityMeterGame';
+  }
+  if (normalized === 'memorylanegame' || normalized === 'memorylane' || normalized === 'memory') {
+    return 'memoryLaneGame';
+  }
   return 'game';
 };
 
@@ -925,6 +945,11 @@ export const createRoundResult = (input, nextNumber = 1, priorTotals = emptyTota
       kim: normalizeText(input.putYourPointsResults?.kim),
     },
     putYourPointsStakeGeneratedAt: normalizeText(input.putYourPointsStakeGeneratedAt),
+    compatibilityScore: Math.max(0, Math.min(100, parseNumber(input.compatibilityScore, 0))),
+    memoryLaneMode: normalizeText(input.memoryLaneMode),
+    sourceGameId: normalizeText(input.sourceGameId),
+    sourceRoundId: normalizeText(input.sourceRoundId),
+    sourceSeat: normalizeText(input.sourceSeat),
     manualScores: Boolean(input.manualScores),
     scoringMode: normalizeScoringMode(input.scoringMode, roundType),
     scoringOutcomeType: normalizeScoringOutcomeType(input.scoringOutcomeType, roundType),

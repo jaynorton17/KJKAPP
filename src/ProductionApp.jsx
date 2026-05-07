@@ -37,10 +37,13 @@ import {
 import AnalyticsPanel from './components/AnalyticsPanel.jsx';
 import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
 import normalGameTileImage from './assets/lobby-normal-game.webp';
+import compatibilityTileImage from './assets/lobby-compatability.png';
+import memoryLaneTileImage from './assets/lobby-memory.png';
 import mostLikelyTileImage from './assets/lobby-most-likely.png';
 import pokerTileImage from './assets/lobby-poker.webp';
 import putYourPointsTileImage from './assets/lobby-put-your-points.png';
 import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
+import redGreenFlagTileImage from './assets/lobby-red-green-flag.png';
 import thisOrThatTileImage from './assets/lobby-this-or-that.webp';
 import trueOrFalseTileImage from './assets/lobby-true-or-false.webp';
 import {
@@ -110,6 +113,7 @@ import {
 } from './lib/gemini.js';
 import {
   parseGoogleSheetImport,
+  parseGoogleSheetModeImport,
   parseGoogleSheetMostLikelyImport,
   parseGoogleSheetPutYourPointsImport,
   parseGoogleSheetQuizImport,
@@ -124,6 +128,9 @@ const TRUE_FALSE_GAME_MODE = 'trueFalseGame';
 const THIS_OR_THAT_GAME_MODE = 'thisOrThatGame';
 const MOST_LIKELY_GAME_MODE = 'mostLikelyGame';
 const PUT_YOUR_POINTS_GAME_MODE = 'putYourPointsGame';
+const RED_FLAG_GREEN_FLAG_GAME_MODE = 'redFlagGreenFlagGame';
+const COMPATIBILITY_METER_GAME_MODE = 'compatibilityMeterGame';
+const MEMORY_LANE_GAME_MODE = 'memoryLaneGame';
 const TRUE_FALSE_WRONG_PENALTY = 10;
 const TRUE_FALSE_UNANSWERED_PENALTY = 10;
 const THIS_OR_THAT_WRONG_PENALTY = 10;
@@ -136,6 +143,15 @@ const PUT_YOUR_POINTS_STAKE_RANDOM_COUNT = 20;
 const PUT_YOUR_POINTS_STAKE_RANDOM_DURATION_MS = 3000;
 const PUT_YOUR_POINTS_STAKE_FINAL_HOLD_MS = 2000;
 const PUT_YOUR_POINTS_STAKE_DOCK_MS = 720;
+const RED_FLAG_GREEN_FLAG_OPTIONS = ['Green Flag', 'Red Flag', 'Depends'];
+const RED_FLAG_GREEN_FLAG_WRONG_PENALTY = 10;
+const RED_FLAG_GREEN_FLAG_UNANSWERED_PENALTY = 10;
+const COMPATIBILITY_BANDS = [
+  { min: 95, penalty: 0 },
+  { min: 85, penalty: 100 },
+  { min: 70, penalty: 250 },
+  { min: 0, penalty: 500 },
+];
 const TRUE_FALSE_AUTO_SYNC_MIN_COUNT = 100;
 const THIS_OR_THAT_AUTO_SYNC_MIN_COUNT = 20;
 const MOST_LIKELY_AUTO_SYNC_MIN_COUNT = 20;
@@ -183,6 +199,27 @@ const QUESTION_BANK_SYNC_TARGETS = [
     label: 'True or False Bank',
     importLabel: 'True or False Questions',
     sheetName: 'True or False',
+  },
+  {
+    bankType: RED_FLAG_GREEN_FLAG_GAME_MODE,
+    gameName: 'Red Flag Green Flag',
+    label: 'Red Flag Green Flag Bank',
+    importLabel: 'Red Flag Green Flag Questions',
+    sheetName: 'Red Flag Green Flag',
+  },
+  {
+    bankType: COMPATIBILITY_METER_GAME_MODE,
+    gameName: 'Compatibility Meter',
+    label: 'Compatibility Meter Bank',
+    importLabel: 'Compatibility Questions',
+    sheetName: 'Compatibility',
+  },
+  {
+    bankType: MEMORY_LANE_GAME_MODE,
+    gameName: 'Memory Lane',
+    label: 'Memory Lane Bank',
+    importLabel: 'Memory Lane Questions',
+    sheetName: 'Memory Lane',
   },
 ];
 const getQuestionBankSyncTarget = (targetBankType = 'game') => {
@@ -377,6 +414,12 @@ const resolveGameMode = (value = 'standard') => {
           ? MOST_LIKELY_GAME_MODE
           : value === PUT_YOUR_POINTS_GAME_MODE || normalizedBankType === PUT_YOUR_POINTS_GAME_MODE
             ? PUT_YOUR_POINTS_GAME_MODE
+            : value === RED_FLAG_GREEN_FLAG_GAME_MODE || normalizedBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
+              ? RED_FLAG_GREEN_FLAG_GAME_MODE
+            : value === COMPATIBILITY_METER_GAME_MODE || normalizedBankType === COMPATIBILITY_METER_GAME_MODE
+              ? COMPATIBILITY_METER_GAME_MODE
+            : value === MEMORY_LANE_GAME_MODE || normalizedBankType === MEMORY_LANE_GAME_MODE
+              ? MEMORY_LANE_GAME_MODE
             : 'standard';
 };
 const isQuizGameMode = (value = 'standard') => resolveGameMode(value) === 'quiz';
@@ -385,8 +428,11 @@ const isTrueFalseGameMode = (value = 'standard') => resolveGameMode(value) === T
 const isThisOrThatGameMode = (value = 'standard') => resolveGameMode(value) === THIS_OR_THAT_GAME_MODE;
 const isMostLikelyGameMode = (value = 'standard') => resolveGameMode(value) === MOST_LIKELY_GAME_MODE;
 const isPutYourPointsGameMode = (value = 'standard') => resolveGameMode(value) === PUT_YOUR_POINTS_GAME_MODE;
+const isRedFlagGreenFlagGameMode = (value = 'standard') => resolveGameMode(value) === RED_FLAG_GREEN_FLAG_GAME_MODE;
+const isCompatibilityMeterGameMode = (value = 'standard') => resolveGameMode(value) === COMPATIBILITY_METER_GAME_MODE;
+const isMemoryLaneGameMode = (value = 'standard') => resolveGameMode(value) === MEMORY_LANE_GAME_MODE;
 const isAutoScoredChoiceGameMode = (value = 'standard') =>
-  isTrueFalseGameMode(value) || isThisOrThatGameMode(value) || isMostLikelyGameMode(value) || isPutYourPointsGameMode(value);
+  isTrueFalseGameMode(value) || isThisOrThatGameMode(value) || isMostLikelyGameMode(value) || isPutYourPointsGameMode(value) || isRedFlagGreenFlagGameMode(value) || isCompatibilityMeterGameMode(value);
 const getQuestionBankTypeForGameMode = (value = 'standard') => {
   const gameMode = resolveGameMode(value);
   if (gameMode === 'quiz') return 'quiz';
@@ -394,6 +440,9 @@ const getQuestionBankTypeForGameMode = (value = 'standard') => {
   if (gameMode === MOST_LIKELY_GAME_MODE) return 'mostLikelyGame';
   if (gameMode === PUT_YOUR_POINTS_GAME_MODE) return 'putYourPointsGame';
   if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalseGame';
+  if (gameMode === RED_FLAG_GREEN_FLAG_GAME_MODE) return RED_FLAG_GREEN_FLAG_GAME_MODE;
+  if (gameMode === COMPATIBILITY_METER_GAME_MODE) return COMPATIBILITY_METER_GAME_MODE;
+  if (gameMode === MEMORY_LANE_GAME_MODE) return MEMORY_LANE_GAME_MODE;
   return 'game';
 };
 const ANALYTICS_GAME_SCORE_MODES = [
@@ -403,6 +452,9 @@ const ANALYTICS_GAME_SCORE_MODES = [
   { id: 'thisOrThat', label: 'This or That' },
   { id: 'mostLikely', label: 'Most Likely To' },
   { id: 'putYourPoints', label: 'Put Your Points' },
+  { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag' },
+  { id: 'compatibilityMeter', label: 'Compatibility Meter' },
+  { id: 'memoryLane', label: 'Memory Lane' },
   { id: 'holdem', label: 'Texas Hold Em' },
 ];
 const getAnalyticsGameScoreModeId = (value = 'standard') => {
@@ -412,6 +464,9 @@ const getAnalyticsGameScoreModeId = (value = 'standard') => {
   if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThat';
   if (gameMode === MOST_LIKELY_GAME_MODE) return 'mostLikely';
   if (gameMode === PUT_YOUR_POINTS_GAME_MODE) return 'putYourPoints';
+  if (gameMode === RED_FLAG_GREEN_FLAG_GAME_MODE) return 'redFlagGreenFlag';
+  if (gameMode === COMPATIBILITY_METER_GAME_MODE) return 'compatibilityMeter';
+  if (gameMode === MEMORY_LANE_GAME_MODE) return 'memoryLane';
   if (gameMode === HOLDEM_GAME_MODE) return 'holdem';
   return 'standard';
 };
@@ -1523,6 +1578,9 @@ const getDiaryGameModeLabel = (gameMode = 'standard') => {
   if (isPutYourPointsGameMode(gameMode)) return 'Put Your Points';
   if (isThisOrThatGameMode(gameMode)) return 'This or That';
   if (isTrueFalseGameMode(gameMode)) return 'True or False';
+  if (isRedFlagGreenFlagGameMode(gameMode)) return 'Red Flag Green Flag';
+  if (isCompatibilityMeterGameMode(gameMode)) return 'Compatibility Meter';
+  if (isMemoryLaneGameMode(gameMode)) return 'Memory Lane';
   return 'Standard Game';
 };
 
@@ -1868,6 +1926,7 @@ const buildGameDiaryRoundHighlights = (gameSummary = {}) => {
       jayPenalty: Number(round?.penaltyAdded?.jay ?? round?.scores?.jay ?? 0),
       kimPenalty: Number(round?.penaltyAdded?.kim ?? round?.scores?.kim ?? 0),
       roundStake: gameMode === PUT_YOUR_POINTS_GAME_MODE ? Number(round?.putYourPointsStake || 0) : 0,
+      compatibilityScore: gameMode === COMPATIBILITY_METER_GAME_MODE ? Number(round?.compatibilityScore || 0) : 0,
       putYourPointsResults: gameMode === PUT_YOUR_POINTS_GAME_MODE ? {
         jay: normalizePutYourPointsResult(round?.putYourPointsResults?.jay),
         kim: normalizePutYourPointsResult(round?.putYourPointsResults?.kim),
@@ -3476,6 +3535,10 @@ const normalizeStoredQuestion = (raw = {}, fallbackId = '') => {
     retiredReason: normalizeText(raw?.retiredReason || ''),
     sheetRowNumber: Number.parseInt(raw?.sheetRowNumber || 0, 10) || null,
     sheetRowKey: normalizeText(raw?.sheetRowKey || ''),
+    memoryLaneMode: normalizeText(raw?.memoryLaneMode || ''),
+    sourceGameId: normalizeText(raw?.sourceGameId || ''),
+    sourceRoundId: normalizeText(raw?.sourceRoundId || ''),
+    sourceSeat: normalizeText(raw?.sourceSeat || ''),
   };
 };
 
@@ -3580,6 +3643,27 @@ const normalizeMostLikelyChoice = (value = '') => {
   if (!normalized) return '';
   return getMostLikelyOptions().find((option) => normalizeText(option).toLowerCase() === normalized) || '';
 };
+const normalizeRedFlagGreenFlagChoice = (value = '') => {
+  const normalized = normalizeText(serialiseAnswerForQuestionType('multipleChoice', value)).toLowerCase();
+  if (!normalized) return '';
+  return RED_FLAG_GREEN_FLAG_OPTIONS.find((option) => normalizeText(option).toLowerCase() === normalized) || '';
+};
+const normalizeComparableAnswer = (value = '') =>
+  normalizeText(serialiseAnswerForQuestionType('text', value)).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const calculateCompatibilityScore = (round = {}) => {
+  const jayAnswer = normalizeComparableAnswer(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
+  const kimAnswer = normalizeComparableAnswer(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '');
+  if (!jayAnswer || !kimAnswer) return 0;
+  if (jayAnswer === kimAnswer) return 100;
+  const jayTokens = new Set(jayAnswer.split(/\s+/).filter(Boolean));
+  const kimTokens = new Set(kimAnswer.split(/\s+/).filter(Boolean));
+  const union = new Set([...jayTokens, ...kimTokens]);
+  if (!union.size) return 0;
+  const overlap = [...jayTokens].filter((token) => kimTokens.has(token)).length;
+  return Math.max(0, Math.min(100, Math.round((overlap / union.size) * 100)));
+};
+const getCompatibilityPenaltyForScore = (score = 0) =>
+  COMPATIBILITY_BANDS.find((band) => Number(score || 0) >= band.min)?.penalty ?? 500;
 const clampPutYourPointsStake = (value = 0) => {
   const numericValue = Math.round(Number(value || 0));
   if (!Number.isFinite(numericValue)) return PUT_YOUR_POINTS_STAKE_MIN;
@@ -3598,6 +3682,88 @@ const buildPutYourPointsStakeSnapshot = () => {
 };
 const getPutYourPointsStake = (round = {}) =>
   clampPutYourPointsStake(round?.putYourPointsStake ?? round?.roundStake ?? round?.stake);
+const isMemoryLaneRecallRound = (round = {}) =>
+  normalizeIdentity(round?.memoryLaneMode || round?.memoryLaneType || '') === 'pastanswerrecall';
+const buildStableOptionSet = (correctAnswer = '', candidateAnswers = [], seed = '') => {
+  const correct = normalizeText(correctAnswer);
+  const correctKey = normalizeIdentity(correct);
+  const candidates = [...new Set(
+    candidateAnswers
+      .map((answer) => normalizeText(answer))
+      .filter((answer) => answer && normalizeIdentity(answer) !== correctKey),
+  )];
+  const sortedCandidates = candidates.sort((left, right) => {
+    const leftScore = normalizeIdentity(`${seed}:${left}`).split('').reduce((total, char) => total + char.charCodeAt(0), 0);
+    const rightScore = normalizeIdentity(`${seed}:${right}`).split('').reduce((total, char) => total + char.charCodeAt(0), 0);
+    return leftScore - rightScore || left.localeCompare(right);
+  });
+  const fallbackOptions = ['I do not remember', 'Something else', 'No answer was given']
+    .filter((answer) => normalizeIdentity(answer) !== correctKey);
+  const options = [correct, ...sortedCandidates, ...fallbackOptions].filter(Boolean);
+  const uniqueOptions = [];
+  const seen = new Set();
+  options.forEach((option) => {
+    const key = normalizeIdentity(option);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    uniqueOptions.push(option);
+  });
+  const optionSet = uniqueOptions.slice(0, 3);
+  const shift = optionSet.length
+    ? normalizeIdentity(seed).split('').reduce((total, char) => total + char.charCodeAt(0), 0) % optionSet.length
+    : 0;
+  return optionSet.map((_, index) => optionSet[(index + shift) % optionSet.length]);
+};
+const buildMemoryLaneRecallQuestions = (gameEntries = [], limit = 180) => {
+  const answerRows = [];
+  const answerPool = [];
+  (Array.isArray(gameEntries) ? gameEntries : []).forEach((entry) => {
+    if (!entry?.id || isHoldemGameMode(entry?.gameMode || 'standard') || isMemoryLaneGameMode(entry?.gameMode || 'standard')) return;
+    normalizeStoredRounds(entry?.rounds || []).forEach((round, roundIndex) => {
+      if (!normalizeText(round?.question || '')) return;
+      seats.forEach((playerSeat) => {
+        const rawAnswer = round?.actualAnswers?.[playerSeat] ?? round?.answers?.[playerSeat]?.ownAnswer ?? '';
+        const answer = formatRoundAnswerValue(rawAnswer, round?.roundType);
+        if (!normalizeText(answer) || answer === '-') return;
+        const row = {
+          gameId: entry.id,
+          roundId: round.id || `${round.questionId || roundIndex}-${roundIndex}`,
+          roundType: round.roundType || 'text',
+          question: round.question,
+          category: round.category || 'Past Answers',
+          playerSeat,
+          answer,
+        };
+        answerRows.push(row);
+        answerPool.push(answer);
+      });
+    });
+  });
+
+  return answerRows.slice(0, limit).map((row, index) => {
+    const seed = `${row.gameId}:${row.roundId}:${row.playerSeat}`;
+    const shortQuestion = truncateAiText(row.question, 96);
+    const options = buildStableOptionSet(row.answer, answerPool, seed);
+    return {
+      ...createQuestionTemplate({
+        id: `memory-lane-recall-${sanitizeNoteKey(seed) || index}`,
+        question: `What did ${PLAYER_LABEL[row.playerSeat] || row.playerSeat} answer when asked: "${shortQuestion}"?`,
+        category: 'Past Answers',
+        roundType: 'multipleChoice',
+        defaultAnswerType: 'multipleChoice',
+        multipleChoiceOptions: options,
+        correctAnswer: row.answer,
+        bankType: MEMORY_LANE_GAME_MODE,
+        source: 'memoryLaneRecall',
+        notes: 'Generated from a previous game answer.',
+      }),
+      memoryLaneMode: 'pastAnswerRecall',
+      sourceGameId: row.gameId,
+      sourceRoundId: row.roundId,
+      sourceSeat: row.playerSeat,
+    };
+  });
+};
 const normalizePutYourPointsResult = (value = '') => {
   const normalized = normalizeText(value).toLowerCase();
   if (normalized === 'match' || normalized === 'matched' || normalized === 'correct') return 'matched';
@@ -3616,6 +3782,14 @@ const hasCompletedThisOrThatRoundAnswer = (round = {}, seat = '') =>
   && Boolean(normalizeThisOrThatChoice(round?.answers?.[seat]?.guessedOther || '', round));
 const hasCompletedMostLikelyRoundAnswer = (round = {}, seat = '') =>
   Boolean(normalizeMostLikelyChoice(round?.answers?.[seat]?.ownAnswer || ''));
+const hasCompletedRedFlagGreenFlagRoundAnswer = (round = {}, seat = '') =>
+  Boolean(normalizeRedFlagGreenFlagChoice(round?.answers?.[seat]?.ownAnswer || ''))
+  && Boolean(normalizeRedFlagGreenFlagChoice(round?.answers?.[seat]?.guessedOther || ''));
+const hasCompletedMemoryLanePromptRoundAnswer = (round = {}, seat = '') =>
+  isMemoryLaneRecallRound(round)
+    ? hasSubmittedRoundAnswer(round, seat)
+    : Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''))
+      && Boolean(normalizeText(round?.answers?.[seat]?.guessedOther || ''));
 const hasCompletedPutYourPointsRoundAnswer = (round = {}, seat = '') =>
   Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''))
   && Boolean(normalizeText(round?.answers?.[seat]?.guessedOther || ''));
@@ -3635,6 +3809,12 @@ const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat 
           : hasSubmittedRoundAnswer(round, seat)
         : isPutYourPointsGameMode(gameMode)
           ? hasCompletedPutYourPointsRoundAnswer(round, seat)
+          : isRedFlagGreenFlagGameMode(gameMode)
+            ? hasCompletedRedFlagGreenFlagRoundAnswer(round, seat)
+          : isCompatibilityMeterGameMode(gameMode)
+            ? hasSubmittedRoundAnswer(round, seat)
+          : isMemoryLaneGameMode(gameMode)
+            ? hasCompletedMemoryLanePromptRoundAnswer(round, seat)
           : hasSubmittedRoundAnswer(round, seat);
 
 const getStoredPenaltyOverride = (...values) => {
@@ -3735,6 +3915,63 @@ const buildThisOrThatRoundOutcome = (round = {}, outcomeOptions = {}) => {
     kimPenalty,
   };
 };
+const buildRedFlagGreenFlagRoundOutcome = (round = {}, outcomeOptions = {}) => {
+  const useStoredPenalties = outcomeOptions.useStoredPenalties !== false;
+  const jayGuess = normalizeRedFlagGreenFlagChoice(round?.guessedAnswers?.jay ?? round?.answers?.jay?.guessedOther ?? '');
+  const kimGuess = normalizeRedFlagGreenFlagChoice(round?.guessedAnswers?.kim ?? round?.answers?.kim?.guessedOther ?? '');
+  const jayActual = normalizeRedFlagGreenFlagChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
+  const kimActual = normalizeRedFlagGreenFlagChoice(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '');
+  const jayGuessScorable = Boolean(jayGuess) && Boolean(kimActual);
+  const kimGuessScorable = Boolean(kimGuess) && Boolean(jayActual);
+  const jayCorrect = jayGuessScorable && jayGuess === kimActual;
+  const kimCorrect = kimGuessScorable && kimGuess === jayActual;
+  const jayMissingGuess = !Boolean(jayGuess);
+  const kimMissingGuess = !Boolean(kimGuess);
+  const jayMissingOwnAnswer = !Boolean(jayActual);
+  const kimMissingOwnAnswer = !Boolean(kimActual);
+  const jayMissingResponse = jayMissingGuess || jayMissingOwnAnswer;
+  const kimMissingResponse = kimMissingGuess || kimMissingOwnAnswer;
+  const jayDefaultPenalty = (jayGuessScorable && !jayCorrect ? RED_FLAG_GREEN_FLAG_WRONG_PENALTY : 0)
+    + (jayMissingResponse ? RED_FLAG_GREEN_FLAG_UNANSWERED_PENALTY : 0);
+  const kimDefaultPenalty = (kimGuessScorable && !kimCorrect ? RED_FLAG_GREEN_FLAG_WRONG_PENALTY : 0)
+    + (kimMissingResponse ? RED_FLAG_GREEN_FLAG_UNANSWERED_PENALTY : 0);
+  const jayStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.jay, round?.penalties?.jay) : null;
+  const kimStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.kim, round?.penalties?.kim) : null;
+  return {
+    options: RED_FLAG_GREEN_FLAG_OPTIONS,
+    jayGuess,
+    kimGuess,
+    jayActual,
+    kimActual,
+    jayGuessScorable,
+    kimGuessScorable,
+    jayCorrect,
+    kimCorrect,
+    jayMissingGuess,
+    kimMissingGuess,
+    jayMissingOwnAnswer,
+    kimMissingOwnAnswer,
+    jayMissingResponse,
+    kimMissingResponse,
+    jayPenalty: jayStoredPenalty ?? jayDefaultPenalty,
+    kimPenalty: kimStoredPenalty ?? kimDefaultPenalty,
+  };
+};
+const buildCompatibilityRoundOutcome = (round = {}, outcomeOptions = {}) => {
+  const useStoredPenalties = outcomeOptions.useStoredPenalties !== false;
+  const score = getStoredPenaltyOverride(round?.compatibilityScore) ?? calculateCompatibilityScore(round);
+  const defaultPenalty = getCompatibilityPenaltyForScore(score);
+  const jayStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.jay, round?.penalties?.jay) : null;
+  const kimStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.kim, round?.penalties?.kim) : null;
+  return {
+    score,
+    penalty: defaultPenalty,
+    jayPenalty: jayStoredPenalty ?? defaultPenalty,
+    kimPenalty: kimStoredPenalty ?? defaultPenalty,
+    jayActual: normalizeText(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? ''),
+    kimActual: normalizeText(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? ''),
+  };
+};
 const buildMostLikelyRoundOutcome = (round = {}, outcomeOptions = {}) => {
   const useStoredPenalties = outcomeOptions.useStoredPenalties !== false;
   const jayVote = normalizeMostLikelyChoice(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
@@ -3802,6 +4039,14 @@ const buildAutoScoredRoundPenaltyMap = (gameMode = 'standard', round = {}, optio
   }
   if (isThisOrThatGameMode(gameMode)) {
     const outcome = buildThisOrThatRoundOutcome(round, options);
+    return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
+  }
+  if (isRedFlagGreenFlagGameMode(gameMode)) {
+    const outcome = buildRedFlagGreenFlagRoundOutcome(round, options);
+    return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
+  }
+  if (isCompatibilityMeterGameMode(gameMode)) {
+    const outcome = buildCompatibilityRoundOutcome(round, options);
     return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
   }
   if (isMostLikelyGameMode(gameMode) && isMostLikelyVoteRound(round)) {
@@ -4891,6 +5136,9 @@ function LobbyScreen({
   onSyncMostLikelyBank,
   onSyncPutYourPointsBank,
   onSyncTrueFalseBank,
+  onSyncRedFlagGreenFlagBank,
+  onSyncCompatibilityMeterBank,
+  onSyncMemoryLaneBank,
   onSyncAllQuestionBanks,
   onImportQuestions,
   onImportQuizQuestions,
@@ -4898,6 +5146,9 @@ function LobbyScreen({
   onImportMostLikelyQuestions,
   onImportPutYourPointsQuestions,
   onImportTrueFalseQuestions,
+  onImportRedFlagGreenFlagQuestions,
+  onImportCompatibilityMeterQuestions,
+  onImportMemoryLaneQuestions,
   onResumeGame,
   onViewSummary,
   // Lobby chat props (injected from ProductionApp)
@@ -4937,6 +5188,15 @@ function LobbyScreen({
   trueFalseQuestionCount,
   usedTrueFalseQuestionCount,
   remainingTrueFalseQuestionCount,
+  redFlagGreenFlagQuestionCount = 0,
+  usedRedFlagGreenFlagQuestionCount = 0,
+  remainingRedFlagGreenFlagQuestionCount = 0,
+  compatibilityMeterQuestionCount = 0,
+  usedCompatibilityMeterQuestionCount = 0,
+  remainingCompatibilityMeterQuestionCount = 0,
+  memoryLaneQuestionCount = 0,
+  usedMemoryLaneQuestionCount = 0,
+  remainingMemoryLaneQuestionCount = 0,
   unusedQuestionCount,
   syncNotice,
   gameInvites,
@@ -4991,6 +5251,12 @@ function LobbyScreen({
   const [mostLikelyQuestionCountDraft, setMostLikelyQuestionCountDraft] = useState('10');
   const [putYourPointsCreateCodeDraft, setPutYourPointsCreateCodeDraft] = useState('');
   const [putYourPointsQuestionCountDraft, setPutYourPointsQuestionCountDraft] = useState('10');
+  const [redFlagGreenFlagCreateCodeDraft, setRedFlagGreenFlagCreateCodeDraft] = useState('');
+  const [redFlagGreenFlagQuestionCountDraft, setRedFlagGreenFlagQuestionCountDraft] = useState('10');
+  const [compatibilityMeterCreateCodeDraft, setCompatibilityMeterCreateCodeDraft] = useState('');
+  const [compatibilityMeterQuestionCountDraft, setCompatibilityMeterQuestionCountDraft] = useState('10');
+  const [memoryLaneCreateCodeDraft, setMemoryLaneCreateCodeDraft] = useState('');
+  const [memoryLaneQuestionCountDraft, setMemoryLaneQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
   const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
   const [flippedLobbyTiles, setFlippedLobbyTiles] = useState(() => ({
@@ -5000,6 +5266,9 @@ function LobbyScreen({
     thisOrThat: false,
     mostLikely: false,
     putYourPoints: false,
+    redFlagGreenFlag: false,
+    compatibilityMeter: false,
+    memoryLane: false,
     holdem: false,
   }));
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
@@ -5041,6 +5310,9 @@ function LobbyScreen({
   const thisOrThatReadyCount = Number(thisOrThatQuestionCount || 0);
   const mostLikelyReadyCount = Number(mostLikelyQuestionCount || 0);
   const putYourPointsReadyCount = Number(putYourPointsQuestionCount || 0);
+  const redFlagGreenFlagReadyCount = Number(redFlagGreenFlagQuestionCount || 0);
+  const compatibilityMeterReadyCount = Number(compatibilityMeterQuestionCount || 0);
+  const memoryLaneReadyCount = Number(memoryLaneQuestionCount || 0);
   const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
   const lobbyChatUnreadCount = useChatUnreadCount(
     lobbyChatMessages,
@@ -5126,6 +5398,42 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: putYourPointsQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateRedFlagGreenFlagGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: redFlagGreenFlagCreateCodeDraft,
+      gameName: 'Red Flag Green Flag',
+      mode: 'random',
+      gameMode: RED_FLAG_GREEN_FLAG_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: redFlagGreenFlagQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateCompatibilityMeterGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: compatibilityMeterCreateCodeDraft,
+      gameName: 'Compatibility Meter',
+      mode: 'random',
+      gameMode: COMPATIBILITY_METER_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: compatibilityMeterQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateMemoryLaneGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: memoryLaneCreateCodeDraft,
+      gameName: 'Memory Lane',
+      mode: 'random',
+      gameMode: MEMORY_LANE_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: memoryLaneQuestionCountDraft,
       ...(sendInvite ? { sendInvite: true } : {}),
     });
 
@@ -5835,6 +6143,12 @@ function LobbyScreen({
       ? putYourPointsQuestionCount
     : questionBankSegment === 'trueFalse'
       ? trueFalseQuestionCount
+    : questionBankSegment === 'redFlagGreenFlag'
+      ? redFlagGreenFlagQuestionCount
+    : questionBankSegment === 'compatibilityMeter'
+      ? compatibilityMeterQuestionCount
+    : questionBankSegment === 'memoryLane'
+      ? memoryLaneQuestionCount
       : questionCount;
   const questionBankUsedTotal = questionBankSegment === 'quiz'
     ? usedQuizQuestionCount
@@ -5846,6 +6160,12 @@ function LobbyScreen({
       ? usedPutYourPointsQuestionCount
     : questionBankSegment === 'trueFalse'
       ? usedTrueFalseQuestionCount
+    : questionBankSegment === 'redFlagGreenFlag'
+      ? usedRedFlagGreenFlagQuestionCount
+    : questionBankSegment === 'compatibilityMeter'
+      ? usedCompatibilityMeterQuestionCount
+    : questionBankSegment === 'memoryLane'
+      ? usedMemoryLaneQuestionCount
       : usedQuestionCount;
   const questionBankRemainingTotal = questionBankSegment === 'quiz'
     ? remainingQuizQuestionCount
@@ -5857,6 +6177,12 @@ function LobbyScreen({
       ? remainingPutYourPointsQuestionCount
     : questionBankSegment === 'trueFalse'
       ? remainingTrueFalseQuestionCount
+    : questionBankSegment === 'redFlagGreenFlag'
+      ? remainingRedFlagGreenFlagQuestionCount
+    : questionBankSegment === 'compatibilityMeter'
+      ? remainingCompatibilityMeterQuestionCount
+    : questionBankSegment === 'memoryLane'
+      ? remainingMemoryLaneQuestionCount
       : remainingQuestionCount;
   const questionBankSegmentBankType = questionBankSegment === 'quiz'
     ? 'quiz'
@@ -5868,6 +6194,12 @@ function LobbyScreen({
       ? PUT_YOUR_POINTS_GAME_MODE
     : questionBankSegment === 'trueFalse'
       ? TRUE_FALSE_GAME_MODE
+    : questionBankSegment === 'redFlagGreenFlag'
+      ? RED_FLAG_GREEN_FLAG_GAME_MODE
+    : questionBankSegment === 'compatibilityMeter'
+      ? COMPATIBILITY_METER_GAME_MODE
+    : questionBankSegment === 'memoryLane'
+      ? MEMORY_LANE_GAME_MODE
       : 'game';
   const questionBankTarget = getQuestionBankSyncTarget(questionBankSegmentBankType);
   const questionBankSyncAction = questionBankSegment === 'quiz'
@@ -5880,6 +6212,12 @@ function LobbyScreen({
       ? onSyncPutYourPointsBank
     : questionBankSegment === 'trueFalse'
       ? onSyncTrueFalseBank
+    : questionBankSegment === 'redFlagGreenFlag'
+      ? onSyncRedFlagGreenFlagBank
+    : questionBankSegment === 'compatibilityMeter'
+      ? onSyncCompatibilityMeterBank
+    : questionBankSegment === 'memoryLane'
+      ? onSyncMemoryLaneBank
       : onSyncQuestionBank;
   const questionBankImportAction = questionBankSegment === 'quiz'
     ? onImportQuizQuestions
@@ -5891,6 +6229,12 @@ function LobbyScreen({
       ? onImportPutYourPointsQuestions
     : questionBankSegment === 'trueFalse'
       ? onImportTrueFalseQuestions
+    : questionBankSegment === 'redFlagGreenFlag'
+      ? onImportRedFlagGreenFlagQuestions
+    : questionBankSegment === 'compatibilityMeter'
+      ? onImportCompatibilityMeterQuestions
+    : questionBankSegment === 'memoryLane'
+      ? onImportMemoryLaneQuestions
       : onImportQuestions;
   const questionBankActionLabel = questionBankTarget.label;
   const questionBankImportLabel = questionBankTarget.importLabel;
@@ -5937,6 +6281,9 @@ function LobbyScreen({
     { id: 'trueFalse', label: 'True or False', image: trueOrFalseTileImage },
     { id: 'thisOrThat', label: 'This or That', image: thisOrThatTileImage },
     { id: 'mostLikely', label: 'Most Likely To', image: mostLikelyTileImage },
+    { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag', image: redGreenFlagTileImage },
+    { id: 'compatibilityMeter', label: 'Compatibility Meter', image: compatibilityTileImage },
+    { id: 'memoryLane', label: 'Memory Lane', image: memoryLaneTileImage },
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
 
@@ -5989,6 +6336,9 @@ function LobbyScreen({
   const isThisOrThatTileFlipped = Boolean(flippedLobbyTiles.thisOrThat);
   const isMostLikelyTileFlipped = Boolean(flippedLobbyTiles.mostLikely);
   const isPutYourPointsTileFlipped = Boolean(flippedLobbyTiles.putYourPoints);
+  const isRedFlagGreenFlagTileFlipped = Boolean(flippedLobbyTiles.redFlagGreenFlag);
+  const isCompatibilityMeterTileFlipped = Boolean(flippedLobbyTiles.compatibilityMeter);
+  const isMemoryLaneTileFlipped = Boolean(flippedLobbyTiles.memoryLane);
   const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
   const getLobbyTileImageStyle = (imageUrl) => ({
     '--lobby-tile-image': lobbyTileImagesEnabled && imageUrl ? `url("${imageUrl}")` : 'none',
@@ -6029,6 +6379,24 @@ function LobbyScreen({
       howItWorks: 'Each round generates a random 1-200 point stake. Players answer for themselves and guess the other person, then the host marks Match or Miss for each player. A Miss adds the stake as that player’s penalty.',
       questionTypes: ['Text Answer', 'Multiple Choice', 'True or False', 'Who is More Likely To', 'Would You Rather', 'Rating'],
       categories: ['Food', 'Lifestyle', 'Entertainment', 'Romance', 'Travel', 'Technology', 'Home', 'Funny', 'Games', 'Personality', 'Communication', 'Social', 'Fashion', 'Future', 'Habits', 'Music', 'Money', 'Wellbeing', 'Fitness'],
+    },
+    redFlagGreenFlag: {
+      name: 'Red Flag Green Flag',
+      howItWorks: 'Each player marks a scenario as Green Flag, Red Flag, or Depends, then guesses how the other person will judge it. Wrong or missing guesses add automatic penalties.',
+      questionTypes: ['Green Flag / Red Flag / Depends', 'Scenario', 'Multiple Choice'],
+      categories: ['Dating & Romance', 'Communication', 'Boundaries', 'Jealousy', 'Social Media', 'Money', 'Friends & Family', 'Trust', 'Sex & Intimacy', 'Habits', 'Lifestyle', 'Future Plans', 'Conflict', 'Funny / Petty', 'Serious / Deep'],
+    },
+    compatibilityMeter: {
+      name: 'Compatibility Meter',
+      howItWorks: 'Both players answer the same prompt. The app calculates a compatibility percentage, then adds shared penalty points based on the score band.',
+      questionTypes: ['Multiple Choice', 'Rating', 'Ranking', 'Ranked / Top 3', 'Preference', 'Numeric', 'Text Answer', 'Open Answer', 'Favourite'],
+      categories: ['Values', 'Romance', 'Sex & Intimacy', 'Lifestyle', 'Future Plans', 'Money', 'Home', 'Travel', 'Food & Drink', 'Communication', 'Conflict', 'Family', 'Social Life', 'Personality', 'Dreams & Goals', 'Daily Habits'],
+    },
+    memoryLane: {
+      name: 'Memory Lane',
+      howItWorks: 'A mix of new memory prompts and recall rounds based on things already answered in the app. Memory prompts use answer-and-guess; recall rounds ask players to identify a past answer from options.',
+      questionTypes: ['Text Answer', 'Open Answer', 'Fill in the Blank', 'Multiple Choice', 'Numeric', 'Ranked / Top 3', 'Favourite', 'Rating', 'True or False'],
+      categories: ['Us / Relationship Memories', 'Earliest Memories', 'Childhood', 'Achievements', 'Embarrassments', 'Firsts', 'Funny Moments', 'Family', 'Friends', 'School', 'Work', 'Travel', 'Milestones', 'Songs / Places / Food', 'Forgotten Details'],
     },
     holdem: {
       name: "Texas Hold'em",
@@ -6139,6 +6507,102 @@ function LobbyScreen({
       </div>
     );
   };
+
+  const renderSimpleLobbySetupCard = ({
+    index,
+    cardId,
+    className,
+    image,
+    eyebrow,
+    title,
+    readyCount,
+    description,
+    codeLabel,
+    codeValue,
+    onCodeChange,
+    questionCountValue,
+    onQuestionCountChange,
+    fieldNote,
+    createLabel,
+    onCreate,
+    isFlipped,
+  }) => (
+    <div
+      className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(index)}`}
+      inert={getLobbyCarouselPosition(index) !== 'center'}
+      aria-hidden={getLobbyCarouselPosition(index) !== 'center'}
+    >
+      <section
+        className={`panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile ${className}`}
+        style={getLobbyTileImageStyle(image)}
+      >
+        <div className={`lobby-image-tile-flip ${isFlipped ? 'is-flipped' : ''}`}>
+          {renderLobbyTileFront({
+            cardId,
+            eyebrow,
+            title,
+            statusText: `${readyCount} ready`,
+            description,
+            footerMeta: (
+              <label className="lobby-image-tile-front-control">
+                <span>Questions</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  value={questionCountValue}
+                  onChange={(event) => onQuestionCountChange(event.target.value)}
+                  placeholder="10"
+                />
+              </label>
+            ),
+            onCreateAndInvite: () => onCreate(true),
+          })}
+          <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isFlipped} aria-hidden={!isFlipped}>
+            <div className="lobby-image-tile-back-toolbar">
+              <span className="status-pill">Setup</span>
+              <Button type="button" className="ghost-button compact lobby-image-tile-back-button" onClick={() => setLobbyTileFlipped(cardId, false)}>
+                Back
+              </Button>
+            </div>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">{eyebrow}</p>
+                <h2>{title}</h2>
+              </div>
+              <span className="status-pill">{readyCount} ready</span>
+            </div>
+            {renderLobbyTileDetails(cardId)}
+            <p className="panel-copy">{description}</p>
+            <label className="field">
+              <span>{codeLabel}</span>
+              <input value={codeValue} onChange={(event) => onCodeChange(normalizeJoinCode(event.target.value))} placeholder="Optional" />
+            </label>
+            <label className="field">
+              <span>Number of Questions</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                value={questionCountValue}
+                onChange={(event) => onQuestionCountChange(event.target.value)}
+                placeholder="10"
+              />
+            </label>
+            <p className="field-note">{fieldNote}</p>
+            <div className="button-row">
+              <Button className="primary-button compact" onClick={() => onCreate(false)} disabled={isBusy}>
+                {createLabel}
+              </Button>
+              <Button className="ghost-button compact" onClick={() => onCreate(true)} disabled={isBusy}>
+                Create + Invite
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
 
 	  return (
 	    <main className={`app production-app ${isMobileDashboardNav ? 'mobile-app' : ''}`}>
@@ -6919,10 +7383,70 @@ function LobbyScreen({
                     </section>
                   </div>
 
+                  {renderSimpleLobbySetupCard({
+                    index: 6,
+                    cardId: 'redFlagGreenFlag',
+                    className: 'lobby-image-tile--red-green-flag',
+                    image: redGreenFlagTileImage,
+                    eyebrow: 'Flag Check',
+                    title: 'Red Flag Green Flag',
+                    readyCount: redFlagGreenFlagReadyCount,
+                    description: 'Judge each scenario as Green Flag, Red Flag, or Depends, then predict how the other person will judge it.',
+                    codeLabel: 'Red Flag Green Flag Code',
+                    codeValue: redFlagGreenFlagCreateCodeDraft,
+                    onCodeChange: setRedFlagGreenFlagCreateCodeDraft,
+                    questionCountValue: redFlagGreenFlagQuestionCountDraft,
+                    onQuestionCountChange: setRedFlagGreenFlagQuestionCountDraft,
+                    fieldNote: 'Wrong guesses add +10. Missing your own judgement or guess adds +10.',
+                    createLabel: 'Create Red Flag Green Flag',
+                    onCreate: handleCreateRedFlagGreenFlagGame,
+                    isFlipped: isRedFlagGreenFlagTileFlipped,
+                  })}
+
+                  {renderSimpleLobbySetupCard({
+                    index: 7,
+                    cardId: 'compatibilityMeter',
+                    className: 'lobby-image-tile--compatibility',
+                    image: compatibilityTileImage,
+                    eyebrow: 'Match Meter',
+                    title: 'Compatibility Meter',
+                    readyCount: compatibilityMeterReadyCount,
+                    description: 'Both players answer the same prompt, then the compatibility percentage decides the shared penalty band.',
+                    codeLabel: 'Compatibility Meter Code',
+                    codeValue: compatibilityMeterCreateCodeDraft,
+                    onCodeChange: setCompatibilityMeterCreateCodeDraft,
+                    questionCountValue: compatibilityMeterQuestionCountDraft,
+                    onQuestionCountChange: setCompatibilityMeterQuestionCountDraft,
+                    fieldNote: '95%+ adds 0. 85-94 adds +100 each. 70-84 adds +250 each. 0-69 adds +500 each.',
+                    createLabel: 'Create Compatibility Meter',
+                    onCreate: handleCreateCompatibilityMeterGame,
+                    isFlipped: isCompatibilityMeterTileFlipped,
+                  })}
+
+                  {renderSimpleLobbySetupCard({
+                    index: 8,
+                    cardId: 'memoryLane',
+                    className: 'lobby-image-tile--memory',
+                    image: memoryLaneTileImage,
+                    eyebrow: 'Memory Lane',
+                    title: 'Memory Lane',
+                    readyCount: memoryLaneReadyCount,
+                    description: 'Play new memory prompts alongside recall-style rounds about things already answered in the app.',
+                    codeLabel: 'Memory Lane Code',
+                    codeValue: memoryLaneCreateCodeDraft,
+                    onCodeChange: setMemoryLaneCreateCodeDraft,
+                    questionCountValue: memoryLaneQuestionCountDraft,
+                    onQuestionCountChange: setMemoryLaneQuestionCountDraft,
+                    fieldNote: 'Memory prompts use answer-and-guess. Past-answer recall rounds use multiple-choice options with the real historic answer included.',
+                    createLabel: 'Create Memory Lane',
+                    onCreate: handleCreateMemoryLaneGame,
+                    isFlipped: isMemoryLaneTileFlipped,
+                  })}
+
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(6)}`}
-                    inert={getLobbyCarouselPosition(6) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(6) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(9)}`}
+                    inert={getLobbyCarouselPosition(9) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(9) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
@@ -7076,6 +7600,15 @@ function LobbyScreen({
                 </button>
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('trueFalse')}>
                   True or False
+                </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'redFlagGreenFlag' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('redFlagGreenFlag')}>
+                  Red Flag Green Flag
+                </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'compatibilityMeter' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('compatibilityMeter')}>
+                  Compatibility
+                </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'memoryLane' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('memoryLane')}>
+                  Memory Lane
                 </button>
               </div>
 
@@ -8622,6 +9155,7 @@ function QuestionAnswerEntryBase({
   onSubmitAnswer,
   submissionState,
   isQuizRound = false,
+  singleAnswerOnly = false,
   embedded = false,
 }) {
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
@@ -8653,7 +9187,7 @@ function QuestionAnswerEntryBase({
   const draftStorageKey = draftStorageKeyRef.current;
   const buildSavedDraft = () => ({
     ownAnswer: String(currentPlayerAnswer?.ownAnswer ?? ''),
-    guessedOther: isQuizRound ? '' : String(currentPlayerAnswer?.guessedOther ?? ''),
+    guessedOther: isQuizRound || singleAnswerOnly ? '' : String(currentPlayerAnswer?.guessedOther ?? ''),
   });
   const buildInitialDraft = () => {
     const savedDraft = buildSavedDraft();
@@ -8991,7 +9525,7 @@ function QuestionAnswerEntryBase({
             {renderField('ownAnswer', localDraft.ownAnswer, (value) => updateLocalDraft({ ownAnswer: value }), `Your ${promptLabel.toLowerCase()}`)}
           </label>
         </section>
-        {!isQuizRound ? (
+        {!isQuizRound && !singleAnswerOnly ? (
           <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
             <div className="mini-heading">
               <div>
@@ -9040,6 +9574,7 @@ const QuestionAnswerEntry = memo(QuestionAnswerEntryBase, (previous, next) => {
     && previous.oppositeLabel === next.oppositeLabel
     && previous.submissionState === next.submissionState
     && previous.isQuizRound === next.isQuizRound
+    && previous.singleAnswerOnly === next.singleAnswerOnly
     && previousAnswer.ownAnswer === nextAnswer.ownAnswer
     && previousAnswer.guessedOther === nextAnswer.guessedOther
     && previous.embedded === next.embedded;
@@ -9954,6 +10489,8 @@ function RoomRevealPlayerCard({
   isThisOrThatGame = false,
   isMostLikelyGame = false,
   isPutYourPointsGame = false,
+  isRedFlagGreenFlagGame = false,
+  isCompatibilityMeterGame = false,
   totalQuizPoints = 0,
 }) {
   const playerSeat = seat === 'kim' ? 'kim' : 'jay';
@@ -10282,6 +10819,120 @@ function RoomRevealPlayerCard({
       </article>
     );
   }
+  if (isRedFlagGreenFlagGame) {
+    const outcome = buildRedFlagGreenFlagRoundOutcome(currentRound || {});
+    const viewerGuess = playerSeat === 'jay' ? outcome.jayGuess : outcome.kimGuess;
+    const actualAnswer = playerSeat === 'jay' ? outcome.jayActual : outcome.kimActual;
+    const targetAnswer = playerSeat === 'jay' ? outcome.kimActual : outcome.jayActual;
+    const guessScorable = playerSeat === 'jay' ? outcome.jayGuessScorable : outcome.kimGuessScorable;
+    const missingGuess = playerSeat === 'jay' ? outcome.jayMissingGuess : outcome.kimMissingGuess;
+    const missingOwnAnswer = playerSeat === 'jay' ? outcome.jayMissingOwnAnswer : outcome.kimMissingOwnAnswer;
+    const wasCorrect = playerSeat === 'jay' ? outcome.jayCorrect : outcome.kimCorrect;
+    const penalty = playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty;
+    const matchTone = missingGuess || missingOwnAnswer || !guessScorable
+      ? 'neutral'
+      : wasCorrect
+        ? 'success'
+        : 'warning';
+    const matchLabel = missingGuess
+      ? `No guess locked: +${formatScore(RED_FLAG_GREEN_FLAG_UNANSWERED_PENALTY)}`
+      : !guessScorable
+        ? 'Other player gave no judgement, so this guess was not charged'
+        : wasCorrect
+          ? 'Correct flag guess'
+          : 'Wrong flag guess';
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>{`${playerLabel}'s guess`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{viewerGuess || 'No guess submitted'}</strong>
+            </div>
+          </div>
+
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>{`${oppositeLabel}'s flag`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{targetAnswer || 'No flag submitted'}</strong>
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
+              {matchLabel}
+            </small>
+          </div>
+        </div>
+
+        <div className="room-reveal-score-strip">
+          <div>
+            <span>{`${playerLabel}'s flag`}</span>
+            <strong>{actualAnswer || 'No flag'}</strong>
+          </div>
+          <div>
+            <span>Round penalty</span>
+            <strong>{formatScore(penalty || roundPenalty || 0)}</strong>
+          </div>
+          <div>
+            <span>{missingOwnAnswer ? 'Missed-judgement penalty included' : 'Total penalty'}</span>
+            <strong>{formatScore(totalPenalty || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
+  if (isCompatibilityMeterGame) {
+    const outcome = buildCompatibilityRoundOutcome(currentRound || {});
+    const playerAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
+    const otherAnswerRaw = currentRound?.answers?.[oppositeSeat]?.ownAnswer || '';
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>{`${playerLabel}'s answer`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{formatRoundAnswerValue(playerAnswerRaw, currentRound?.roundType)}</strong>
+            </div>
+          </div>
+
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>{`${oppositeLabel}'s answer`}</span>
+            <div className="room-reveal-answer-copy">
+              <strong>{formatRoundAnswerValue(otherAnswerRaw, currentRound?.roundType)}</strong>
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${outcome.score >= 85 ? 'success' : outcome.score >= 70 ? 'neutral' : 'warning'}`}>
+              {`${outcome.score}% compatibility`}
+            </small>
+          </div>
+        </div>
+
+        <div className="room-reveal-score-strip">
+          <div>
+            <span>Round penalty</span>
+            <strong>{formatScore((playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty) || roundPenalty || 0)}</strong>
+          </div>
+          <div>
+            <span>Total penalty</span>
+            <strong>{formatScore(totalPenalty || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
   const actualAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
   const guessedAnswerRaw = currentRound?.answers?.[oppositeSeat]?.guessedOther || '';
   const actualAnswer = formatRoundAnswerValue(actualAnswerRaw, currentRound?.roundType);
@@ -10385,6 +11036,10 @@ function RoomActiveFrameBase({
   const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
   const isMostLikelyVoteGame = isMostLikelyGame && isMostLikelyVoteRound(currentRound || {});
   const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
+  const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(game?.gameMode || 'standard');
+  const isCompatibilityMeterGame = isCompatibilityMeterGameMode(game?.gameMode || 'standard');
+  const isMemoryLaneGame = isMemoryLaneGameMode(game?.gameMode || 'standard');
+  const isMemoryLaneRecallGame = isMemoryLaneGame && isMemoryLaneRecallRound(currentRound || {});
   const penaltyPreview = useMemo(
     () => (
       isQuizGame
@@ -10464,6 +11119,14 @@ function RoomActiveFrameBase({
     () => (isPutYourPointsGame ? buildPutYourPointsRoundOutcome(currentRound || {}) : null),
     [currentRound, isPutYourPointsGame],
   );
+  const redFlagGreenFlagOutcome = useMemo(
+    () => (isRedFlagGreenFlagGame ? buildRedFlagGreenFlagRoundOutcome(currentRound || {}) : null),
+    [currentRound, isRedFlagGreenFlagGame],
+  );
+  const compatibilityOutcome = useMemo(
+    () => (isCompatibilityMeterGame ? buildCompatibilityRoundOutcome(currentRound || {}) : null),
+    [currentRound, isCompatibilityMeterGame],
+  );
   const quizJudgementComplete = isQuizGame ? hasCompletedQuizJudgement(currentRound || {}) : false;
   const trueFalseSummaryLabel = !trueFalseOutcome
     ? ''
@@ -10491,6 +11154,22 @@ function RoomActiveFrameBase({
     : putYourPointsOutcome.complete
       ? 'Host judgement saved'
       : 'Host judgement needed';
+  const redFlagGreenFlagSummaryLabel = !redFlagGreenFlagOutcome
+    ? ''
+    : redFlagGreenFlagOutcome.jayCorrect && redFlagGreenFlagOutcome.kimCorrect
+      ? 'Both guessed correctly'
+      : redFlagGreenFlagOutcome.jayMissingResponse || redFlagGreenFlagOutcome.kimMissingResponse
+        ? 'Missed choices triggered penalties'
+        : 'Flag mismatch';
+  const compatibilitySummaryLabel = !compatibilityOutcome
+    ? ''
+    : compatibilityOutcome.score >= 95
+      ? 'Strong match'
+      : compatibilityOutcome.score >= 85
+        ? 'Close match'
+        : compatibilityOutcome.score >= 70
+          ? 'Mixed match'
+          : 'Low match';
 
   return (
     <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-frame--put-points' : ''}`} aria-label="Active round scoreboard">
@@ -10632,6 +11311,7 @@ function RoomActiveFrameBase({
                 onSubmitAnswer={onSubmitAnswer}
                 submissionState={submissionState}
                 isQuizRound={isQuizGame}
+                singleAnswerOnly={isCompatibilityMeterGame || isMemoryLaneRecallGame}
               />
             )}
           </div>
@@ -10690,6 +11370,8 @@ function RoomActiveFrameBase({
                 isThisOrThatGame={isThisOrThatGame}
                 isMostLikelyGame={isMostLikelyVoteGame}
                 isPutYourPointsGame={isPutYourPointsGame}
+                isRedFlagGreenFlagGame={isRedFlagGreenFlagGame}
+                isCompatibilityMeterGame={isCompatibilityMeterGame}
                 totalQuizPoints={quizRevealTotals[currentPlayer]}
               />
 
@@ -10836,6 +11518,40 @@ function RoomActiveFrameBase({
                       {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
                     </small>
                   </>
+                ) : isRedFlagGreenFlagGame ? (
+                  <>
+                    <span>Round Result</span>
+                    <strong>{redFlagGreenFlagSummaryLabel}</strong>
+                    <p>
+                      {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])}
+                      {' · '}
+                      {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
+                    </p>
+                    <small>
+                      Wrong guesses add {formatScore(RED_FLAG_GREEN_FLAG_WRONG_PENALTY)}. Missing a judgement or guess adds {formatScore(RED_FLAG_GREEN_FLAG_UNANSWERED_PENALTY)}.
+                    </small>
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
+                ) : isCompatibilityMeterGame ? (
+                  <>
+                    <span>Compatibility</span>
+                    <strong>{`${compatibilityOutcome?.score ?? 0}%`}</strong>
+                    <p>
+                      {compatibilitySummaryLabel}
+                      {' · '}
+                      +{formatScore(compatibilityOutcome?.penalty || 0)} each
+                    </p>
+                    <small>95%+ adds 0. 85-94 adds +100 each. 70-84 adds +250 each. 0-69 adds +500 each.</small>
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
                 ) : (
                   <>
                     <span>Round Result</span>
@@ -10869,6 +11585,8 @@ function RoomActiveFrameBase({
                 isThisOrThatGame={isThisOrThatGame}
                 isMostLikelyGame={isMostLikelyVoteGame}
                 isPutYourPointsGame={isPutYourPointsGame}
+                isRedFlagGreenFlagGame={isRedFlagGreenFlagGame}
+                isCompatibilityMeterGame={isCompatibilityMeterGame}
                 totalQuizPoints={quizRevealTotals[otherPlayer]}
               />
             </div>
@@ -10938,6 +11656,8 @@ const RoomActiveFrame = memo(RoomActiveFrameBase, (previous, next) => {
     && previous.currentRound?.category === next.currentRound?.category
     && previous.currentRound?.roundType === next.currentRound?.roundType
     && previous.currentRound?.correctAnswer === next.currentRound?.correctAnswer
+    && previous.currentRound?.memoryLaneMode === next.currentRound?.memoryLaneMode
+    && Number(previous.currentRound?.compatibilityScore || 0) === Number(next.currentRound?.compatibilityScore || 0)
     && previous.currentRound?.quizTimerEndsAt === next.currentRound?.quizTimerEndsAt
     && Number(previous.currentRound?.putYourPointsStake || 0) === Number(next.currentRound?.putYourPointsStake || 0)
     && JSON.stringify(previous.currentRound?.multipleChoiceOptions || []) === JSON.stringify(next.currentRound?.multipleChoiceOptions || [])
@@ -14617,6 +15337,9 @@ function GameRoomView({
   const isMostLikelyGame = isMostLikelyGameMode(currentGameMode);
   const isMostLikelyVoteGame = isMostLikelyGame && isMostLikelyVoteRound(currentRound || {});
   const isPutYourPointsGame = isPutYourPointsGameMode(currentGameMode);
+  const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(currentGameMode);
+  const isCompatibilityMeterGame = isCompatibilityMeterGameMode(currentGameMode);
+  const isMemoryLaneGame = isMemoryLaneGameMode(currentGameMode);
   const bothPlayersSubmitted = isTrueFalseGame
     ? Boolean(hasCompletedTrueFalseRoundAnswer(currentRound, 'jay') && hasCompletedTrueFalseRoundAnswer(currentRound, 'kim'))
     : isThisOrThatGame
@@ -14625,6 +15348,11 @@ function GameRoomView({
       ? Boolean(hasCompletedMostLikelyRoundAnswer(currentRound, 'jay') && hasCompletedMostLikelyRoundAnswer(currentRound, 'kim'))
     : isPutYourPointsGame
       ? Boolean(hasCompletedPutYourPointsRoundAnswer(currentRound, 'jay') && hasCompletedPutYourPointsRoundAnswer(currentRound, 'kim'))
+    : isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame
+      ? Boolean(
+          hasRoundAnswerSubmittedForMode(currentGameMode, currentRound, 'jay')
+          && hasRoundAnswerSubmittedForMode(currentGameMode, currentRound, 'kim'),
+        )
       : Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
   const revealIsReady = bothPlayersSubmitted || currentRound?.status === 'reveal';
   const submissionState = isTrueFalseGame
@@ -14635,6 +15363,8 @@ function GameRoomView({
       ? (hasCompletedMostLikelyRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
     : isPutYourPointsGame
       ? (hasCompletedPutYourPointsRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
+    : isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame
+      ? (hasRoundAnswerSubmittedForMode(currentGameMode, currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
       : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
   const submittedBySeat = {
     jay: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'jay'),
@@ -17040,6 +17770,18 @@ function ProductionApp() {
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
     [bankQuestions],
   );
+  const redFlagGreenFlagBankRecords = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === RED_FLAG_GREEN_FLAG_GAME_MODE),
+    [bankQuestions],
+  );
+  const compatibilityMeterBankRecords = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === COMPATIBILITY_METER_GAME_MODE),
+    [bankQuestions],
+  );
+  const memoryLaneBankRecords = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === MEMORY_LANE_GAME_MODE),
+    [bankQuestions],
+  );
   const gameBankQuestions = useMemo(
     () => gameBankRecords.filter(isQuestionActiveInBank),
     [gameBankRecords],
@@ -17063,6 +17805,26 @@ function ProductionApp() {
   const trueFalseBankQuestions = useMemo(
     () => trueFalseBankRecords.filter(isQuestionActiveInBank),
     [trueFalseBankRecords],
+  );
+  const redFlagGreenFlagBankQuestions = useMemo(
+    () => redFlagGreenFlagBankRecords.filter(isQuestionActiveInBank),
+    [redFlagGreenFlagBankRecords],
+  );
+  const compatibilityMeterBankQuestions = useMemo(
+    () => compatibilityMeterBankRecords.filter(isQuestionActiveInBank),
+    [compatibilityMeterBankRecords],
+  );
+  const memoryLaneBankQuestions = useMemo(
+    () => memoryLaneBankRecords.filter(isQuestionActiveInBank),
+    [memoryLaneBankRecords],
+  );
+  const memoryLaneRecallQuestions = useMemo(
+    () => buildMemoryLaneRecallQuestions(enrichedGameLibrary, 180),
+    [enrichedGameLibrary],
+  );
+  const memoryLanePlayableQuestions = useMemo(
+    () => mergeQuestionBankRecords(memoryLaneBankQuestions, memoryLaneRecallQuestions),
+    [memoryLaneBankQuestions, memoryLaneRecallQuestions],
   );
   const standardSelectableQuestions = useMemo(
     () => (gameBankQuestions.length ? gameBankQuestions : STARTER_QUESTIONS.map((question) => createQuestionTemplate(question))),
@@ -17113,6 +17875,9 @@ function ProductionApp() {
   const mostLikelyBankCount = mostLikelySelectableQuestions.length;
   const putYourPointsBankCount = putYourPointsSelectableQuestions.length;
   const trueFalseBankCount = trueFalseBankQuestions.length;
+  const redFlagGreenFlagBankCount = redFlagGreenFlagBankQuestions.length;
+  const compatibilityMeterBankCount = compatibilityMeterBankQuestions.length;
+  const memoryLaneBankCount = memoryLanePlayableQuestions.length;
   const trackedGameEntries = useMemo(() => {
     if (!game?.id || isLocalTestGame(game)) return enrichedGameLibrary;
     const currentGameSummary = {
@@ -17181,6 +17946,30 @@ function ProductionApp() {
   const trueFalseQuestionRecordIds = useMemo(
     () => new Set(trueFalseBankRecords.map((question) => question.id).filter(Boolean)),
     [trueFalseBankRecords],
+  );
+  const redFlagGreenFlagQuestionIds = useMemo(
+    () => new Set(redFlagGreenFlagBankQuestions.map((question) => question.id).filter(Boolean)),
+    [redFlagGreenFlagBankQuestions],
+  );
+  const redFlagGreenFlagQuestionRecordIds = useMemo(
+    () => new Set(redFlagGreenFlagBankRecords.map((question) => question.id).filter(Boolean)),
+    [redFlagGreenFlagBankRecords],
+  );
+  const compatibilityMeterQuestionIds = useMemo(
+    () => new Set(compatibilityMeterBankQuestions.map((question) => question.id).filter(Boolean)),
+    [compatibilityMeterBankQuestions],
+  );
+  const compatibilityMeterQuestionRecordIds = useMemo(
+    () => new Set(compatibilityMeterBankRecords.map((question) => question.id).filter(Boolean)),
+    [compatibilityMeterBankRecords],
+  );
+  const memoryLaneQuestionIds = useMemo(
+    () => new Set(memoryLanePlayableQuestions.map((question) => question.id).filter(Boolean)),
+    [memoryLanePlayableQuestions],
+  );
+  const memoryLaneQuestionRecordIds = useMemo(
+    () => new Set(memoryLanePlayableQuestions.map((question) => question.id).filter(Boolean)),
+    [memoryLanePlayableQuestions],
   );
   const pairPlayedQuestionIds = useMemo(
     () => mergeUniqueIds(pairHistory?.playedQuestionIds || []),
@@ -17293,6 +18082,17 @@ function ProductionApp() {
     if (!putYourPointsQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => putYourPointsQuestionIds.has(questionId)));
   }, [pairPlayedQuestionIds, trackedGameEntries, putYourPointsQuestionIds]);
+  const makePlayedQuestionIdsForBank = (targetBankType, bankRecords, recordIds, activeIds) => {
+    const playedIds = mergeUniqueIds(
+      ...trackedGameEntries
+        .filter((entry) => normalizeQuestionBankType(entry?.questionBankType || getQuestionBankTypeForGameMode(entry?.gameMode || 'standard')) === targetBankType)
+        .map((entry) => getPlayedQuestionIdsForGame(entry)),
+      bankRecords.filter((question) => question.used).map((question) => question.id),
+    );
+    const filterIds = recordIds.size ? recordIds : activeIds;
+    if (!filterIds.size) return new Set(playedIds);
+    return new Set(playedIds.filter((questionId) => filterIds.has(questionId)));
+  };
   const playedThisOrThatQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -17361,6 +18161,36 @@ function ProductionApp() {
   );
   const usedTrueFalseQuestionCount = playedTrueFalseQuestionIds.size;
   const remainingTrueFalseQuestionCount = Math.max(0, trueFalseBankCount - activePlayedTrueFalseQuestionIds.size);
+  const playedRedFlagGreenFlagQuestionIds = useMemo(
+    () => makePlayedQuestionIdsForBank(RED_FLAG_GREEN_FLAG_GAME_MODE, redFlagGreenFlagBankRecords, redFlagGreenFlagQuestionRecordIds, redFlagGreenFlagQuestionIds),
+    [trackedGameEntries, redFlagGreenFlagBankRecords, redFlagGreenFlagQuestionRecordIds, redFlagGreenFlagQuestionIds],
+  );
+  const activePlayedRedFlagGreenFlagQuestionIds = useMemo(
+    () => new Set([...playedRedFlagGreenFlagQuestionIds].filter((questionId) => redFlagGreenFlagQuestionIds.has(questionId))),
+    [playedRedFlagGreenFlagQuestionIds, redFlagGreenFlagQuestionIds],
+  );
+  const usedRedFlagGreenFlagQuestionCount = playedRedFlagGreenFlagQuestionIds.size;
+  const remainingRedFlagGreenFlagQuestionCount = Math.max(0, redFlagGreenFlagBankCount - activePlayedRedFlagGreenFlagQuestionIds.size);
+  const playedCompatibilityMeterQuestionIds = useMemo(
+    () => makePlayedQuestionIdsForBank(COMPATIBILITY_METER_GAME_MODE, compatibilityMeterBankRecords, compatibilityMeterQuestionRecordIds, compatibilityMeterQuestionIds),
+    [trackedGameEntries, compatibilityMeterBankRecords, compatibilityMeterQuestionRecordIds, compatibilityMeterQuestionIds],
+  );
+  const activePlayedCompatibilityMeterQuestionIds = useMemo(
+    () => new Set([...playedCompatibilityMeterQuestionIds].filter((questionId) => compatibilityMeterQuestionIds.has(questionId))),
+    [playedCompatibilityMeterQuestionIds, compatibilityMeterQuestionIds],
+  );
+  const usedCompatibilityMeterQuestionCount = playedCompatibilityMeterQuestionIds.size;
+  const remainingCompatibilityMeterQuestionCount = Math.max(0, compatibilityMeterBankCount - activePlayedCompatibilityMeterQuestionIds.size);
+  const playedMemoryLaneQuestionIds = useMemo(
+    () => makePlayedQuestionIdsForBank(MEMORY_LANE_GAME_MODE, memoryLaneBankRecords, memoryLaneQuestionRecordIds, memoryLaneQuestionIds),
+    [trackedGameEntries, memoryLaneBankRecords, memoryLaneQuestionRecordIds, memoryLaneQuestionIds],
+  );
+  const activePlayedMemoryLaneQuestionIds = useMemo(
+    () => new Set([...playedMemoryLaneQuestionIds].filter((questionId) => memoryLaneQuestionIds.has(questionId))),
+    [playedMemoryLaneQuestionIds, memoryLaneQuestionIds],
+  );
+  const usedMemoryLaneQuestionCount = playedMemoryLaneQuestionIds.size;
+  const remainingMemoryLaneQuestionCount = Math.max(0, memoryLaneBankCount - activePlayedMemoryLaneQuestionIds.size);
   const usedQuestionIds = useMemo(() => new Set(rounds.map((round) => round.questionId).filter(Boolean)), [rounds]);
   const availableQuestions = useMemo(() => {
     const bank = standardSelectableQuestions.filter(
@@ -17373,8 +18203,8 @@ function ProductionApp() {
   }, [standardSelectableQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
   const allPlayedQuestionIds = useMemo(
-    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedMostLikelyQuestionIds, ...playedPutYourPointsQuestionIds, ...playedTrueFalseQuestionIds]),
-    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedMostLikelyQuestionIds, playedPutYourPointsQuestionIds, playedTrueFalseQuestionIds],
+    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedMostLikelyQuestionIds, ...playedPutYourPointsQuestionIds, ...playedTrueFalseQuestionIds, ...playedRedFlagGreenFlagQuestionIds, ...playedCompatibilityMeterQuestionIds, ...playedMemoryLaneQuestionIds]),
+    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedMostLikelyQuestionIds, playedPutYourPointsQuestionIds, playedTrueFalseQuestionIds, playedRedFlagGreenFlagQuestionIds, playedCompatibilityMeterQuestionIds, playedMemoryLaneQuestionIds],
   );
   const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
@@ -17408,6 +18238,9 @@ function ProductionApp() {
       { id: 'mostLikely', label: 'Most Likely To', remaining: remainingMostLikelyQuestionCount },
       { id: 'putYourPoints', label: 'Put Your Points', remaining: remainingPutYourPointsQuestionCount },
       { id: 'trueFalse', label: 'True or False', remaining: remainingTrueFalseQuestionCount },
+      { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag', remaining: remainingRedFlagGreenFlagQuestionCount },
+      { id: 'compatibilityMeter', label: 'Compatibility Meter', remaining: remainingCompatibilityMeterQuestionCount },
+      { id: 'memoryLane', label: 'Memory Lane', remaining: remainingMemoryLaneQuestionCount },
     ].filter(({ remaining }) => Number(remaining || 0) < QUESTION_BANK_LOW_AVAILABLE_THRESHOLD);
 
     if (!lowQuestionBanks.length || lowQuestionBankWarningShownRef.current === user.uid) {
@@ -17434,6 +18267,9 @@ function ProductionApp() {
     remainingQuizQuestionCount,
     remainingThisOrThatQuestionCount,
     remainingTrueFalseQuestionCount,
+    remainingRedFlagGreenFlagQuestionCount,
+    remainingCompatibilityMeterQuestionCount,
+    remainingMemoryLaneQuestionCount,
     shouldLoadQuestionBankData,
     user?.uid,
   ]);
@@ -17502,6 +18338,9 @@ function ProductionApp() {
       return mergeQuestionBankRecords(putYourPointsSelectableQuestions, standardSelectableQuestions);
     }
     if (normalizedTargetBankType === 'trueFalseGame') return trueFalseBankQuestions;
+    if (normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE) return redFlagGreenFlagBankQuestions;
+    if (normalizedTargetBankType === COMPATIBILITY_METER_GAME_MODE) return compatibilityMeterBankQuestions;
+    if (normalizedTargetBankType === MEMORY_LANE_GAME_MODE) return memoryLanePlayableQuestions;
     return gameBankQuestions;
   };
 
@@ -17551,6 +18390,9 @@ function ProductionApp() {
     const isThisOrThatQueue = isThisOrThatGameMode(requestedGameMode);
     const isMostLikelyQueue = isMostLikelyGameMode(requestedGameMode);
     const isPutYourPointsQueue = isPutYourPointsGameMode(requestedGameMode);
+    const isRedFlagGreenFlagQueue = isRedFlagGreenFlagGameMode(requestedGameMode);
+    const isCompatibilityMeterQueue = isCompatibilityMeterGameMode(requestedGameMode);
+    const isMemoryLaneQueue = isMemoryLaneGameMode(requestedGameMode);
     const overrideQuestionPool = Array.isArray(filters.questionPool)
       ? filters.questionPool.filter((question) => {
           const questionBankType = normalizeQuestionBankType(question?.bankType);
@@ -17573,6 +18415,12 @@ function ProductionApp() {
         ? trackedUsedPutYourPointsQuestionIds
       : requestedBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
+      : requestedBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
+        ? playedRedFlagGreenFlagQuestionIds
+      : requestedBankType === COMPATIBILITY_METER_GAME_MODE
+        ? playedCompatibilityMeterQuestionIds
+      : requestedBankType === MEMORY_LANE_GAME_MODE
+        ? playedMemoryLaneQuestionIds
         : effectiveRetiredQuestionIds;
     const unavailableQuestionIds = new Set(mergeUniqueIds([...retiredQuestionIds], [...reservedQuestionIds], [lastQuestionId]));
     const typeSet = new Set((filters.roundTypes || []).filter(Boolean));
@@ -17613,6 +18461,12 @@ function ProductionApp() {
                 ? `Only ${queue.length} Most Likely To questions are available right now.`
               : isPutYourPointsQueue
                 ? `Only ${queue.length} Put Your Points questions are available right now.`
+              : isRedFlagGreenFlagQueue
+                ? `Only ${queue.length} Red Flag Green Flag questions are available right now.`
+              : isCompatibilityMeterQueue
+                ? `Only ${queue.length} Compatibility Meter questions are available right now.`
+              : isMemoryLaneQueue
+                ? `Only ${queue.length} Memory Lane prompts are available right now.`
               : isThisOrThatQueue
                 ? `Only ${queue.length} This or That questions with clear either/or options are available right now.`
               : `Only ${queue.length} unique questions are available for this player pair.`
@@ -17622,6 +18476,12 @@ function ProductionApp() {
                 ? 'No Most Likely To questions are available right now.'
               : isPutYourPointsQueue
                 ? 'No Put Your Points questions are available right now.'
+              : isRedFlagGreenFlagQueue
+                ? 'No Red Flag Green Flag questions are available right now.'
+              : isCompatibilityMeterQueue
+                ? 'No Compatibility Meter questions are available right now.'
+              : isMemoryLaneQueue
+                ? 'No Memory Lane prompts are available right now.'
               : isThisOrThatQueue
                 ? 'No This or That questions with clear either/or options are available right now.'
               : 'No unused questions remain for this player pair.'
@@ -18641,8 +19501,11 @@ function ProductionApp() {
               : {
                   jay: Number(effectivePendingRound.answers?.jay?.pointsAwarded || 0),
                   kim: Number(effectivePendingRound.answers?.kim?.pointsAwarded || 0),
-                },
+            },
             manualScores: isQuizGame,
+            ...(isCompatibilityMeterGameMode(gameMode)
+              ? { compatibilityScore: calculateCompatibilityScore(effectivePendingRound) }
+              : {}),
           },
           effectivePendingRound.number || (loadedSummary?.roundsPlayed || gameDoc.roundsPlayed || 0) + 1,
           gameDoc.totals || gameDoc.finalScores || nextFinalScores,
@@ -20348,6 +21211,43 @@ function ProductionApp() {
               importedAt: new Date().toISOString(),
               sourceLabel: `${reference.id}:${target.sheetName || 'Put Your Money Where Your Mouth Is'}`,
             })
+        : normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
+          ? parseGoogleSheetModeImport({
+              rawText,
+              existingQuestions: nextExistingQuestions,
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'Red Flag Green Flag'}`,
+              bankType: RED_FLAG_GREEN_FLAG_GAME_MODE,
+              source: 'googleSheetRedFlagGreenFlag',
+              defaultCategory: 'Red Flag Green Flag',
+              defaultRoundType: 'multipleChoice',
+              fixedOptions: RED_FLAG_GREEN_FLAG_OPTIONS,
+            })
+        : normalizedTargetBankType === COMPATIBILITY_METER_GAME_MODE
+          ? parseGoogleSheetModeImport({
+              rawText,
+              existingQuestions: nextExistingQuestions,
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'Compatibility'}`,
+              bankType: COMPATIBILITY_METER_GAME_MODE,
+              source: 'googleSheetCompatibility',
+              defaultCategory: 'Compatibility',
+              defaultRoundType: 'text',
+            })
+        : normalizedTargetBankType === MEMORY_LANE_GAME_MODE
+          ? parseGoogleSheetModeImport({
+              rawText,
+              existingQuestions: nextExistingQuestions,
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'Memory Lane'}`,
+              bankType: MEMORY_LANE_GAME_MODE,
+              source: 'googleSheetMemoryLane',
+              defaultCategory: 'Memory Lane',
+              defaultRoundType: 'text',
+            })
         : normalizedTargetBankType === 'trueFalseGame'
           ? parseGoogleSheetTrueFalseImport({
               rawText,
@@ -20530,6 +21430,34 @@ function ProductionApp() {
         }
       } catch (error) {
         console.warn('Put Your Points bank sync failed while topping up the dedicated sheet tab.', error);
+      }
+      return existingQuestions;
+    }
+    if (
+      normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
+      || normalizedTargetBankType === COMPATIBILITY_METER_GAME_MODE
+      || normalizedTargetBankType === MEMORY_LANE_GAME_MODE
+    ) {
+      const dedicatedQuestions = existingQuestions.filter(
+        (question) => normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType,
+      );
+      if (dedicatedQuestions.length) return existingQuestions;
+      const target = getQuestionBankSyncTarget(normalizedTargetBankType);
+      try {
+        const result = await syncGoogleSheetQuestions({
+          sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+          existingQuestions,
+          overwriteExisting: false,
+          targetBankType: normalizedTargetBankType,
+        });
+        if (result.imports.length || result.updates.length) {
+          await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+          const nextQuestions = mergeQuestionBankRecords(existingQuestions, result.imports, result.updates);
+          setBankQuestions(nextQuestions);
+          return nextQuestions;
+        }
+      } catch (error) {
+        console.warn(`${target.gameName} bank sync failed while loading the dedicated sheet tab.`, error);
       }
       return existingQuestions;
     }
@@ -21584,23 +22512,23 @@ function ProductionApp() {
       const isThisOrThatGame = isThisOrThatGameMode(gameMode);
       const isMostLikelyGame = isMostLikelyGameMode(gameMode);
       const isPutYourPointsGame = isPutYourPointsGameMode(gameMode);
+      const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(gameMode);
+      const isCompatibilityMeterGame = isCompatibilityMeterGameMode(gameMode);
+      const isMemoryLaneGame = isMemoryLaneGameMode(gameMode);
       const requestedCreateCode = normalizeJoinCode(options.createCode ?? lobbyCode);
       const trimmedGameName = normalizeText(options.gameName ?? lobbyGameName);
-      const effectiveGameName = trimmedGameName || (
-        gameMode === 'quiz'
-          ? 'Quick Fire Quiz'
-          : isHoldemGame
-            ? 'Texas Hold’em'
-            : isTrueFalseGame
-              ? 'True or False'
-              : isThisOrThatGame
-                ? 'This or That'
-                : isMostLikelyGame
-                  ? 'Most Likely To'
-                  : isPutYourPointsGame
-                    ? 'Put Your Points Where Your Mouth Is'
-                  : 'Jay vs Kim'
-      );
+      const effectiveGameName = trimmedGameName || (() => {
+        if (gameMode === 'quiz') return 'Quick Fire Quiz';
+        if (isHoldemGame) return 'Texas Hold’em';
+        if (isTrueFalseGame) return 'True or False';
+        if (isThisOrThatGame) return 'This or That';
+        if (isMostLikelyGame) return 'Most Likely To';
+        if (isPutYourPointsGame) return 'Put Your Points Where Your Mouth Is';
+        if (isRedFlagGreenFlagGame) return 'Red Flag Green Flag';
+        if (isCompatibilityMeterGame) return 'Compatibility Meter';
+        if (isMemoryLaneGame) return 'Memory Lane';
+        return 'Jay vs Kim';
+      })();
       console.debug('Create New Game clicked', {
         gameName: effectiveGameName || lobbyGameName,
         requestedQuestionCount: options.requestedQuestionCount ?? lobbyQuestionCount,
@@ -21658,8 +22586,8 @@ function ProductionApp() {
               : selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
             if (actualCount < requestedQuestionCount) {
-              if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame) {
-                console.debug(`${isPutYourPointsGame ? 'Put Your Points' : isMostLikelyGame ? 'Most Likely To' : 'This or That'} local game auto-accepting shorter queue`, {
+              if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame || isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame) {
+                console.debug(`${effectiveGameName} local game auto-accepting shorter queue`, {
                   requestedQuestionCount,
                   actualCount,
                 });
@@ -21847,8 +22775,8 @@ function ProductionApp() {
               : selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
           if (actualCount < requestedQuestionCount) {
-            if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame) {
-              console.debug(`${isPutYourPointsGame ? 'Put Your Points' : isMostLikelyGame ? 'Most Likely To' : 'This or That'} live game auto-accepting shorter queue`, {
+            if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame || isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame) {
+              console.debug(`${effectiveGameName} live game auto-accepting shorter queue`, {
                 requestedQuestionCount,
                 actualCount,
               });
@@ -22890,17 +23818,17 @@ function ProductionApp() {
   const trueFalseRevealSettleRef = useRef('');
   const thisOrThatRevealSettleRef = useRef('');
   const mostLikelyRevealSettleRef = useRef('');
-  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isPutYourPointsGame = false, startOpen = false } = {}) => {
+  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isPutYourPointsGame = false, isRedFlagGreenFlagGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
     const quizRoundKey = sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question';
-    const roundType = normalizeQuestionType(nextQuestionItem.roundType, 'text');
-    const rawMultipleChoiceOptions = inferChoiceOptions({
+    const roundType = isRedFlagGreenFlagGame ? 'multipleChoice' : normalizeQuestionType(nextQuestionItem.roundType, 'text');
+    const rawMultipleChoiceOptions = isRedFlagGreenFlagGame ? RED_FLAG_GREEN_FLAG_OPTIONS : inferChoiceOptions({
       roundType,
       question: nextQuestionItem.question,
       multipleChoiceOptions: nextQuestionItem.multipleChoiceOptions || [],
     });
-    const multipleChoiceOptions = resolvePlayerChoiceOptionsForRound(
+    const multipleChoiceOptions = isRedFlagGreenFlagGame ? RED_FLAG_GREEN_FLAG_OPTIONS : resolvePlayerChoiceOptionsForRound(
       rawMultipleChoiceOptions,
       game,
       {
@@ -22932,6 +23860,10 @@ function ProductionApp() {
       aiUseCase: nextQuestionItem.aiUseCase || [],
       repeatGroup: nextQuestionItem.repeatGroup || '',
       unitLabel: nextQuestionItem.unitLabel || '',
+      memoryLaneMode: normalizeText(nextQuestionItem.memoryLaneMode || ''),
+      sourceGameId: normalizeText(nextQuestionItem.sourceGameId || ''),
+      sourceRoundId: normalizeText(nextQuestionItem.sourceRoundId || ''),
+      sourceSeat: normalizeText(nextQuestionItem.sourceSeat || ''),
       status: startOpen ? 'open' : 'ready',
       ready: startOpen ? { jay: true, kim: true } : { jay: false, kim: false },
       nextReady: { jay: false, kim: false },
@@ -23435,6 +24367,9 @@ function ProductionApp() {
       };
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
       const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
+      const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(game?.gameMode || 'standard');
+      const isMemoryLaneGame = isMemoryLaneGameMode(game?.gameMode || 'standard');
+      const isMemoryLaneRecallGame = isMemoryLaneGame && isMemoryLaneRecallRound(game.currentRound || {});
       const roundType = getEffectiveAnswerRoundType(game, game.currentRound || {});
       const serialisedOwnAnswer = resolvePlayerChoiceAnswerForRound(
         serialiseAnswerForQuestionType(roundType, draft.ownAnswer),
@@ -23450,6 +24385,12 @@ function ProductionApp() {
       );
       if (!normalizeText(serialisedOwnAnswer)) throw new Error('Enter your answer before submitting.');
       if (isPutYourPointsGame && !normalizeText(serialisedGuessedOther)) {
+        throw new Error('Enter your guess for the other player before submitting.');
+      }
+      if (isRedFlagGreenFlagGame && !normalizeText(serialisedGuessedOther)) {
+        throw new Error('Pick what you think the other player will choose before submitting.');
+      }
+      if (isMemoryLaneGame && !isMemoryLaneRecallGame && !normalizeText(serialisedGuessedOther)) {
         throw new Error('Enter your guess for the other player before submitting.');
       }
       const submittedAtIso = new Date().toISOString();
@@ -23964,6 +24905,12 @@ function ProductionApp() {
         ? mergeQuestionBankRecords(putYourPointsSelectableQuestions, standardSelectableQuestions)
       : sourceBankType === 'trueFalseGame'
         ? trueFalseBankQuestions
+      : sourceBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
+        ? redFlagGreenFlagBankQuestions
+      : sourceBankType === COMPATIBILITY_METER_GAME_MODE
+        ? compatibilityMeterBankQuestions
+      : sourceBankType === MEMORY_LANE_GAME_MODE
+        ? memoryLanePlayableQuestions
         : gameBankQuestions;
     const retiredQuestionIds = sourceBankType === 'quiz'
       ? trackedUsedQuizQuestionIds
@@ -23975,6 +24922,12 @@ function ProductionApp() {
         ? trackedUsedPutYourPointsQuestionIds
       : sourceBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
+      : sourceBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
+        ? playedRedFlagGreenFlagQuestionIds
+      : sourceBankType === COMPATIBILITY_METER_GAME_MODE
+        ? playedCompatibilityMeterQuestionIds
+      : sourceBankType === MEMORY_LANE_GAME_MODE
+        ? playedMemoryLaneQuestionIds
         : effectiveRetiredQuestionIds;
     const localUsedQuestionIds = mergeUniqueIds(
       sourceGame?.usedQuestionIds || [],
@@ -23991,7 +24944,7 @@ function ProductionApp() {
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
-    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame' || sourceBankType === 'mostLikelyGame' || sourceBankType === 'putYourPointsGame'
+    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame' || sourceBankType === 'mostLikelyGame' || sourceBankType === 'putYourPointsGame' || sourceBankType === RED_FLAG_GREEN_FLAG_GAME_MODE || sourceBankType === COMPATIBILITY_METER_GAME_MODE || sourceBankType === MEMORY_LANE_GAME_MODE
       ? []
       : standardSelectableQuestions.filter(
           (question) =>
@@ -24035,6 +24988,7 @@ function ProductionApp() {
       const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
       const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
       const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
+      const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(game?.gameMode || 'standard');
       if (
         game.currentRound
         && game.currentRound.status !== 'reveal'
@@ -24101,6 +25055,9 @@ function ProductionApp() {
               },
               quizPoints,
               manualScores: isQuizGame,
+              ...(isCompatibilityMeterGameMode(game?.gameMode || 'standard')
+                ? { compatibilityScore: calculateCompatibilityScore(game.currentRound) }
+                : {}),
             },
             game.currentRound.number || rounds.length + 1,
             nextTotals,
@@ -24156,7 +25113,7 @@ function ProductionApp() {
             Number(nextGameState.currentRound?.number || 0) + 1,
             1,
           );
-          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, startOpen: true });
+          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, isRedFlagGreenFlagGame, startOpen: true });
           nextGameState = {
             ...nextGameState,
             totals: nextTotals,
@@ -24227,6 +25184,9 @@ function ProductionApp() {
             },
             quizPoints,
             manualScores: isQuizGame,
+            ...(isCompatibilityMeterGameMode(game?.gameMode || 'standard')
+              ? { compatibilityScore: calculateCompatibilityScore(game.currentRound) }
+              : {}),
           },
           game.currentRound.number || rounds.length + 1,
           totalsBefore,
@@ -24316,7 +25276,7 @@ function ProductionApp() {
           Number(game.currentRound?.number || 0) + 1,
           1,
         );
-        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, startOpen: true });
+        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, isRedFlagGreenFlagGame, startOpen: true });
         const gamePatch = {
           ...(savedCurrentRound
             ? {
@@ -24972,6 +25932,9 @@ function ProductionApp() {
     if (normalizedTargetBankType === 'mostLikelyGame') return playedMostLikelyQuestionIds;
     if (normalizedTargetBankType === 'putYourPointsGame') return playedPutYourPointsQuestionIds;
     if (normalizedTargetBankType === 'trueFalseGame') return playedTrueFalseQuestionIds;
+    if (normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE) return playedRedFlagGreenFlagQuestionIds;
+    if (normalizedTargetBankType === COMPATIBILITY_METER_GAME_MODE) return playedCompatibilityMeterQuestionIds;
+    if (normalizedTargetBankType === MEMORY_LANE_GAME_MODE) return playedMemoryLaneQuestionIds;
     return displayUsedStandardQuestionIds;
   };
 
@@ -25166,6 +26129,69 @@ function ProductionApp() {
       await replaceTrueFalseBankFromSheet('Synced');
     }, 'Could not sync the True or False bank.');
 
+  const importRedFlagGreenFlagSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: RED_FLAG_GREEN_FLAG_GAME_MODE,
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = redFlagGreenFlagBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new Red Flag Green Flag questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. Red Flag Green Flag bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice(`Red Flag Green Flag import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import Red Flag Green Flag questions from the Google Sheet.');
+
+  const syncRedFlagGreenFlagSheet = async () =>
+    withBusy(async () => {
+      await replaceQuestionBankFromSheet({ targetBankType: RED_FLAG_GREEN_FLAG_GAME_MODE, actionLabel: 'Synced' });
+    }, 'Could not sync the Red Flag Green Flag bank.');
+
+  const importCompatibilityMeterSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: COMPATIBILITY_METER_GAME_MODE,
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = compatibilityMeterBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new Compatibility Meter questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. Compatibility Meter bank now tracks about ${nextBankCount} questions.`,
+      );
+      setNotice(`Compatibility Meter import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import Compatibility Meter questions from the Google Sheet.');
+
+  const syncCompatibilityMeterSheet = async () =>
+    withBusy(async () => {
+      await replaceQuestionBankFromSheet({ targetBankType: COMPATIBILITY_METER_GAME_MODE, actionLabel: 'Synced' });
+    }, 'Could not sync the Compatibility Meter bank.');
+
+  const importMemoryLaneSheet = async () =>
+    withBusy(async () => {
+      const result = await syncGoogleSheetQuestions({
+        sheetValue: sheetInput || DEFAULT_SETTINGS.googleSheetInput,
+        existingQuestions: bankQuestions,
+        overwriteExisting: false,
+        targetBankType: MEMORY_LANE_GAME_MODE,
+      });
+      await upsertQuestionBankBatch(firestore, [...result.imports, ...result.updates]);
+      const nextBankCount = memoryLaneBankQuestions.length + result.summary.imported;
+      setSyncNotice(
+        `Imported ${result.summary.imported} new Memory Lane questions, skipped ${result.summary.skipped}, duplicates ${result.summary.duplicates}, invalid ${result.summary.invalid}. Memory Lane bank now tracks about ${nextBankCount} sheet questions.`,
+      );
+      setNotice(`Memory Lane import complete: ${result.summary.imported} new questions added.`);
+    }, 'Could not import Memory Lane questions from the Google Sheet.');
+
+  const syncMemoryLaneSheet = async () =>
+    withBusy(async () => {
+      await replaceQuestionBankFromSheet({ targetBankType: MEMORY_LANE_GAME_MODE, actionLabel: 'Synced' });
+    }, 'Could not sync the Memory Lane bank.');
+
   if (authLoading) {
     return (
       <main className="app production-app">
@@ -25333,6 +26359,9 @@ function ProductionApp() {
         onSyncMostLikelyBank={syncMostLikelySheet}
         onSyncPutYourPointsBank={syncPutYourPointsSheet}
         onSyncTrueFalseBank={syncTrueFalseSheet}
+        onSyncRedFlagGreenFlagBank={syncRedFlagGreenFlagSheet}
+        onSyncCompatibilityMeterBank={syncCompatibilityMeterSheet}
+        onSyncMemoryLaneBank={syncMemoryLaneSheet}
         onSyncAllQuestionBanks={syncAllQuestionBanks}
         onImportQuestions={importSheet}
         onImportQuizQuestions={importQuizSheet}
@@ -25340,6 +26369,9 @@ function ProductionApp() {
         onImportMostLikelyQuestions={importMostLikelySheet}
         onImportPutYourPointsQuestions={importPutYourPointsSheet}
         onImportTrueFalseQuestions={importTrueFalseSheet}
+        onImportRedFlagGreenFlagQuestions={importRedFlagGreenFlagSheet}
+        onImportCompatibilityMeterQuestions={importCompatibilityMeterSheet}
+        onImportMemoryLaneQuestions={importMemoryLaneSheet}
         onResumeGame={resumeGame}
         onViewSummary={setSelectedGameId}
         onEndGame={requestEndGame}
@@ -25372,6 +26404,15 @@ function ProductionApp() {
         trueFalseQuestionCount={trueFalseBankCount}
         usedTrueFalseQuestionCount={usedTrueFalseQuestionCount}
         remainingTrueFalseQuestionCount={remainingTrueFalseQuestionCount}
+        redFlagGreenFlagQuestionCount={redFlagGreenFlagBankCount}
+        usedRedFlagGreenFlagQuestionCount={usedRedFlagGreenFlagQuestionCount}
+        remainingRedFlagGreenFlagQuestionCount={remainingRedFlagGreenFlagQuestionCount}
+        compatibilityMeterQuestionCount={compatibilityMeterBankCount}
+        usedCompatibilityMeterQuestionCount={usedCompatibilityMeterQuestionCount}
+        remainingCompatibilityMeterQuestionCount={remainingCompatibilityMeterQuestionCount}
+        memoryLaneQuestionCount={memoryLaneBankCount}
+        usedMemoryLaneQuestionCount={usedMemoryLaneQuestionCount}
+        remainingMemoryLaneQuestionCount={remainingMemoryLaneQuestionCount}
         unusedQuestionCount={unusedQuestionCount}
         syncNotice={syncNotice}
         gameInvites={incomingGameInvites}

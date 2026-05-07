@@ -622,6 +622,18 @@ button:disabled {
   --lobby-tile-position: center 18%;
 }
 
+.lobby-image-tile--red-green-flag {
+  --lobby-tile-position: center 18%;
+}
+
+.lobby-image-tile--compatibility {
+  --lobby-tile-position: center 18%;
+}
+
+.lobby-image-tile--memory {
+  --lobby-tile-position: center 18%;
+}
+
 .lobby-image-tile--holdem {
   --lobby-tile-position: center 20%;
 }
