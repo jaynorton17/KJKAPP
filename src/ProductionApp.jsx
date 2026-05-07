@@ -7250,19 +7250,21 @@ function LobbyScreen({
   }, [onCreateGame, randomLobbyPickerState]);
 
   const lobbyCarouselCards = [
-    { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
+    { id: 'random', label: 'Random', image: randomTileImage },
     { id: 'putYourPoints', label: 'Put Your Points', image: putYourPointsTileImage },
+    { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
     { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
-    { id: 'trueFalse', label: 'True or False', image: trueOrFalseTileImage },
     { id: 'thisOrThat', label: 'This or That', image: thisOrThatTileImage },
+    { id: 'memoryLane', label: 'Memory Lane', image: memoryLaneTileImage },
+    { id: 'trueFalse', label: 'True or False', image: trueOrFalseTileImage },
     { id: 'mostLikely', label: 'Most Likely To', image: mostLikelyTileImage },
     { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag', image: redGreenFlagTileImage },
     { id: 'compatibilityMeter', label: 'Compatibility Meter', image: compatibilityTileImage },
-    { id: 'memoryLane', label: 'Memory Lane', image: memoryLaneTileImage },
-    { id: 'random', label: 'Random', image: randomTileImage },
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
 
+  const getLobbyCarouselCardIndex = (cardId) =>
+    Math.max(0, lobbyCarouselCards.findIndex((card) => card.id === cardId));
   const lobbyCarouselCount = lobbyCarouselCards.length;
   const moveLobbyCarousel = (direction) => {
     setOpenLobbyTileInfoId('');
@@ -7996,9 +7998,9 @@ function LobbyScreen({
                     <span aria-hidden="true">›</span>
                   </Button>
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(0)}`}
-                    inert={getLobbyCarouselPosition(0) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(0) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('standard'))}`}
+                    inert={getLobbyCarouselPosition(getLobbyCarouselCardIndex('standard')) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('standard')) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby create-game-card lobby-image-tile lobby-image-tile--normal"
@@ -8145,9 +8147,9 @@ function LobbyScreen({
                   </div>
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(1)}`}
-                    inert={getLobbyCarouselPosition(1) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(1) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('putYourPoints'))}`}
+                    inert={getLobbyCarouselPosition(getLobbyCarouselCardIndex('putYourPoints')) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('putYourPoints')) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--put-points"
@@ -8237,9 +8239,9 @@ function LobbyScreen({
                   </div>
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(2)}`}
-                    inert={getLobbyCarouselPosition(2) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(2) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('quiz'))}`}
+                    inert={getLobbyCarouselPosition(getLobbyCarouselCardIndex('quiz')) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('quiz')) !== 'center'}
                   >
 	                <section
                     className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--quiz"
@@ -8351,9 +8353,9 @@ function LobbyScreen({
                   </div>
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(3)}`}
-                    inert={getLobbyCarouselPosition(3) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(3) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('trueFalse'))}`}
+                    inert={getLobbyCarouselPosition(getLobbyCarouselCardIndex('trueFalse')) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('trueFalse')) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--true-false"
@@ -8443,9 +8445,9 @@ function LobbyScreen({
                   </div>
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(4)}`}
-                    inert={getLobbyCarouselPosition(4) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(4) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('thisOrThat'))}`}
+                    inert={getLobbyCarouselPosition(getLobbyCarouselCardIndex('thisOrThat')) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('thisOrThat')) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--this-or-that"
@@ -8535,9 +8537,9 @@ function LobbyScreen({
                   </div>
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(5)}`}
-                    inert={getLobbyCarouselPosition(5) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(5) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('mostLikely'))}`}
+                    inert={getLobbyCarouselPosition(getLobbyCarouselCardIndex('mostLikely')) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('mostLikely')) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--most-likely"
@@ -8627,7 +8629,7 @@ function LobbyScreen({
                   </div>
 
                   {renderSimpleLobbySetupCard({
-                    index: 6,
+                    index: getLobbyCarouselCardIndex('redFlagGreenFlag'),
                     cardId: 'redFlagGreenFlag',
                     className: 'lobby-image-tile--red-green-flag',
                     image: redGreenFlagTileImage,
@@ -8647,7 +8649,7 @@ function LobbyScreen({
                   })}
 
                   {renderSimpleLobbySetupCard({
-                    index: 7,
+                    index: getLobbyCarouselCardIndex('compatibilityMeter'),
                     cardId: 'compatibilityMeter',
                     className: 'lobby-image-tile--compatibility',
                     image: compatibilityTileImage,
@@ -8667,7 +8669,7 @@ function LobbyScreen({
                   })}
 
                   {renderSimpleLobbySetupCard({
-                    index: 8,
+                    index: getLobbyCarouselCardIndex('memoryLane'),
                     cardId: 'memoryLane',
                     className: 'lobby-image-tile--memory',
                     image: memoryLaneTileImage,
@@ -8687,7 +8689,7 @@ function LobbyScreen({
                   })}
 
                   {renderSimpleLobbySetupCard({
-                    index: 9,
+                    index: getLobbyCarouselCardIndex('random'),
                     cardId: 'random',
                     className: 'lobby-image-tile--random',
                     image: randomTileImage,
@@ -8701,16 +8703,16 @@ function LobbyScreen({
                     showCodeField: false,
                     questionCountValue: randomQuestionCountDraft,
                     onQuestionCountChange: setRandomQuestionCountDraft,
-                    fieldNote: 'Cycles through Normal Game, Quick Fire Quiz, True or False, This or That, Most Likely To, Put Your Points, Red Flag Green Flag, Compatibility Meter, and Memory Lane.',
+                    fieldNote: 'Cycles through Put Your Points, Normal Game, Quick Fire Quiz, This or That, Memory Lane, True or False, Most Likely To, Red Flag Green Flag, and Compatibility Meter.',
                     createLabel: 'Surprise Me',
                     onCreate: handleCreateRandomGame,
                     isFlipped: isRandomTileFlipped,
                   })}
 
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(10)}`}
-                    inert={getLobbyCarouselPosition(10) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(10) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('holdem'))}`}
+                    inert={getLobbyCarouselPosition(getLobbyCarouselCardIndex('holdem')) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('holdem')) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
