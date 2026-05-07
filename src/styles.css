@@ -1736,6 +1736,13 @@ button:disabled {
     rgba(0, 0, 0, 0.18);
 }
 
+.question-bank-preflight.is-empty {
+  border-style: dashed;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), transparent 58%),
+    rgba(0, 0, 0, 0.12);
+}
+
 .question-bank-preflight-head {
   display: flex;
   align-items: center;

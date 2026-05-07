@@ -10122,7 +10122,7 @@ function LobbyScreen({
                     Copy Master Prompt
                   </Button>
                   <Button className="primary-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={isBusy}>
-                    Choose CSV
+                    Choose + Check CSV
                   </Button>
                   <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={isBusy || !questionUploadDraft || (questionUploadReport && !questionUploadReport.canUpload)}>
                     Submit Upload
@@ -10162,8 +10162,13 @@ function LobbyScreen({
                     ) : null}
                   </div>
                 ) : null}
-                {questionUploadReport ? (
-                  <div className={`question-bank-preflight ${questionUploadReport.canUpload ? 'is-ready' : 'is-error'}`}>
+                <div className={`question-bank-preflight ${
+                  questionUploadReport
+                    ? questionUploadReport.canUpload ? 'is-ready' : 'is-error'
+                    : 'is-empty'
+                }`}>
+                  {questionUploadReport ? (
+                    <>
                     <div className="question-bank-preflight-head">
                       <div>
                         <p className="eyebrow">CSV Check</p>
@@ -10191,8 +10196,17 @@ function LobbyScreen({
                         ))}
                       </ul>
                     ) : null}
-                  </div>
-                ) : null}
+                    </>
+                  ) : (
+                    <div className="question-bank-preflight-head">
+                      <div>
+                        <p className="eyebrow">CSV Check</p>
+                        <h4>Choose a CSV to check it before upload</h4>
+                      </div>
+                      <span className="status-pill">Waiting</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </section>
           </section>
