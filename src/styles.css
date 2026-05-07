@@ -1915,6 +1915,65 @@ button:disabled {
   overflow: hidden;
 }
 
+.ai-chat-heading-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.ai-chat-actions-menu summary {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  justify-content: center;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.ai-chat-actions-menu-panel {
+  width: min(390px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 150px));
+  overflow-y: auto;
+}
+
+.ai-chat-saved-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-chat-saved-row {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.ai-chat-saved-row strong,
+.ai-chat-saved-row span {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ai-chat-saved-row strong {
+  color: #fff;
+  font-size: 0.78rem;
+}
+
+.ai-chat-saved-row span {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.68rem;
+}
+
+.ai-chat-saved-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
 .ai-chat-note {
   display: grid;
   gap: 4px;

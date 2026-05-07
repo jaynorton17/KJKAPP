@@ -959,6 +959,23 @@ const AI_RELATIONSHIP_SYSTEM_PROMPT = [
   'Sound like a talking agent: natural, concise, lightly playful, and specific. Do not default to a robotic evidence dump.',
   'Only include a short "based on" note when it genuinely helps. Keep the answer under 220 words unless the user asks for a long summary.',
 ].join('\n');
+const serializeAiChatMessageForSession = (message = {}, fallbackCreatedAtMs = Date.now()) => {
+  const createdAtMs = Number(message?.createdAtMs || getRecordTime(message?.createdAt || 0) || fallbackCreatedAtMs);
+  return {
+    id: normalizeText(message?.id || ''),
+    role: message?.role === 'assistant' ? 'assistant' : 'user',
+    seat: message?.seat || '',
+    uid: message?.uid || '',
+    displayName: normalizeText(message?.displayName || ''),
+    text: String(message?.text || '').trim(),
+    confidence: normalizeText(message?.confidence || ''),
+    model: normalizeText(message?.model || ''),
+    prompt: normalizeText(message?.prompt || ''),
+    evidence: Array.isArray(message?.evidence) ? message.evidence.slice(0, AI_EVIDENCE_PREVIEW_LIMIT) : [],
+    createdAt: normalizeText(message?.createdAt || '') || new Date(createdAtMs).toISOString(),
+    createdAtMs,
+  };
+};
 const normalizeQuizAnswerText = (value = '') =>
   normalizeText(value)
     .toLowerCase()
@@ -5973,10 +5990,16 @@ function AiAssistantPanel({
   profile,
   currentPlayerSeat,
   aiChatMessages,
+  aiChatSessions = [],
   aiChatDraft,
   setAiChatDraft,
   sendAiChat,
   isAiChatSending,
+  onClearAiChat,
+  onSaveAiChat,
+  onOpenAiChatSession,
+  onRenameAiChatSession,
+  onDeleteAiChatSession,
 }) {
   const viewerSeat = currentPlayerSeat || inferSeatFromUser(user, profile) || 'jay';
   const viewerLabel = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[viewerSeat] || 'Player';
@@ -5989,7 +6012,57 @@ function AiAssistantPanel({
             <p className="eyebrow">AI</p>
             <h2>Ask The AI</h2>
           </div>
-          <span className="status-pill">Private to {viewerLabel}</span>
+          <div className="ai-chat-heading-actions">
+            <span className="status-pill">Private to {viewerLabel}</span>
+            <details className="top-menu ai-chat-actions-menu">
+              <summary aria-label="AI chat actions">
+                <span className="settings-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                    <path d="M12 7.5h.01M12 12h.01M12 16.5h.01" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                </span>
+              </summary>
+              <div className="top-menu-panel settings-menu-panel ai-chat-actions-menu-panel">
+                <section className="settings-menu-section">
+                  <span className="settings-section-label">Current Chat</span>
+                  <Button className="ghost-button compact" onClick={onSaveAiChat} disabled={isAiChatSending || !aiChatMessages.length}>
+                    Save + Name Chat
+                  </Button>
+                  <Button className="ghost-button compact" onClick={onClearAiChat} disabled={isAiChatSending || !aiChatMessages.length}>
+                    Clear Chat
+                  </Button>
+                </section>
+                <section className="settings-menu-section">
+                  <span className="settings-section-label">Saved Chats</span>
+                  {aiChatSessions.length ? (
+                    <div className="ai-chat-saved-list">
+                      {aiChatSessions.map((session) => (
+                        <article className="ai-chat-saved-row" key={session.id}>
+                          <div>
+                            <strong>{session.title || 'Saved AI chat'}</strong>
+                            <span>{Number(session.messageCount || session.messages?.length || 0)} messages</span>
+                          </div>
+                          <div className="ai-chat-saved-actions">
+                            <Button className="ghost-button compact" onClick={() => onOpenAiChatSession?.(session)} disabled={isAiChatSending}>
+                              Open
+                            </Button>
+                            <Button className="ghost-button compact" onClick={() => onRenameAiChatSession?.(session)} disabled={isAiChatSending}>
+                              Name
+                            </Button>
+                            <Button className="ghost-button compact" onClick={() => onDeleteAiChatSession?.(session)} disabled={isAiChatSending}>
+                              Delete
+                            </Button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-copy">No saved AI chats yet.</p>
+                  )}
+                </section>
+              </div>
+            </details>
+          </div>
         </div>
         <ChatPanel
           compact
@@ -6021,10 +6094,16 @@ function LobbyScreen({
   onDeleteQuestionNote,
   aiEvidenceSnapshot,
   aiChatMessages,
+  aiChatSessions,
   aiChatDraft,
   isAiChatSending,
   setAiChatDraft,
   sendAiChat,
+  onClearAiChat,
+  onSaveAiChat,
+  onOpenAiChatSession,
+  onRenameAiChatSession,
+  onDeleteAiChatSession,
   playerAccounts,
   editingModeEnabled,
   onToggleEditingMode,
@@ -9360,10 +9439,16 @@ function LobbyScreen({
               profile={profile}
               currentPlayerSeat={currentPlayerSeat}
               aiChatMessages={aiChatMessages}
+              aiChatSessions={aiChatSessions}
               aiChatDraft={aiChatDraft}
               setAiChatDraft={setAiChatDraft}
               sendAiChat={sendAiChat}
               isAiChatSending={isAiChatSending}
+              onClearAiChat={onClearAiChat}
+              onSaveAiChat={onSaveAiChat}
+              onOpenAiChatSession={onOpenAiChatSession}
+              onRenameAiChatSession={onRenameAiChatSession}
+              onDeleteAiChatSession={onDeleteAiChatSession}
             />
           </section>
         ) : null}
@@ -10247,7 +10332,7 @@ function LobbyScreen({
               user={user}
               profile={profile}
               currentPlayerSeat={currentPlayerSeat}
-              diaryEntries={diaryEntries}
+              diaryEntries={visibleDiaryEntries}
               roundAnalytics={lobbyRoundAnalytics}
               onSubmitAmaQuestion={onSubmitAmaQuestion}
               onAnswerAmaRequest={onAnswerAmaRequest}
@@ -10270,7 +10355,7 @@ function LobbyScreen({
             redemptionItems={redemptionItems}
             redemptionHistory={redemptionHistory}
             amaRequests={amaRequests}
-            diaryEntries={diaryEntries}
+            diaryEntries={visibleDiaryEntries}
             forfeitPriceRequests={forfeitPriceRequests}
             onSaveRedemptionItem={onSaveRedemptionItem}
             onDeleteRedemptionItem={onDeleteRedemptionItem}
@@ -18209,6 +18294,7 @@ function ProductionApp() {
   const [lobbyChatMessages, setLobbyChatMessages] = useState([]);
   const [lobbyChatDraft, setLobbyChatDraft] = useState(defaultChatDraft);
   const [aiChatMessages, setAiChatMessages] = useState([]);
+  const [aiChatSessions, setAiChatSessions] = useState([]);
   const [optimisticAiChatMessages, setOptimisticAiChatMessages] = useState([]);
   const [aiChatDraft, setAiChatDraft] = useState(defaultChatDraft);
   const [isAiChatSending, setIsAiChatSending] = useState(false);
@@ -18980,6 +19066,7 @@ function ProductionApp() {
     if (!shouldLoadAiChatHistory) {
       setAiChatMessages([]);
       setOptimisticAiChatMessages([]);
+      setAiChatSessions([]);
       return undefined;
     }
     if (shouldPauseBackgroundFirestore) return undefined;
@@ -18997,6 +19084,25 @@ function ProductionApp() {
           setNotice((current) => current || 'AI chat is showing local replies, but private AI history cannot sync until Firestore permissions are updated.');
         }
       },
+    );
+    return unsubscribe;
+  }, [firestore, shouldLoadAiChatHistory, user?.uid, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
+
+  useEffect(() => {
+    if (!shouldLoadAiChatHistory) {
+      setAiChatSessions([]);
+      return undefined;
+    }
+    if (shouldPauseBackgroundFirestore) return undefined;
+    const aiChatSessionsRef = query(
+      collection(firestore, 'users', user.uid, 'aiChatSessions'),
+      orderBy('updatedAtMs', 'desc'),
+      limit(50),
+    );
+    const unsubscribe = onSnapshot(
+      aiChatSessionsRef,
+      (snapshot) => setAiChatSessions(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))),
+      (error) => reportFirestoreListenerError('aiChatSessionsSnapshotError', error),
     );
     return unsubscribe;
   }, [firestore, shouldLoadAiChatHistory, user?.uid, shouldPauseBackgroundFirestore, reportFirestoreListenerError]);
@@ -19507,17 +19613,31 @@ function ProductionApp() {
     if (!syncedIds.size) return;
     setOptimisticAiChatMessages((current) => current.filter((entry) => !syncedIds.has(entry?.id)));
   }, [aiChatMessages]);
+  const visibleDiaryEntries = useMemo(() => {
+    const knownGameIds = new Set(
+      [...(gameLibrary || []), ...(localArchivedGames || []), game].filter(Boolean)
+        .map((entry) => normalizeText(entry?.id || ''))
+        .filter(Boolean),
+    );
+    return (diaryEntries || []).filter((entry) => {
+      if (!isGameDiaryEntry(entry)) return true;
+      const sourceGameId = normalizeText(entry?.sourceId || entry?.gameId || '');
+      if (!sourceGameId) return true;
+      if (hiddenGameIdSet.has(sourceGameId)) return false;
+      return !knownGameIds.size || knownGameIds.has(sourceGameId);
+    });
+  }, [diaryEntries, game, gameLibrary, hiddenGameIdSet, localArchivedGames]);
   const aiEvidenceSnapshot = useMemo(
     () =>
       buildAiEvidenceSnapshot({
         previousGames,
         questionFeedback,
         quizAnswers: visibleQuizAnswers,
-        diaryEntries,
+        diaryEntries: visibleDiaryEntries,
         questionNotes,
         viewerSeat: dashboardSeat || 'jay',
       }),
-    [dashboardSeat, diaryEntries, previousGames, questionFeedback, questionNotes, visibleQuizAnswers],
+    [dashboardSeat, previousGames, questionFeedback, questionNotes, visibleDiaryEntries, visibleQuizAnswers],
   );
   const [gameDiaryBackfillState, setGameDiaryBackfillState] = useState({
     status: 'idle',
@@ -19527,8 +19647,8 @@ function ProductionApp() {
     error: '',
   });
   const diaryGameEntries = useMemo(
-    () => diaryEntries.filter((entry) => isGameDiaryEntry(entry)),
-    [diaryEntries],
+    () => visibleDiaryEntries.filter((entry) => isGameDiaryEntry(entry)),
+    [visibleDiaryEntries],
   );
   const previousGamesById = useMemo(
     () =>
@@ -20162,8 +20282,8 @@ function ProductionApp() {
     user?.uid,
   ]);
   const amaDiaryEntries = useMemo(
-    () => diaryEntries.filter((entry) => isAmaDiaryEntry(entry)).sort(sortByOldest),
-    [diaryEntries],
+    () => visibleDiaryEntries.filter((entry) => isAmaDiaryEntry(entry)).sort(sortByOldest),
+    [visibleDiaryEntries],
   );
   const nextAmaChapterNumber = useMemo(
     () =>
@@ -21847,6 +21967,25 @@ function ProductionApp() {
     );
     const nextJayBalance = Math.max(0, currentJayBalance + Number(rollback.jay || 0));
     const nextKimBalance = Math.max(0, currentKimBalance + Number(rollback.kim || 0));
+    const gameDiaryEntryId = buildGameDiaryEntryId(targetGameId);
+    const diaryRefsToDelete = new Map([
+      [gameDiaryEntryId, doc(firestore, 'diaryEntries', gameDiaryEntryId)],
+    ]);
+    const [diaryBySourceSnap, diaryByGameSnap] = await Promise.all([
+      getDocs(query(collection(firestore, 'diaryEntries'), where('sourceId', '==', targetGameId), limit(25))).catch(() => null),
+      getDocs(query(collection(firestore, 'diaryEntries'), where('gameId', '==', targetGameId), limit(25))).catch(() => null),
+    ]);
+    [diaryBySourceSnap, diaryByGameSnap].forEach((diarySnap) => {
+      diarySnap?.docs?.forEach((entry) => {
+        const entryData = entry.data();
+        const isLinkedGameDiary =
+          entry.id === gameDiaryEntryId
+          || normalizeText(entryData?.sourceType || '') === 'game'
+          || normalizeText(entryData?.gameId || '') === normalizeText(targetGameId)
+          || normalizeText(entryData?.sourceId || '') === normalizeText(targetGameId);
+        if (isLinkedGameDiary) diaryRefsToDelete.set(entry.ref.path, entry.ref);
+      });
+    });
     await deleteDoc(gameRef);
 
     const cleanupBatch = writeBatch(firestore);
@@ -21889,6 +22028,9 @@ function ProductionApp() {
       .forEach((inviteId) => {
         cleanupBatch.delete(doc(firestore, 'gameInvites', inviteId));
       });
+    diaryRefsToDelete.forEach((diaryRef) => {
+      cleanupBatch.delete(diaryRef);
+    });
     await cleanupBatch.commit().catch((error) => {
       if (isFirestoreRateLimitedError(error)) {
         enterFirestoreCooldown('deleteGameByIdCleanup');
@@ -21914,6 +22056,13 @@ function ProductionApp() {
         },
       }));
     }
+    setDiaryEntries((current) =>
+      current.filter((entry) =>
+        entry?.id !== gameDiaryEntryId
+        && normalizeText(entry?.sourceId || '') !== normalizeText(targetGameId)
+        && normalizeText(entry?.gameId || '') !== normalizeText(targetGameId),
+      ),
+    );
 
     void Promise.allSettled([
       getDocs(collection(gameRef, 'rounds')),
@@ -28165,6 +28314,174 @@ function ProductionApp() {
     }
   };
 
+  const deleteCurrentAiChatMessages = async () => {
+    if (!firestore || !user?.uid) return 0;
+    const messagesSnap = await getDocs(collection(firestore, 'users', user.uid, 'aiChatMessages'));
+    for (const chunk of chunkArray(messagesSnap.docs, 400)) {
+      const batch = writeBatch(firestore);
+      chunk.forEach((entry) => batch.delete(entry.ref));
+      await batch.commit();
+    }
+    return messagesSnap.size;
+  };
+
+  const clearAiChat = async () => {
+    if (!firestore || !user?.uid) {
+      setNotice('You must be signed in to clear AI chat.');
+      return null;
+    }
+    if (!visibleAiChatMessages.length) {
+      setNotice('There is no AI chat to clear.');
+      return null;
+    }
+    if (typeof window !== 'undefined' && !window.confirm('Clear the current AI chat? Saved chats will not be deleted.')) {
+      return null;
+    }
+    setIsAiChatSending(true);
+    try {
+      await deleteCurrentAiChatMessages();
+      setAiChatMessages([]);
+      setOptimisticAiChatMessages([]);
+      setAiChatDraft('');
+      setNotice('AI chat cleared.');
+      return true;
+    } catch (error) {
+      setNotice(String(error?.message || 'Could not clear AI chat.'));
+      return null;
+    } finally {
+      setIsAiChatSending(false);
+    }
+  };
+
+  const saveAiChatSession = async () => {
+    if (!firestore || !user?.uid) {
+      setNotice('You must be signed in to save AI chat.');
+      return null;
+    }
+    const messagesToSave = visibleAiChatMessages
+      .map((message, index) => serializeAiChatMessageForSession(message, Date.now() + index))
+      .filter((message) => message.text);
+    if (!messagesToSave.length) {
+      setNotice('There is no AI chat to save yet.');
+      return null;
+    }
+    const defaultTitle = `AI chat ${new Date().toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+    const title = window.prompt('Name this AI chat.', defaultTitle);
+    if (title === null) return null;
+    const cleanTitle = normalizeText(title || '') || defaultTitle;
+    setIsAiChatSending(true);
+    try {
+      const sessionRef = doc(collection(firestore, 'users', user.uid, 'aiChatSessions'));
+      const nowMs = Date.now();
+      await setDoc(sessionRef, {
+        id: sessionRef.id,
+        title: cleanTitle,
+        messages: messagesToSave,
+        messageCount: messagesToSave.length,
+        createdAt: new Date(nowMs).toISOString(),
+        createdAtMs: nowMs,
+        updatedAt: serverTimestamp(),
+        updatedAtMs: nowMs,
+      });
+      setNotice(`Saved AI chat "${cleanTitle}".`);
+      return sessionRef.id;
+    } catch (error) {
+      setNotice(String(error?.message || 'Could not save AI chat.'));
+      return null;
+    } finally {
+      setIsAiChatSending(false);
+    }
+  };
+
+  const openAiChatSession = async (session = null) => {
+    if (!firestore || !user?.uid || !session?.id) return null;
+    const savedMessages = Array.isArray(session.messages)
+      ? session.messages
+          .map((message, index) => serializeAiChatMessageForSession(message, Date.now() + index))
+          .filter((message) => message.text)
+      : [];
+    if (!savedMessages.length) {
+      setNotice('That saved AI chat does not have any messages to open.');
+      return null;
+    }
+    if (
+      visibleAiChatMessages.length
+      && typeof window !== 'undefined'
+      && !window.confirm(`Open "${session.title || 'saved AI chat'}"? This replaces the current AI chat. Save the current chat first if you want to keep it.`)
+    ) {
+      return null;
+    }
+    setIsAiChatSending(true);
+    try {
+      await deleteCurrentAiChatMessages();
+      const messagesCollection = collection(firestore, 'users', user.uid, 'aiChatMessages');
+      for (const chunk of chunkArray(savedMessages, 400)) {
+        const batch = writeBatch(firestore);
+        chunk.forEach((message) => {
+          const messageRef = doc(messagesCollection);
+          batch.set(messageRef, {
+            ...message,
+            id: messageRef.id,
+            updatedAt: serverTimestamp(),
+          });
+        });
+        await batch.commit();
+      }
+      setOptimisticAiChatMessages([]);
+      setNotice(`Opened AI chat "${session.title || 'saved chat'}".`);
+      return session.id;
+    } catch (error) {
+      setNotice(String(error?.message || 'Could not open saved AI chat.'));
+      return null;
+    } finally {
+      setIsAiChatSending(false);
+    }
+  };
+
+  const renameAiChatSession = async (session = null) => {
+    if (!firestore || !user?.uid || !session?.id) return null;
+    const title = window.prompt('Rename this AI chat.', session.title || 'Saved AI chat');
+    if (title === null) return null;
+    const cleanTitle = normalizeText(title || '');
+    if (!cleanTitle) {
+      setNotice('Saved chat name cannot be blank.');
+      return null;
+    }
+    setIsAiChatSending(true);
+    try {
+      await updateDoc(doc(firestore, 'users', user.uid, 'aiChatSessions', session.id), {
+        title: cleanTitle,
+        updatedAt: serverTimestamp(),
+        updatedAtMs: Date.now(),
+      });
+      setNotice(`Renamed AI chat to "${cleanTitle}".`);
+      return session.id;
+    } catch (error) {
+      setNotice(String(error?.message || 'Could not rename saved AI chat.'));
+      return null;
+    } finally {
+      setIsAiChatSending(false);
+    }
+  };
+
+  const deleteAiChatSession = async (session = null) => {
+    if (!firestore || !user?.uid || !session?.id) return null;
+    if (typeof window !== 'undefined' && !window.confirm(`Delete saved AI chat "${session.title || 'saved chat'}"?`)) {
+      return null;
+    }
+    setIsAiChatSending(true);
+    try {
+      await deleteDoc(doc(firestore, 'users', user.uid, 'aiChatSessions', session.id));
+      setNotice('Saved AI chat deleted.');
+      return session.id;
+    } catch (error) {
+      setNotice(String(error?.message || 'Could not delete saved AI chat.'));
+      return null;
+    } finally {
+      setIsAiChatSending(false);
+    }
+  };
+
   useEffect(() => {
     if (!firestore || hasOpenRoomSession || dashboardTabState !== 'gameLobby') {
       setLobbyChatMessages([]);
@@ -28686,10 +29003,16 @@ function ProductionApp() {
 	        quizAnswers={visibleQuizAnswers}
         aiEvidenceSnapshot={aiEvidenceSnapshot}
         aiChatMessages={visibleAiChatMessages}
+        aiChatSessions={aiChatSessions}
         aiChatDraft={aiChatDraft}
         isAiChatSending={isAiChatSending}
         setAiChatDraft={setAiChatDraft}
         sendAiChat={sendAiChat}
+        onClearAiChat={clearAiChat}
+        onSaveAiChat={saveAiChatSession}
+        onOpenAiChatSession={openAiChatSession}
+        onRenameAiChatSession={renameAiChatSession}
+        onDeleteAiChatSession={deleteAiChatSession}
         onSaveDisplayName={saveDisplayNameProfile}
         onUpdateQuestionNote={updatePrivateQuestionNote}
         onDeleteQuestionNote={deletePrivateQuestionNote}
@@ -28781,7 +29104,7 @@ function ProductionApp() {
         requestAlerts={pendingForfeitRequestAlerts}
         responseAlerts={pendingForfeitResponseAlerts}
         amaRequests={amaRequests}
-        diaryEntries={diaryEntries}
+        diaryEntries={visibleDiaryEntries}
         onBackfillGameDiaryEntries={backfillMissingGameDiaryEntries}
         gameDiaryBackfillState={gameDiaryBackfillState}
         missingGameDiaryCount={missingGameDiaryCount}
