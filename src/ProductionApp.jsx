@@ -8654,7 +8654,7 @@ function LobbyScreen({
   };
   const handleGenerateQuestionBankQuestions = async () => {
     if (!geminiIsConfigured) {
-      const message = 'Gemini is not configured for this app.';
+      const message = 'Gemini API key is missing. Add VITE_GEMINI_API_KEY to the app environment and redeploy.';
       setQuestionUploadProgress({ status: 'error', percent: 0, message });
       window.alert(message);
       return;
@@ -8758,21 +8758,56 @@ function LobbyScreen({
         generationConstraints: constraints,
       });
       setQuestionUploadReport(report);
-      if (report.canUpload) {
-        const imported = Number(report.summary?.imported || 0);
-        const duplicates = Number(report.summary?.duplicates || 0);
-        setQuestionUploadProgress({
-          status: 'ready',
-          percent: 72,
-          message: `Gemini draft checked: ${imported} new, ${duplicates} duplicate${duplicates === 1 ? '' : 's'} skipped. Review, then submit upload.`,
-        });
-      } else {
+      if (!report.canUpload) {
         setQuestionUploadProgress({
           status: 'error',
           percent: 0,
           message: `Gemini draft still needs review after repair: ${report.errorCount} issue${report.errorCount === 1 ? '' : 's'} found.`,
         });
+        return;
       }
+
+      if (!onUploadQuestionBankCsv) {
+        setQuestionUploadProgress({
+          status: 'error',
+          percent: 0,
+          message: 'Question bank upload is not available.',
+        });
+        return;
+      }
+
+      const imported = Number(report.summary?.imported || 0);
+      const duplicates = Number(report.summary?.duplicates || 0);
+      setQuestionUploadProgress({
+        status: 'uploading',
+        percent: 78,
+        message: `Gemini draft checked: ${imported} new, ${duplicates} duplicate${duplicates === 1 ? '' : 's'} skipped. Adding valid rows now...`,
+      });
+
+      const uploadResult = await onUploadQuestionBankCsv({
+        targetBankType: target.bankType,
+        mode: 'add',
+        rawText,
+        fileName,
+      });
+
+      if (uploadResult?.cancelled || uploadResult?.errorMessage || !uploadResult) {
+        const message = uploadResult?.errorMessage || 'Question generation passed checks, but the upload did not complete.';
+        setQuestionUploadProgress({
+          status: 'error',
+          percent: 0,
+          message,
+        });
+        return;
+      }
+
+      const uploadSummary = uploadResult.result?.summary || {};
+      setQuestionUploadProgress({
+        status: 'done',
+        percent: 100,
+        message: `Created and added ${Number(uploadSummary.imported || 0)} new ${target.gameName} question${Number(uploadSummary.imported || 0) === 1 ? '' : 's'}. ${Number(uploadSummary.duplicates || 0)} duplicate${Number(uploadSummary.duplicates || 0) === 1 ? '' : 's'} skipped.`,
+      });
+      setQuestionUploadDraft(null);
     } catch (error) {
       setQuestionUploadDraft(null);
       setQuestionUploadReport(null);
@@ -10568,11 +10603,11 @@ function LobbyScreen({
                 </article>
               </div>
 
-              <div className="question-bank-upload-panel" aria-label="Firestore CSV question upload">
+              <div className="question-bank-upload-panel" aria-label="AI question generator">
                 <div className="question-bank-upload-copy">
                   <p className="eyebrow">AI Question Generator</p>
                   <h3>{questionUploadTarget.gameName}</h3>
-                  <span>Generate questions with Gemini, then the app checks the CSV before anything can be uploaded. Manual CSV upload is still available as a fallback.</span>
+                  <span>Generate questions with Gemini, then the app checks, repairs once if needed, and adds valid new rows straight into Firebase.</span>
                 </div>
                 <div className="question-bank-upload-controls">
                   <label className="field question-bank-generator-count">
@@ -10639,42 +10674,15 @@ function LobbyScreen({
                       disabled={questionBankGenerationBusy}
                     />
                   </label>
-                  <Button className="primary-button compact" onClick={handleGenerateQuestionBankQuestions} disabled={questionBankGenerationBusy || !geminiIsConfigured}>
+                  <Button className="primary-button compact question-bank-generate-button" onClick={handleGenerateQuestionBankQuestions} disabled={questionBankGenerationBusy}>
                     Create Questions
                   </Button>
-                  <label className="field">
-                    <span>Mode</span>
-                    <select value={questionUploadMode} onChange={handleQuestionUploadModeChange} disabled={questionBankGenerationBusy}>
-                      <option value="add">Add new questions only</option>
-                      <option value="upsert">Add new and update matches</option>
-                      <option value="replace">Replace this game bank</option>
-                    </select>
-                  </label>
-                  <Button className="ghost-button compact" onClick={handleDownloadQuestionUploadTemplate} disabled={questionBankGenerationBusy}>
-                    Download Blank Template
-                  </Button>
-                  <Button className="ghost-button compact" onClick={handleDownloadRemainingQuestions} disabled={questionBankGenerationBusy}>
-                    Download Remaining Questions
-                  </Button>
-                  <Button className="ghost-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={questionBankGenerationBusy}>
-                    Choose + Check CSV
-                  </Button>
-                  <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={questionBankGenerationBusy || !questionUploadDraft || (questionUploadReport && !questionUploadReport.canUpload)}>
-                    Submit Upload
-                  </Button>
-                  <input
-                    ref={questionUploadInputRef}
-                    type="file"
-                    accept=".csv,text/csv"
-                    className="question-bank-upload-input"
-                    onChange={handleQuestionUploadFileChange}
-                  />
                 </div>
                 {questionUploadProgress.status !== 'idle' ? (
                   <div className={`question-bank-upload-progress is-${questionUploadProgress.status}`}>
                     <div className="question-bank-upload-progress-head">
                       <strong>
-                        {questionUploadDraft?.fileName || (questionUploadProgress.status === 'done' ? 'Upload complete' : 'CSV upload')}
+                        {questionUploadDraft?.fileName || (questionUploadProgress.status === 'done' ? 'Questions added' : 'Question generation')}
                       </strong>
                       {questionUploadDraft ? (
                         <button type="button" onClick={handleClearQuestionUploadDraft} disabled={questionBankGenerationBusy}>
@@ -10687,13 +10695,7 @@ function LobbyScreen({
                     </div>
                     <p>{questionUploadProgress.message}</p>
                     {questionUploadDraft ? (
-                      <small>{`${questionUploadDraft.rowCount} rows selected for ${questionUploadTarget.gameName} in ${
-                        questionUploadMode === 'replace'
-                          ? 'replace'
-                          : questionUploadMode === 'upsert'
-                            ? 'add/update'
-                            : 'add new only'
-                      } mode.`}</small>
+                      <small>{`${questionUploadDraft.rowCount} generated row${questionUploadDraft.rowCount === 1 ? '' : 's'} checked for ${questionUploadTarget.gameName}.`}</small>
                     ) : null}
                   </div>
                 ) : null}
@@ -10707,7 +10709,13 @@ function LobbyScreen({
                     <div className="question-bank-preflight-head">
                       <div>
                         <p className="eyebrow">CSV Check</p>
-                        <h4>{questionUploadReport.canUpload ? 'Ready to upload' : 'Needs review'}</h4>
+                        <h4>
+                          {questionUploadProgress.status === 'done'
+                            ? 'Uploaded'
+                            : questionUploadProgress.status === 'uploading'
+                              ? 'Adding questions'
+                              : questionUploadReport.canUpload ? 'Ready to add' : 'Needs review'}
+                        </h4>
                       </div>
                       <span className="status-pill">{questionUploadReport.rowCount} rows</span>
                     </div>
@@ -10736,7 +10744,7 @@ function LobbyScreen({
                     <div className="question-bank-preflight-head">
                       <div>
                         <p className="eyebrow">CSV Check</p>
-                        <h4>Choose a CSV to check it before upload</h4>
+                        <h4>Create questions to check and add them</h4>
                       </div>
                       <span className="status-pill">Waiting</span>
                     </div>
