@@ -36,6 +36,7 @@ import {
 } from 'firebase/storage';
 import AnalyticsPanel from './components/AnalyticsPanel.jsx';
 import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
+import questionMakerAgentRules from '../docs/question-maker-agent.md?raw';
 import normalGameTileImage from './assets/lobby-normal-game.webp';
 import compatibilityTileImage from './assets/lobby-compatability.png';
 import memoryLaneTileImage from './assets/lobby-memory.png';
@@ -939,6 +940,10 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
   return [
     `Create a KJK app question-bank CSV for the game "${selectedTarget.gameName}".`,
     `Generate exactly ${requestedQuestionCount} fresh data rows.`,
+    '',
+    'Mandatory question maker agent file. These rules are non-negotiable and override creativity whenever there is a conflict:',
+    questionMakerAgentRules.trim(),
+    '',
     'For quality control, prefer 50-row batches. If I ask for more than 50 rows, split them into separate 50-row CSV files unless I explicitly ask for one large file.',
     '',
     'Return the full CSV text every time.',
