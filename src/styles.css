@@ -6323,6 +6323,7 @@ button:disabled {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 10px 20px rgba(0, 0, 0, 0.16);
+  user-select: none;
 }
 
 .ranked-order-item[draggable="true"] {
@@ -6334,12 +6335,24 @@ button:disabled {
 }
 
 .ranked-order-item:hover,
-.ranked-order-item:focus-within {
+.ranked-order-item:focus-within,
+.ranked-order-item.is-drag-over {
   border-color: rgba(255, 255, 255, 0.42);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
     0 0 0 1px rgba(126, 168, 255, 0.2),
     0 12px 24px rgba(0, 0, 0, 0.2);
+}
+
+.ranked-order-item.is-dragging {
+  border-color: rgba(255, 255, 255, 0.72);
+  background:
+    linear-gradient(135deg, rgba(126, 168, 255, 0.3), rgba(255, 255, 255, 0.08)),
+    rgba(9, 18, 37, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 16px 30px rgba(0, 0, 0, 0.28),
+    0 0 0 1px rgba(126, 168, 255, 0.32);
 }
 
 .ranked-order-item.is-locked {
@@ -6364,6 +6377,13 @@ button:disabled {
   font-size: 1.1rem;
   font-weight: 950;
   line-height: 1;
+  cursor: grab;
+  touch-action: none;
+}
+
+.ranked-order-grip:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.72);
+  outline-offset: 3px;
 }
 
 .ranked-order-item strong {
@@ -6372,6 +6392,17 @@ button:disabled {
   font-size: 0.92rem;
   line-height: 1.16;
   overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.ranked-order-item strong.is-medium {
+  font-size: 0.86rem;
+}
+
+.ranked-order-item strong.is-long,
+.ranked-order-item strong.is-dense {
+  font-size: 0.78rem;
+  line-height: 1.12;
 }
 
 .ranked-order-actions {
@@ -6405,7 +6436,7 @@ button:disabled {
 
 .choice-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
 }
 
@@ -6414,7 +6445,10 @@ button:disabled {
 }
 
 .choice-button {
+  display: grid;
+  place-items: center;
   min-height: 46px;
+  min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 12px;
   padding: 10px 12px;
@@ -6424,13 +6458,28 @@ button:disabled {
   color: #fff;
   font-size: 0.8rem;
   font-weight: 900;
+  line-height: 1.12;
   text-transform: none;
   text-align: center;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
   transition:
     border-color 160ms ease,
     box-shadow 160ms ease,
     transform 160ms ease,
     background 160ms ease;
+}
+
+.choice-button.is-medium {
+  font-size: 0.74rem;
+}
+
+.choice-button.is-long,
+.choice-button.is-dense {
+  min-height: 54px;
+  padding: 8px 10px;
+  font-size: 0.68rem;
+  line-height: 1.08;
 }
 
 .choice-button:hover,
@@ -8811,6 +8860,7 @@ button:disabled {
 
 .room-reveal-player-head h3,
 .room-reveal-answer-block strong,
+.room-reveal-answer-text,
 .room-reveal-center-card strong {
   margin: 0;
   color: #fff;
@@ -8836,6 +8886,59 @@ button:disabled {
   font-size: clamp(0.95rem, 1.4vw, 1.3rem);
   line-height: 1.18;
   overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.room-reveal-answer-text {
+  display: block;
+  font-size: 0.98rem;
+  font-weight: 900;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.room-reveal-answer-text.is-medium {
+  font-size: 0.9rem;
+}
+
+.room-reveal-answer-text.is-long {
+  font-size: 0.82rem;
+  line-height: 1.14;
+}
+
+.room-reveal-answer-text.is-dense {
+  font-size: 0.74rem;
+  line-height: 1.1;
+}
+
+.room-reveal-answer-text--list {
+  text-wrap: wrap;
+}
+
+.room-reveal-answer-list {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 1.35em;
+}
+
+.room-reveal-answer-list li {
+  padding-left: 0.08em;
+  overflow-wrap: anywhere;
+}
+
+.room-reveal-answer-text--center {
+  max-width: 100%;
+  justify-self: center;
+  font-size: 1.05rem;
+  text-align: center;
+}
+
+.room-reveal-answer-text--inline {
+  display: inline-grid;
+  vertical-align: top;
+  margin-left: 4px;
 }
 
 .room-reveal-answer-copy {
@@ -8884,6 +8987,10 @@ button:disabled {
   gap: 8px;
 }
 
+.room-reveal-score-strip--answer-summary div:first-child {
+  grid-column: 1 / -1;
+}
+
 .room-reveal-score-strip div {
   display: grid;
   gap: 4px;
@@ -8898,6 +9005,26 @@ button:disabled {
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: clamp(1rem, 1.9vw, 1.5rem);
   line-height: 1;
+}
+
+.room-reveal-score-strip .room-reveal-answer-text {
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 900;
+  line-height: 1.16;
+  overflow-wrap: anywhere;
+  text-wrap: wrap;
+}
+
+.room-reveal-score-strip .room-reveal-answer-text.is-long,
+.room-reveal-score-strip .room-reveal-answer-text.is-dense {
+  font-size: 0.76rem;
+  line-height: 1.12;
+}
+
+.room-reveal-score-strip .room-reveal-answer-list {
+  gap: 2px;
 }
 
 .room-reveal-center-card {
@@ -9359,9 +9486,16 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.reveal-card p {
+.reveal-card p,
+.reveal-card-answer-line {
   margin: 0;
   color: rgba(255, 255, 255, 0.86);
+}
+
+.reveal-card-answer-line {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .reveal-card span {
@@ -14603,13 +14737,13 @@ select:focus-visible {
   }
 
   .mobile-board-panel .ranked-order-item {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
     gap: 8px;
     padding: 8px;
   }
 
   .mobile-board-panel .ranked-order-grip {
-    display: none;
+    font-size: 1rem;
   }
 
   .mobile-board-panel .ranked-order-item strong {

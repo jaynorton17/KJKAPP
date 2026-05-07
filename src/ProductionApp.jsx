@@ -4986,6 +4986,16 @@ const getQuestionDensityClass = (question = '') => {
   return 'is-short';
 };
 
+const getAnswerTextDensityClass = (value = '', itemCount = 0) => {
+  const normalizedValue = String(value || '').replace(/\s+/g, ' ').trim();
+  const answerLength = normalizedValue.length;
+  const wordCount = normalizedValue ? normalizedValue.split(' ').length : 0;
+  if (itemCount >= 5 || answerLength > 130 || wordCount > 22) return 'is-dense';
+  if (itemCount >= 4 || answerLength > 82 || wordCount > 14) return 'is-long';
+  if (answerLength > 42 || wordCount > 7) return 'is-medium';
+  return 'is-short';
+};
+
 const normalizeRevealAnswer = (value) =>
   normalizeText(value)
     .toLowerCase()
@@ -4996,6 +5006,40 @@ const normalizeRevealAnswer = (value) =>
 const formatRoundAnswerValue = (value, roundType = 'numeric') => {
   return formatAnswerForDisplay(roundType, value, { emptyFallback: '-' });
 };
+
+function SmartAnswerText({ value, roundType = 'text', fallback = '-', className = '' }) {
+  const normalizedType = normalizeQuestionType(roundType, 'text');
+  const hasValue = value !== null && typeof value !== 'undefined' && String(value).trim().length > 0;
+
+  if (usesListInputForQuestionType(normalizedType)) {
+    const listItems = parseAnswerList(value).map((item) => normalizeText(item)).filter(Boolean);
+    const densityClass = getAnswerTextDensityClass(listItems.join(' '), listItems.length);
+    if (listItems.length) {
+      return (
+        <div className={`room-reveal-answer-text room-reveal-answer-text--list ${densityClass} ${className}`.trim()}>
+          <ol className="room-reveal-answer-list">
+            {listItems.map((item, index) => (
+              <li key={`${item}-${index}`}>{item}</li>
+            ))}
+          </ol>
+        </div>
+      );
+    }
+    return (
+      <div className={`room-reveal-answer-text ${densityClass} ${className}`.trim()}>
+        {fallback}
+      </div>
+    );
+  }
+
+  const displayValue = hasValue ? formatRoundAnswerValue(value, normalizedType) : fallback;
+  const densityClass = getAnswerTextDensityClass(displayValue);
+  return (
+    <div className={`room-reveal-answer-text ${densityClass} ${className}`.trim()}>
+      {displayValue}
+    </div>
+  );
+}
 
 const getRevealComparison = ({ roundType = 'numeric', actualAnswer = '', guessedAnswer = '' }) => {
   const normalizedType = normalizeQuestionType(roundType, 'text');
@@ -12338,6 +12382,8 @@ function QuestionAnswerEntryBase({
   const ownAnswerRef = useRef(null);
   const guessedOtherRef = useRef(null);
   const rankedInputRefs = useRef({});
+  const orderingDragRef = useRef(null);
+  const [orderingDragState, setOrderingDragState] = useState({ fieldName: '', index: -1, overIndex: -1 });
   const draftTouchedRef = useRef(wasAnswerDraftTouched(draftStorageKey));
   const lastServerDraftRef = useRef({ key: draftStorageKey, ownAnswer: '', guessedOther: '', submitted: false });
   const hasSubmittedAnswer = localSubmittedAnswer || hasServerSubmittedAnswer;
@@ -12539,7 +12585,7 @@ function QuestionAnswerEntryBase({
             <button
               key={`${option}-${optionIndex}`}
               type="button"
-              className={`choice-button ${value === option ? 'is-on' : ''}`}
+              className={`choice-button ${getAnswerTextDensityClass(option)} ${value === option ? 'is-on' : ''}`}
               onClick={() => chooseFieldOption(fieldName, option, setter)}
               disabled={isLocked || !isRoundOpen}
             >
@@ -12568,24 +12614,81 @@ function QuestionAnswerEntryBase({
           nextItems.splice(boundedToIndex, 0, moved);
           commitOrder(nextItems);
         };
+        const clearOrderingDrag = () => {
+          orderingDragRef.current = null;
+          setOrderingDragState({ fieldName: '', index: -1, overIndex: -1 });
+        };
         const handleDrop = (event, toIndex) => {
           event.preventDefault();
           const fromIndex = Number.parseInt(event.dataTransfer.getData('text/plain'), 10);
           if (!Number.isFinite(fromIndex)) return;
           moveOption(fromIndex, toIndex);
+          clearOrderingDrag();
+        };
+        const handlePointerDragStart = (event, fromIndex) => {
+          if (isLocked || !isRoundOpen) return;
+          const listEl = event.currentTarget.closest('.ranked-order-list');
+          if (!listEl) return;
+          event.preventDefault();
+          try {
+            event.currentTarget.setPointerCapture(event.pointerId);
+          } catch {
+            // Pointer capture is a progressive enhancement here.
+          }
+          orderingDragRef.current = {
+            fieldName,
+            index: fromIndex,
+            pointerId: event.pointerId,
+            listEl,
+          };
+          setOrderingDragState({ fieldName, index: fromIndex, overIndex: fromIndex });
+        };
+        const handlePointerDragMove = (event) => {
+          const drag = orderingDragRef.current;
+          if (!drag || drag.fieldName !== fieldName || drag.pointerId !== event.pointerId || !drag.listEl) return;
+          event.preventDefault();
+          const itemEls = [...drag.listEl.querySelectorAll('[data-order-index]')];
+          const nextIndex = itemEls.findIndex((itemEl) => {
+            const rect = itemEl.getBoundingClientRect();
+            return event.clientY < rect.top + (rect.height / 2);
+          });
+          const boundedIndex = nextIndex === -1 ? itemEls.length - 1 : Math.max(0, Math.min(itemEls.length - 1, nextIndex));
+          if (!Number.isFinite(boundedIndex) || boundedIndex === drag.index) return;
+          moveOption(drag.index, boundedIndex);
+          orderingDragRef.current = { ...drag, index: boundedIndex };
+          setOrderingDragState({ fieldName, index: boundedIndex, overIndex: boundedIndex });
+        };
+        const handlePointerDragEnd = (event) => {
+          const drag = orderingDragRef.current;
+          if (drag?.pointerId === event.pointerId) clearOrderingDrag();
         };
 
         return (
           <div className={`ranked-order-list ${embedded ? 'ranked-order-list--embedded' : ''}`} role="list" aria-label={`${placeholder} order`}>
             {nextOrderedValues.map((option, index) => (
               <div
-                className={`ranked-order-item ${isLocked || !isRoundOpen ? 'is-locked' : ''}`}
-                key={`${fieldName}-order-${normalizeIdentity(option)}-${index}`}
+                className={`ranked-order-item ${isLocked || !isRoundOpen ? 'is-locked' : ''} ${
+                  orderingDragState.fieldName === fieldName && orderingDragState.index === index ? 'is-dragging' : ''
+                } ${
+                  orderingDragState.fieldName === fieldName && orderingDragState.overIndex === index ? 'is-drag-over' : ''
+                }`}
+                key={`${fieldName}-order-${normalizeIdentity(option)}`}
                 role="listitem"
+                data-order-index={index}
                 draggable={!isLocked && isRoundOpen}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = 'move';
                   event.dataTransfer.setData('text/plain', String(index));
+                  setOrderingDragState({ fieldName, index, overIndex: index });
+                }}
+                onDragEnter={(event) => {
+                  if (isLocked || !isRoundOpen) return;
+                  event.preventDefault();
+                  setOrderingDragState((current) => (
+                    current.fieldName === fieldName
+                      ? { ...current, overIndex: index }
+                      : current
+                  ));
                 }}
                 onDragOver={(event) => {
                   if (isLocked || !isRoundOpen) return;
@@ -12593,10 +12696,32 @@ function QuestionAnswerEntryBase({
                   event.dataTransfer.dropEffect = 'move';
                 }}
                 onDrop={(event) => handleDrop(event, index)}
+                onDragEnd={clearOrderingDrag}
               >
                 <span className="ranked-order-position">{index + 1}</span>
-                <span className="ranked-order-grip" aria-hidden="true">≡</span>
-                <strong>{option}</strong>
+                <span
+                  className="ranked-order-grip"
+                  role="button"
+                  tabIndex={isLocked || !isRoundOpen ? -1 : 0}
+                  aria-label={`Drag ${option} to reorder`}
+                  onPointerDown={(event) => handlePointerDragStart(event, index)}
+                  onPointerMove={handlePointerDragMove}
+                  onPointerUp={handlePointerDragEnd}
+                  onPointerCancel={handlePointerDragEnd}
+                  onKeyDown={(event) => {
+                    if (event.key === 'ArrowUp') {
+                      event.preventDefault();
+                      moveOption(index, index - 1);
+                    }
+                    if (event.key === 'ArrowDown') {
+                      event.preventDefault();
+                      moveOption(index, index + 1);
+                    }
+                  }}
+                >
+                  ≡
+                </span>
+                <strong className={getAnswerTextDensityClass(option)}>{option}</strong>
                 <span className="ranked-order-actions">
                   <button
                     type="button"
@@ -13709,10 +13834,13 @@ function RoomRevealPlayerCard({
     return () => window.clearTimeout(timer);
   }, [isQuizGame, quizRevealAnimationKey]);
 
+  const renderAnswerText = (value, fallback = 'No answer', roundType = currentRound?.roundType) => (
+    <SmartAnswerText value={value} roundType={roundType} fallback={fallback} />
+  );
+
   if (isQuizGame) {
     const answer = currentRound?.answers?.[playerSeat] || {};
     const playerAnswerRaw = answer?.ownAnswer || '';
-    const playerAnswer = formatRoundAnswerValue(playerAnswerRaw, currentRound?.roundType);
     const finalResult = getQuizAnswerFinalResult(answer, { includeSystemFallback: false });
     const wasCorrect = finalResult === 'correct';
     const hasHostResult = Boolean(finalResult);
@@ -13742,7 +13870,7 @@ function RoomRevealPlayerCard({
           <div className="room-reveal-answer-block">
             <span>Submitted answer</span>
             <div className="room-reveal-answer-copy">
-              <strong>{playerAnswerRaw ? playerAnswer : 'No answer'}</strong>
+              {renderAnswerText(playerAnswerRaw, 'No answer')}
             </div>
           </div>
           <div className="room-reveal-answer-block room-reveal-answer-block--guess">
@@ -13804,14 +13932,14 @@ function RoomRevealPlayerCard({
           <div className="room-reveal-answer-block">
             <span>{`${playerLabel}'s guess`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{viewerGuess || 'No answer submitted'}</strong>
+              {renderAnswerText(viewerGuess, 'No answer submitted')}
             </div>
           </div>
 
           <div className="room-reveal-answer-block room-reveal-answer-block--guess">
             <span>{`${oppositeLabel}'s real answer`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{targetAnswer || 'No answer submitted'}</strong>
+              {renderAnswerText(targetAnswer, 'No answer submitted')}
             </div>
             <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
               {matchLabel}
@@ -13819,10 +13947,10 @@ function RoomRevealPlayerCard({
           </div>
         </div>
 
-        <div className="room-reveal-score-strip">
+        <div className="room-reveal-score-strip room-reveal-score-strip--answer-summary">
           <div>
             <span>{`${playerLabel}'s real answer`}</span>
-            <strong>{actualAnswer || 'No answer'}</strong>
+            {renderAnswerText(actualAnswer, 'No answer')}
           </div>
           <div>
             <span>Round penalty</span>
@@ -13872,14 +14000,14 @@ function RoomRevealPlayerCard({
           <div className="room-reveal-answer-block">
             <span>{`${playerLabel}'s guess`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{viewerGuess || 'No answer submitted'}</strong>
+              {renderAnswerText(viewerGuess, 'No answer submitted')}
             </div>
           </div>
 
           <div className="room-reveal-answer-block room-reveal-answer-block--guess">
             <span>{`${oppositeLabel}'s real pick`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{targetAnswer || 'No answer submitted'}</strong>
+              {renderAnswerText(targetAnswer, 'No answer submitted')}
             </div>
             <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
               {matchLabel}
@@ -13887,10 +14015,10 @@ function RoomRevealPlayerCard({
           </div>
         </div>
 
-        <div className="room-reveal-score-strip">
+        <div className="room-reveal-score-strip room-reveal-score-strip--answer-summary">
           <div>
             <span>{`${playerLabel}'s real pick`}</span>
-            <strong>{actualAnswer || 'No answer'}</strong>
+            {renderAnswerText(actualAnswer, 'No answer')}
           </div>
           <div>
             <span>Round penalty</span>
@@ -13934,14 +14062,14 @@ function RoomRevealPlayerCard({
           <div className="room-reveal-answer-block">
             <span>{`${playerLabel}'s vote`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{playerVote || 'No vote submitted'}</strong>
+              {renderAnswerText(playerVote, 'No vote submitted')}
             </div>
           </div>
 
           <div className="room-reveal-answer-block room-reveal-answer-block--guess">
             <span>{`${oppositeLabel}'s vote`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{otherVote || 'No vote submitted'}</strong>
+              {renderAnswerText(otherVote, 'No vote submitted')}
             </div>
             <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
               {matchLabel}
@@ -13989,14 +14117,14 @@ function RoomRevealPlayerCard({
           <div className="room-reveal-answer-block">
             <span>{`${playerLabel}'s guess for ${oppositeLabel}`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{formatRoundAnswerValue(playerGuessRaw, currentRound?.roundType)}</strong>
+              {renderAnswerText(playerGuessRaw)}
             </div>
           </div>
 
           <div className="room-reveal-answer-block room-reveal-answer-block--guess">
             <span>{`${oppositeLabel}'s real answer`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{formatRoundAnswerValue(targetAnswerRaw, currentRound?.roundType)}</strong>
+              {renderAnswerText(targetAnswerRaw)}
             </div>
             <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
               {matchLabel}
@@ -14004,10 +14132,10 @@ function RoomRevealPlayerCard({
           </div>
         </div>
 
-        <div className="room-reveal-score-strip">
+        <div className="room-reveal-score-strip room-reveal-score-strip--answer-summary">
           <div>
             <span>{`${playerLabel}'s answer`}</span>
-            <strong>{formatRoundAnswerValue(playerAnswerRaw, currentRound?.roundType)}</strong>
+            {renderAnswerText(playerAnswerRaw)}
           </div>
           <div>
             <span>Round penalty</span>
@@ -14057,14 +14185,14 @@ function RoomRevealPlayerCard({
           <div className="room-reveal-answer-block">
             <span>{`${playerLabel}'s guess`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{viewerGuess || 'No guess submitted'}</strong>
+              {renderAnswerText(viewerGuess, 'No guess submitted')}
             </div>
           </div>
 
           <div className="room-reveal-answer-block room-reveal-answer-block--guess">
             <span>{`${oppositeLabel}'s flag`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{targetAnswer || 'No flag submitted'}</strong>
+              {renderAnswerText(targetAnswer, 'No flag submitted')}
             </div>
             <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
               {matchLabel}
@@ -14072,10 +14200,10 @@ function RoomRevealPlayerCard({
           </div>
         </div>
 
-        <div className="room-reveal-score-strip">
+        <div className="room-reveal-score-strip room-reveal-score-strip--answer-summary">
           <div>
             <span>{`${playerLabel}'s flag`}</span>
-            <strong>{actualAnswer || 'No flag'}</strong>
+            {renderAnswerText(actualAnswer, 'No flag')}
           </div>
           <div>
             <span>Round penalty</span>
@@ -14160,14 +14288,14 @@ function RoomRevealPlayerCard({
           <div className="room-reveal-answer-block">
             <span>{`${playerLabel}'s answer`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{formatRoundAnswerValue(playerAnswerRaw, currentRound?.roundType)}</strong>
+              {renderAnswerText(playerAnswerRaw, 'No answer', revealRound?.roundType || currentRound?.roundType)}
             </div>
           </div>
 
           <div className="room-reveal-answer-block room-reveal-answer-block--guess">
             <span>{`${oppositeLabel}'s answer`}</span>
             <div className="room-reveal-answer-copy">
-              <strong>{formatRoundAnswerValue(otherAnswerRaw, currentRound?.roundType)}</strong>
+              {renderAnswerText(otherAnswerRaw, 'No answer', revealRound?.roundType || currentRound?.roundType)}
             </div>
             <small className={`room-reveal-match room-reveal-match--${perQuestionScore >= 85 ? 'success' : perQuestionScore >= 70 ? 'neutral' : 'warning'}`}>
               {`${perQuestionScore}% on this question`}
@@ -14190,8 +14318,6 @@ function RoomRevealPlayerCard({
   }
   const actualAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
   const guessedAnswerRaw = currentRound?.answers?.[oppositeSeat]?.guessedOther || '';
-  const actualAnswer = formatRoundAnswerValue(actualAnswerRaw, currentRound?.roundType);
-  const guessedAnswer = formatRoundAnswerValue(guessedAnswerRaw, currentRound?.roundType);
   const comparison = getRevealComparison({
     roundType: currentRound?.roundType,
     actualAnswer: actualAnswerRaw,
@@ -14212,14 +14338,14 @@ function RoomRevealPlayerCard({
         <div className="room-reveal-answer-block">
           <span>Actual answer</span>
           <div className="room-reveal-answer-copy">
-            <strong>{actualAnswer}</strong>
+            {renderAnswerText(actualAnswerRaw)}
           </div>
         </div>
 
         <div className="room-reveal-answer-block room-reveal-answer-block--guess">
           <span>{oppositeLabel} guessed</span>
           <div className="room-reveal-answer-copy">
-            <strong>{guessedAnswer}</strong>
+            {renderAnswerText(guessedAnswerRaw)}
           </div>
           <small className={`room-reveal-match room-reveal-match--${comparison.tone}`}>{comparison.label}</small>
         </div>
@@ -14712,7 +14838,12 @@ function RoomActiveFrameBase({
                 {isQuizGame ? (
                   <>
                     <span>Correct Answer</span>
-                    <strong>{formatRoundAnswerValue(currentRound?.correctAnswer || currentRound?.normalizedCorrectAnswer || 'No answer provided', currentRound?.roundType)}</strong>
+                    <SmartAnswerText
+                      value={currentRound?.correctAnswer || currentRound?.normalizedCorrectAnswer || ''}
+                      roundType={currentRound?.roundType}
+                      fallback="No answer provided"
+                      className="room-reveal-answer-text--center"
+                    />
                     <p>
                       {viewerLabel} {getQuizAnswerFinalResult(currentRound?.answers?.[currentPlayer] || {}, { includeSystemFallback: false }) || 'pending'}
                       {' · '}
@@ -15054,12 +15185,14 @@ function RevealCards({ currentRound }) {
           <strong>{seat === 'jay' ? 'Jay' : 'Kim'}</strong>
           <span>{answer.displayName || '-'}</span>
         </div>
-        <p>
-          <span>My answer:</span> {formatRoundAnswerValue(answer.ownAnswer, currentRound?.roundType)}
-        </p>
-        <p>
-          <span>I guessed:</span> {formatRoundAnswerValue(answer.guessedOther, currentRound?.roundType)}
-        </p>
+        <div className="reveal-card-answer-line">
+          <span>My answer:</span>
+          <SmartAnswerText value={answer.ownAnswer} roundType={currentRound?.roundType} fallback="-" className="room-reveal-answer-text--inline" />
+        </div>
+        <div className="reveal-card-answer-line">
+          <span>I guessed:</span>
+          <SmartAnswerText value={answer.guessedOther} roundType={currentRound?.roundType} fallback="-" className="room-reveal-answer-text--inline" />
+        </div>
       </article>
     );
   });
