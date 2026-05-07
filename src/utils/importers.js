@@ -788,17 +788,21 @@ export const parseGoogleSheetQuizImport = ({
   let skipped = 0;
 
   const preview = rows.map((rawRow, index) => {
-    const row = Object.fromEntries(Object.entries(rawRow).map(([key, value]) => [normalizeHeader(key), value]));
+    const normalizedRow = Object.fromEntries(Object.entries(rawRow).map(([key, value]) => [normalizeHeader(key), value]));
+    const mappedRow = enrichMappedRow(rawRow);
+    const row = { ...normalizedRow, ...mappedRow };
     const questionText = normalizeText(row.question || '');
     const category = normalizeText(row.category || '') || 'Uncategorised';
-    const roundType = normalizeQuizQuestionType(row.type);
-    const correctAnswer = normalizeText(row.correctanswer || row.answer || '');
-    const options = [
+    const roundType = normalizeQuizQuestionType(row.type || row.roundType);
+    const correctAnswer = normalizeText(row.correctanswer || row.answer || row.correctAnswer || '');
+    const templateOptions = parseImportedOptionList(row.multipleChoiceOptions);
+    const legacyOptions = [
       normalizeText(row.multi1 || ''),
       normalizeText(row.multi2 || ''),
       normalizeText(row.multi3 || ''),
       normalizeText(row.multi4 || ''),
     ].filter(Boolean);
+    const options = templateOptions.length ? templateOptions : legacyOptions;
 
     const errors = [];
     if (!questionText) errors.push('Missing question text');
@@ -812,7 +816,11 @@ export const parseGoogleSheetQuizImport = ({
       roundType,
       answerType: roundType === 'text' ? 'text' : 'multipleChoice',
       defaultAnswerType: roundType === 'text' ? 'text' : 'multipleChoice',
-      multipleChoiceOptions: roundType === 'multipleChoice' || roundType === 'trueFalse' ? options : [],
+      multipleChoiceOptions: roundType === 'trueFalse'
+        ? DEFAULT_TRUE_FALSE_OPTIONS
+        : roundType === 'multipleChoice'
+          ? options
+          : [],
       source: 'googleSheetQuiz',
       sourceLabel,
       importedFromGoogleSheet: true,

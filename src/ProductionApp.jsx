@@ -319,6 +319,428 @@ const makeQuestionBankUploadTemplateFilename = (target = QUESTION_BANK_SYNC_TARG
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'question-bank'}-upload-template.csv`;
+const QUESTION_BANK_GENERATION_PROFILES = {
+  game: {
+    howItWorks: 'Both players answer the same prompt with their own answer and a guess for the other player. The app compares the pair and adds penalty points when answers miss.',
+    questionTypes: ['Favourite', 'Fill in the Blank', 'Multiple Choice', 'Numeric', 'Open Answer', 'Pet Peeve', 'Preference', 'Ranked / Top 3', 'Ranking', 'Rating', 'Text Answer', 'True or False', 'Who is more likely to', 'Would you rather', 'Sort Into Order'],
+    categories: ['Affection', 'Communication', 'Everyday Life', 'Memories', 'Future', 'Money', 'Habits', 'Family & Friends', 'Playful', 'Spicy'],
+    rules: [
+      'Use a wide mix of answer styles so the normal game does not feel repetitive.',
+      'For Multiple Choice, Preference, and Sort Into Order rows, fill Options with specific choices separated by pipes.',
+      'For free text, favourite, pet peeve, numeric, rating, and ranked rows, leave Options blank unless the wording needs fixed choices.',
+    ],
+    examples: [
+      'Favourite | Affection | What is the tiny everyday thing the other person does that makes you feel most wanted? |',
+      'Preference | Date Night | Quiet sofa night or dressed-up drinks out? | Quiet sofa night | Dressed-up drinks out',
+      'Rating | Communication | Rate from 1 to 10 how easy you think you are to read when something is bothering you. |',
+      'Sort Into Order | Priorities | Put these in order from most to least important after an argument: space, apology, cuddle, explanation | Space | Apology | Cuddle | Explanation',
+    ],
+  },
+  quiz: {
+    howItWorks: 'Quick Fire Quiz asks fast factual or personal-trivia questions. Players answer within the timer, then the host marks correct or incorrect. Points depend on the timer value.',
+    questionTypes: ['Multiple Choice', 'True or False', 'Text Answer'],
+    categories: ['Personal Trivia', 'Relationship History', 'Dates & Places', 'Preferences', 'Memories', 'Funny Facts', 'Cheeky Facts', 'Household'],
+    rules: [
+      'Correct Answer is mandatory for every row.',
+      'For Multiple Choice rows, Options must include the correct answer plus believable distractors.',
+      'For True or False rows, put Correct Answer as True or False and leave Options blank.',
+      'Keep questions short enough to answer quickly.',
+    ],
+    examples: [
+      'Multiple Choice | Relationship History | Where did Jay and Kim first go for a proper date? | The correct place | A believable place | Another believable place | A funny wrong place',
+      'True or False | Preferences | Kim would pick a cosy night in over a crowded bar most of the time. |',
+      'Text Answer | Personal Trivia | What drink does Kim most often reach for to unwind? |',
+    ],
+  },
+  [THIS_OR_THAT_GAME_MODE]: {
+    howItWorks: 'Each player chooses their own side and guesses the other player side. Wrong guesses add automatic penalty points.',
+    questionTypes: ['Preference'],
+    categories: ['Date Night', 'Comfort', 'Flirting', 'Food & Drink', 'Travel', 'Home Life', 'Conflict Style', 'Spicy', 'Future'],
+    rules: [
+      'Every row should be a genuine two-choice preference.',
+      'Options must contain exactly two choices separated by a pipe.',
+      'Phrase the question so both players can answer personally, not as trivia.',
+    ],
+    examples: [
+      'Preference | Date Night | Last-minute hotel night or planned romantic weekend? | Last-minute hotel night | Planned romantic weekend',
+      'Preference | Comfort | Big reassuring cuddle or quiet space to reset? | Big reassuring cuddle | Quiet space',
+      'Preference | Spicy | Teasing messages all day or one bold surprise later? | Teasing messages | Bold surprise',
+    ],
+  },
+  [MOST_LIKELY_GAME_MODE]: {
+    howItWorks: 'Both players vote Jay, Kim, Both, or Neither for each prompt. Matching votes stay clear, split votes add +10 to both, and missing votes add +20.',
+    questionTypes: ['Multiple Choice'],
+    categories: ['Funny', 'Household', 'Romance', 'Chaos', 'Social Life', 'Money', 'Jealousy', 'Confidence', 'Spicy', 'Future'],
+    rules: [
+      'Questions should start with or clearly imply "Who is most likely to".',
+      'Leave Options blank because the app supplies Jay, Kim, Both, and Neither.',
+      'Avoid prompts where only one player could ever reasonably be chosen.',
+    ],
+    examples: [
+      'Multiple Choice | Funny | Who is most likely to turn a quick errand into a full side quest? |',
+      'Multiple Choice | Romance | Who is most likely to remember the tiny detail that secretly mattered? |',
+      'Multiple Choice | Spicy | Who is most likely to start something cheeky and then act innocent? |',
+    ],
+  },
+  [PUT_YOUR_POINTS_GAME_MODE]: {
+    howItWorks: 'A random stake from 1 to 200 is chosen. Each player gives their own answer and guesses the other player answer. The host marks match or miss; a miss adds that round stake as penalty points.',
+    questionTypes: ['Favourite', 'Fill in the Blank', 'Multiple Choice', 'Numeric', 'Open Answer', 'Pet Peeve', 'Preference', 'Ranked / Top 3', 'Ranking', 'Rating', 'Text Answer', 'True or False', 'Who is more likely to', 'Would you rather', 'Sort Into Order'],
+    categories: ['Affection', 'Attraction', 'Secrets', 'Habits', 'Memory', 'Conflict', 'Future', 'Money', 'Playful', 'Spicy', 'Embarrassing', 'Comfort'],
+    rules: [
+      'Do not reuse Jay, Kim, Both, Neither as generic options unless the question is genuinely "who is more likely".',
+      'For Multiple Choice, create question-specific options that make sense for that exact prompt.',
+      'For Sort Into Order, put every sortable item in Options so the app can create one slot per item.',
+      'For Ranked / Top 3, ask for exactly three answers unless Options specify a fixed list.',
+      'Use playful adult energy where suitable, but keep everything consensual and couple-safe.',
+    ],
+    examples: [
+      'Multiple Choice | Playful | Which compliment would secretly land hardest after a long day? | You look gorgeous | I noticed how hard you tried | I feel lucky with you | Come here now',
+      'Sort Into Order | Attraction | Put these in order from most to least dangerous as private signals: look, phrase, touch, emoji | Look | Phrase | Touch | Emoji',
+      'Ranked / Top 3 | Memory | Name your top three childhood memories that still shape you now. |',
+      'Numeric | Secrets | How many minutes could the other person stay annoyed before wanting a cuddle? |',
+    ],
+  },
+  [TRUE_FALSE_GAME_MODE]: {
+    howItWorks: 'Players answer True or False to relationship statements. There is no question timer. Wrong or missing answers add penalty points.',
+    questionTypes: ['True or False'],
+    categories: ['Trust', 'Communication', 'Jealousy', 'Habits', 'Romance', 'Conflict', 'Confidence', 'Future', 'Spicy', 'Playful'],
+    rules: [
+      'Write clean standalone statements, not questions.',
+      'Do not append numeric codes or IDs to the statement.',
+      'Leave Options and Correct Answer blank; the app supplies True and False.',
+    ],
+    examples: [
+      'True or False | Trust | Jay is more likely to overthink a quiet reply than admit it straight away. |',
+      'True or False | Romance | Kim notices small changes in effort faster than Jay thinks she does. |',
+      'True or False | Playful | One of you would secretly enjoy a little bit of harmless jealousy. |',
+    ],
+  },
+  [RED_FLAG_GREEN_FLAG_GAME_MODE]: {
+    howItWorks: 'Players judge each scenario as Green Flag, Red Flag, or Depends, while also guessing what the other player will pick. Wrong guesses add automatic penalty points.',
+    questionTypes: ['Multiple Choice'],
+    categories: ['Dating', 'Communication', 'Jealousy', 'Money', 'Friends', 'Family', 'Social Media', 'Boundaries', 'Spicy', 'Commitment'],
+    rules: [
+      'Every question should describe one behaviour or situation to judge.',
+      'Leave Options blank because the app supplies Green Flag, Red Flag, and Depends.',
+      'Make the scenario debatable rather than obviously good or bad.',
+    ],
+    examples: [
+      'Multiple Choice | Communication | They go quiet after an argument but come back later with a proper apology. |',
+      'Multiple Choice | Social Media | They still like an ex photo but tell you before you notice. |',
+      'Multiple Choice | Spicy | They make a bold private suggestion but check your mood first. |',
+    ],
+  },
+  [COMPATIBILITY_METER_GAME_MODE]: {
+    howItWorks: 'Both players answer a run of questions privately. Answers are hidden until the end, then each question reveals a compatibility percentage and the final score gives one shared penalty band.',
+    questionTypes: ['Text Answer', 'Preference', 'Multiple Choice', 'Numeric', 'Rating', 'True or False'],
+    categories: ['Values', 'Lifestyle', 'Future', 'Money', 'Conflict', 'Intimacy', 'Home Life', 'Social Life', 'Family', 'Ambition'],
+    rules: [
+      'Use questions where two answers can be compared for compatibility.',
+      'For Multiple Choice and Preference rows, provide clear options separated by pipes.',
+      'For Rating rows, make the 1 to 10 scale obvious in the wording.',
+      'Avoid questions that require the host to know a single factual correct answer.',
+    ],
+    examples: [
+      'Preference | Lifestyle | Ideal reset weekend: total quiet, social plans, small adventure, or getting life admin done? | Total quiet | Social plans | Small adventure | Life admin',
+      'Rating | Intimacy | From 1 to 10, how much reassurance do you like when you feel a bit insecure? |',
+      'Multiple Choice | Future | Which future goal feels most important over the next year? | More stability | More adventure | Better routines | More quality time',
+      'Text Answer | Values | What does loyalty look like in a normal everyday week? |',
+    ],
+  },
+  [MEMORY_LANE_GAME_MODE]: {
+    howItWorks: 'Memory Lane mixes fresh memory prompts with recall rounds from past app answers. Fresh prompts use answer-and-guess. Past-answer recall rounds ask a player to identify a previous answer from options.',
+    questionTypes: ['Text Answer', 'Favourite', 'Multiple Choice', 'Ranked / Top 3', 'Rating', 'Preference'],
+    categories: ['Earliest Memories', 'Us', 'Childhood', 'Achievements', 'Embarrassments', 'Firsts', 'Family', 'School', 'Holidays', 'Past Answers'],
+    rules: [
+      'For new memory prompts, set Memory Lane Mode to memoryPrompt.',
+      'Only use Memory Lane Mode pastAnswerRecall when you are deliberately creating a recall-style multiple-choice row with one real answer and distractors.',
+      'For recall rows, fill Correct Answer and include it inside Options with two believable wrong options.',
+      'Most rows should be memoryPrompt, because the app can generate past-answer recall rounds from history itself.',
+    ],
+    examples: [
+      'Text Answer | Earliest Memories | What is your earliest memory of feeling really proud of yourself? |',
+      'Ranked / Top 3 | Childhood | Name three childhood places that still feel weirdly important to you. |',
+      'Multiple Choice | Past Answers | What did Kim say was her favourite way to relax after a long day? | Wine and a book | A gym session | Cleaning the kitchen',
+      'Preference | Us | Which memory would you most want to relive for one hour? | First proper date | Best holiday moment | A random ordinary night | A big celebration',
+    ],
+  },
+};
+const QUESTION_BANK_TYPE_EXAMPLES = [
+  {
+    type: 'Favourite',
+    category: 'Affection',
+    question: 'What is your favourite tiny thing the other person does without realising it matters?',
+    options: '',
+    correctAnswer: '',
+    defaultAnswerType: 'text',
+    answerType: 'text',
+    notes: 'Free-text favourite answer.',
+  },
+  {
+    type: 'Fill in the Blank',
+    category: 'Flirting',
+    question: 'Finish this honestly: I feel most wanted when you ______.',
+    options: '',
+    correctAnswer: '',
+    defaultAnswerType: 'text',
+    answerType: 'text',
+    notes: 'Leave Options blank.',
+  },
+  {
+    type: 'Multiple Choice',
+    category: 'Playful',
+    question: 'Which compliment would secretly land hardest after a long day?',
+    options: 'You look gorgeous | I noticed how hard you tried | I feel lucky with you | Come here now',
+    correctAnswer: '',
+    defaultAnswerType: 'multipleChoice',
+    answerType: 'multipleChoice',
+    notes: 'Use question-specific options, not generic player names unless the prompt is about players.',
+  },
+  {
+    type: 'Numeric',
+    category: 'Habits',
+    question: 'How many minutes could the other person stay annoyed before wanting a cuddle?',
+    options: '',
+    correctAnswer: '',
+    defaultAnswerType: 'number',
+    answerType: 'number',
+    notes: 'Use Unit Label if needed, such as minutes, pounds, days, or percent.',
+  },
+  {
+    type: 'Open Answer',
+    category: 'Secrets',
+    question: 'What is one thought you have had about us that you have never quite said out loud?',
+    options: '',
+    correctAnswer: '',
+    defaultAnswerType: 'text',
+    answerType: 'text',
+    notes: 'Long-form free text.',
+  },
+  {
+    type: 'Pet Peeve',
+    category: 'Everyday Life',
+    question: 'What tiny habit would test your patience fastest if it happened every day?',
+    options: '',
+    correctAnswer: '',
+    defaultAnswerType: 'text',
+    answerType: 'text',
+    notes: 'Free-text annoyance or turn-off prompt.',
+  },
+  {
+    type: 'Preference',
+    category: 'Date Night',
+    question: 'Quiet sofa night or dressed-up drinks out?',
+    options: 'Quiet sofa night | Dressed-up drinks out',
+    correctAnswer: '',
+    defaultAnswerType: 'multipleChoice',
+    answerType: 'multipleChoice',
+    notes: 'Usually two to four options.',
+  },
+  {
+    type: 'Ranked / Top 3',
+    category: 'Memory',
+    question: 'Name your top three childhood memories that still shape you now.',
+    options: '',
+    correctAnswer: '',
+    defaultAnswerType: 'ranked',
+    answerType: 'ranked',
+    notes: 'Use for three free-text ranked/list answers.',
+  },
+  {
+    type: 'Ranking',
+    category: 'Priorities',
+    question: 'Rank these from most to least important after an argument: space, apology, cuddle, explanation',
+    options: 'Space | Apology | Cuddle | Explanation',
+    correctAnswer: '',
+    defaultAnswerType: 'ranked',
+    answerType: 'ranked',
+    notes: 'Use fixed options when every item must be ordered.',
+  },
+  {
+    type: 'Rating',
+    category: 'Communication',
+    question: 'From 1 to 10, how easy do you think you are to read when something is bothering you?',
+    options: '',
+    correctAnswer: '',
+    defaultAnswerType: 'number',
+    answerType: 'number',
+    notes: 'Make the 1 to 10 scale obvious in the wording.',
+  },
+  {
+    type: 'Text Answer',
+    category: 'Comfort',
+    question: 'What is the quickest way the other person can make you feel settled again?',
+    options: '',
+    correctAnswer: '',
+    defaultAnswerType: 'text',
+    answerType: 'text',
+    notes: 'Short free-text answer.',
+  },
+  {
+    type: 'True or False',
+    category: 'Trust',
+    question: 'Jay is more likely to overthink a quiet reply than admit it straight away.',
+    options: '',
+    correctAnswer: 'True',
+    defaultAnswerType: 'multipleChoice',
+    answerType: 'multipleChoice',
+    notes: 'For Quick Fire Quiz include Correct Answer. For True or False game leave Correct Answer blank.',
+  },
+  {
+    type: 'Who is more likely to',
+    category: 'Funny',
+    question: 'Who is more likely to start something cheeky and then act completely innocent?',
+    options: '',
+    correctAnswer: '',
+    defaultAnswerType: 'multipleChoice',
+    answerType: 'multipleChoice',
+    notes: 'Leave Options blank when the app should supply Jay, Kim, Both, Neither.',
+  },
+  {
+    type: 'Would you rather',
+    category: 'Spicy',
+    question: 'Would you rather have teasing messages all day or one bold surprise later?',
+    options: 'Teasing messages all day | One bold surprise later',
+    correctAnswer: '',
+    defaultAnswerType: 'multipleChoice',
+    answerType: 'multipleChoice',
+    notes: 'This imports as a preference-style choice.',
+  },
+  {
+    type: 'Sort Into Order',
+    category: 'Attraction',
+    question: 'Put these in order from most to least dangerous as private signals: look, phrase, touch, emoji',
+    options: 'Look | Phrase | Touch | Emoji',
+    correctAnswer: '',
+    defaultAnswerType: 'ranked',
+    answerType: 'ranked',
+    notes: 'Every sortable item must appear in Options so the app creates the right number of slots.',
+  },
+];
+const normalizePromptQuestionTypeKey = (value = '') =>
+  String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+const buildQuestionBankExampleLine = (example = {}) =>
+  [
+    example.type,
+    example.category,
+    example.question,
+    example.options,
+    example.correctAnswer,
+    example.defaultAnswerType,
+    example.answerType,
+    example.notes,
+  ].map((value) => String(value || '')).join(' | ');
+const buildQuestionBankTypeExampleLines = (questionTypes = []) => {
+  const examplesByType = new Map(
+    QUESTION_BANK_TYPE_EXAMPLES.map((example) => [normalizePromptQuestionTypeKey(example.type), example]),
+  );
+  return questionTypes
+    .map((type) => examplesByType.get(normalizePromptQuestionTypeKey(type)) || {
+      type,
+      category: 'Custom',
+      question: `Write a strong ${type} prompt for Jay and Kim.`,
+      options: '',
+      correctAnswer: '',
+      defaultAnswerType: 'text',
+      answerType: 'text',
+      notes: 'Use the game-specific rules above.',
+    })
+    .map((example, index) => `${index + 1}. ${buildQuestionBankExampleLine(example)}`)
+    .join('\n');
+};
+const buildAllQuestionBankTypeReferenceLines = () =>
+  QUESTION_BANK_TYPE_EXAMPLES
+    .map((example, index) => `${index + 1}. ${buildQuestionBankExampleLine(example)}`)
+    .join('\n');
+const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0]) => {
+  const selectedTarget = getQuestionBankSyncTarget(target?.bankType || 'game');
+  const normalizedBankType = normalizeQuestionBankType(selectedTarget.bankType);
+  const profile = QUESTION_BANK_GENERATION_PROFILES[normalizedBankType] || QUESTION_BANK_GENERATION_PROFILES.game;
+  const header = QUESTION_BANK_UPLOAD_COLUMNS.map(escapeCsvCell).join(',');
+  const exampleLines = profile.examples.map((example, index) => `${index + 1}. ${example}`).join('\n');
+  const typeExampleLines = buildQuestionBankTypeExampleLines(profile.questionTypes);
+  const allTypeReferenceLines = buildAllQuestionBankTypeReferenceLines();
+  const defaultQuestionCount = normalizedBankType === 'quiz' || normalizedBankType === TRUE_FALSE_GAME_MODE ? 250 : 150;
+
+  return [
+    `Create a KJK app question-bank CSV for the game "${selectedTarget.gameName}".`,
+    `Generate ${defaultQuestionCount} fresh rows unless I give you a different number.`,
+    '',
+    'Return CSV only: no markdown fence, no commentary, no leading blank line, no trailing explanation.',
+    'The first row must be exactly this header:',
+    header,
+    '',
+    'Fixed values to use on every row:',
+    `- Sheet: ${selectedTarget.sheetName}`,
+    `- Game: ${selectedTarget.gameName}`,
+    '- Active: Yes',
+    '- Added By: ChatGPT',
+    `- Source Label: generated:${selectedTarget.sheetName}`,
+    '',
+    'How this game works:',
+    profile.howItWorks,
+    '',
+    `Allowed Question Type values for this game: ${profile.questionTypes.join(', ')}.`,
+    `Recommended categories: ${profile.categories.join(', ')}.`,
+    '',
+    'Column rules:',
+    '- Question must be unique, natural, and ready to show directly in the app.',
+    '- Do not add row numbers, ID codes, bracketed numeric suffixes, or repeated titles to Question.',
+    '- Options should be pipe-separated inside one CSV cell, for example: Option A | Option B | Option C.',
+    '- Correct Answer is only required where the game needs a factual/quiz answer; otherwise leave it blank.',
+    '- Intensity should be 1 to 5. Use 1 for gentle, 3 for playful/personal, 5 for spicy or emotionally loaded.',
+    '- Tone should be short, for example Warm, Funny, Cheeky, Deep, Spicy, Reflective, Competitive.',
+    '- Relationship Area should be short, for example Trust, Intimacy, Communication, Memories, Lifestyle, Conflict, Future.',
+    '- Tags, Avoid If, Game Suitability, and AI Use Case should be pipe-separated when there are multiple values.',
+    '- Repeat Group should group near-duplicates so future generation avoids making the same question again.',
+    '- Default Answer Type and Answer Type should match the Question Type: text for text/favourite/pet peeve, multipleChoice for choice/preference/true false, number for numeric/rating, ranked for ranked/sort rows.',
+    '- Leave Unit Label, Scoring Divisor, Rounding Mode, Round Penalty Value, Fixed Penalty, and Scoring columns blank unless the question clearly needs them.',
+    '- Quote CSV cells that contain commas, quotes, or line breaks. Escape quotes by doubling them.',
+    '',
+    'Game-specific rules:',
+    ...profile.rules.map((rule) => `- ${rule}`),
+    '',
+    'Question-type examples for this selected game. Every allowed type is represented here.',
+    'Format: Question Type | Category | Question | Options | Correct Answer | Default Answer Type | Answer Type | Notes',
+    typeExampleLines,
+    '',
+    'Full app question-type reference. Only use a type from the allowed list above for this selected game, unless I explicitly ask for a different game.',
+    'Format: Question Type | Category | Question | Options | Correct Answer | Default Answer Type | Answer Type | Notes',
+    allTypeReferenceLines,
+    '',
+    'Example row patterns. Do not copy these exact questions; use them to understand format:',
+    exampleLines,
+    '',
+    'Quality bar:',
+    '- Vary categories, tone, intensity, and wording.',
+    '- Make the set feel personal to Jay and Kim, relationship-focused, playful, and sometimes cheeky.',
+    '- Keep anything adult consensual, private, and non-abusive.',
+    '- Avoid filler, duplicate phrasing, and generic therapy-card wording.',
+    '- Make sure every CSV row has the same number of columns as the header.',
+  ].join('\n');
+};
+const copyTextToClipboard = async (text = '') => {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  if (typeof document !== 'undefined') {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    textarea.remove();
+    if (copied) return true;
+  }
+
+  throw new Error('Clipboard is not available.');
+};
 const downloadTextFile = (filename, text, type = 'text/plain;charset=utf-8') => {
   if (typeof document === 'undefined') return;
   const blob = new Blob([text], { type });
@@ -7441,6 +7863,14 @@ function LobbyScreen({
       'text/csv;charset=utf-8',
     );
   };
+  const handleCopyQuestionGenerationPrompt = async () => {
+    try {
+      await copyTextToClipboard(buildQuestionBankGenerationPrompt(questionUploadTarget));
+      window.alert(`${questionUploadTarget.gameName} master prompt copied.`);
+    } catch (error) {
+      window.alert(error?.message || 'Could not copy the master prompt.');
+    }
+  };
   const handleQuestionUploadFileChange = async (event) => {
     const file = event.target.files?.[0] || null;
     event.target.value = '';
@@ -9193,6 +9623,9 @@ function LobbyScreen({
                   </label>
                   <Button className="ghost-button compact" onClick={handleDownloadQuestionUploadTemplate} disabled={isBusy}>
                     Download Blank Template
+                  </Button>
+                  <Button className="ghost-button compact" onClick={handleCopyQuestionGenerationPrompt} disabled={isBusy}>
+                    Copy Master Prompt
                   </Button>
                   <Button className="primary-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={isBusy}>
                     Upload CSV

@@ -1512,7 +1512,7 @@ button:disabled {
 
 .question-bank-upload-controls {
   display: grid;
-  grid-template-columns: minmax(180px, 1.1fr) minmax(170px, 0.9fr) repeat(2, minmax(150px, auto));
+  grid-template-columns: minmax(180px, 1.1fr) minmax(170px, 0.9fr) repeat(3, minmax(150px, auto));
   gap: 10px;
   align-items: end;
 }
