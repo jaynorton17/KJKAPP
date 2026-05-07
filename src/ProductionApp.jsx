@@ -822,10 +822,13 @@ const buildAllQuestionBankTypeReferenceLines = () =>
     .join('\n');
 const STRICT_QUESTION_BANK_GENERATION_RULES = [
   'Do not generate rows by taking a small list of option pairs and wrapping each pair in repeated sentence templates.',
+  'Do not make a neat matrix such as 10 rows per question type by reusing one base prompt for each type. Balance is useful, but every row still needs its own distinct idea.',
   'Do not reuse a question concept, option pair, opening phrase, category pairing, or repeat group unless the row is genuinely asking something different.',
+  'No two rows may be the same base question with only category, tone, timing, or a small noun phrase changed.',
   'No two rows may have the same Question after lowercasing and removing punctuation.',
   'No two rows may have the same Options value after lowercasing and sorting the choices, except fixed-choice games where the app supplies the options.',
-  'No more than 5% of rows may begin with the same first 4 words.',
+  'No more than 2 rows may begin with the same first 5 meaningful words, except fixed opener formats such as "Who is most likely to"; for those, the words after the fixed opener must still vary strongly.',
+  'Do not repeat the same question-type opener across a batch, such as "What is your favourite", "Finish this truthfully", "Which experience would feel", "Name your top three", or "Put these in order", without changing the actual sentence shape and concept.',
   'Do not add filler words such as "right now", "tonight", "today", "secretly", or "honestly" repeatedly to make duplicates look unique.',
   'Do not put generated labels, suffixes, IDs, or counters in Question text, including Variant 1, Q1, Row 1, Question 1, batch labels, or numeric endings used only to make rows look unique.',
   'Category, Tone, Relationship Area, Tags, Game Suitability, AI Use Case, and Repeat Group must be chosen because they fit the actual question.',
