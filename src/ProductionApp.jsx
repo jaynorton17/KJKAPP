@@ -4857,6 +4857,24 @@ const getGameQuestionGoal = (game, rounds = []) => {
   return Math.max(Number(game?.requestedQuestionCount || 0), playedRounds, 0);
 };
 
+const scoreMapHasPoints = (scores = null) =>
+  Number(scores?.jay || 0) !== 0 || Number(scores?.kim || 0) !== 0;
+
+const getRoundHistoryFinalScores = (roundsData = []) => {
+  const roundsList = Array.isArray(roundsData) ? roundsData.filter(Boolean) : [];
+  if (!roundsList.length) return null;
+  const finalScores = getRoundPenaltyTotals(roundsList[roundsList.length - 1]);
+  return {
+    jay: Number(finalScores?.jay || 0),
+    kim: Number(finalScores?.kim || 0),
+  };
+};
+
+const shouldDerivePenaltyScoresFromRoundHistory = (gameMode = 'standard') =>
+  !isQuizGameMode(gameMode)
+  && !isHoldemGameMode(gameMode)
+  && !isCompatibilityMeterGameMode(gameMode);
+
 const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
   const status = data.status || 'active';
   const gameMode = resolveGameMode(data.gameMode || data.questionBankType || 'standard');
@@ -4882,9 +4900,16 @@ const buildGameLibraryEntry = (id, data = {}, roundsData = []) => {
           0,
         );
   const defaultHoldemFinals = holdemState?.lastSettledBalances || { jay: 0, kim: 0 };
+  const storedFinalScores = data.finalScores || data.totals || (roundsData.length ? roundsData.at(-1)?.totalsAfterRound || { jay: 0, kim: 0 } : { jay: 0, kim: 0 });
+  const roundHistoryFinalScores = shouldDerivePenaltyScoresFromRoundHistory(gameMode)
+    && COMPLETED_GAME_STATUSES.includes(status)
+    ? getRoundHistoryFinalScores(roundsData)
+    : null;
   const finalScores = isHoldemGame
     ? (data.finalScores || data.totals || defaultHoldemFinals)
-    : (data.finalScores || data.totals || (roundsData.length ? roundsData.at(-1)?.totalsAfterRound || { jay: 0, kim: 0 } : { jay: 0, kim: 0 }));
+    : roundHistoryFinalScores && (scoreMapHasPoints(roundHistoryFinalScores) || !scoreMapHasPoints(storedFinalScores))
+      ? roundHistoryFinalScores
+      : storedFinalScores;
   const penaltyScoreWinner = Number(finalScores.jay || 0) === Number(finalScores.kim || 0)
     ? 'tie'
     : Number(finalScores.jay || 0) < Number(finalScores.kim || 0)
@@ -20692,10 +20717,22 @@ function ProductionApp() {
       );
       return { appliedLifetimePoints: false, finalScores: finalHoldemScores, winner: holdemWinner, gameSummary };
     }
+    const canDeriveFinalScoresFromRounds = shouldDerivePenaltyScoresFromRoundHistory(gameMode);
+    let persistedRoundHistory = normalizeStoredRounds(loadedSummary?.rounds || []);
+    try {
+      const roundsSnapshot = await getDocs(query(collection(gameRef, 'rounds'), orderBy('number', 'asc')));
+      const fetchedRounds = roundsSnapshot.docs.map((roundEntry) => ({ id: roundEntry.id, ...roundEntry.data() }));
+      if (fetchedRounds.length) persistedRoundHistory = normalizeStoredRounds(fetchedRounds);
+    } catch (error) {
+      console.warn('Could not load round history before finalizing game scores.', error);
+    }
+    const persistedRoundHistoryFinalScores = canDeriveFinalScoresFromRounds
+      ? getRoundHistoryFinalScores(persistedRoundHistory)
+      : null;
     const shouldUseStoredFinalScores = skipPendingRoundArchive || isCompatibilityFinalRevealRound(gameDoc.currentRound || {});
     let nextFinalScores = shouldUseStoredFinalScores
       ? (gameDoc.finalScores || gameDoc.totals || { jay: 0, kim: 0 })
-      : (gameDoc.totals || gameDoc.finalScores || { jay: 0, kim: 0 });
+      : (persistedRoundHistoryFinalScores || gameDoc.totals || gameDoc.finalScores || { jay: 0, kim: 0 });
     let nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
     let nextQuizTotals = gameDoc.quizTotals || { jay: 0, kim: 0 };
     let nextQuizWinner = Number(nextQuizTotals.jay || 0) === Number(nextQuizTotals.kim || 0) ? 'tie' : Number(nextQuizTotals.jay || 0) > Number(nextQuizTotals.kim || 0) ? 'jay' : 'kim';
@@ -20719,9 +20756,9 @@ function ProductionApp() {
           },
         }
       : null;
-    const persistedRoundsPlayed = Math.max(Number(loadedSummary?.roundsPlayed || 0), Number(gameDoc.roundsPlayed || 0));
+    const persistedRoundsPlayed = Math.max(Number(loadedSummary?.roundsPlayed || 0), Number(gameDoc.roundsPlayed || 0), persistedRoundHistory.length);
     const alreadyArchivedCurrentRound = effectivePendingRound
-      ? Boolean((loadedSummary?.rounds || []).some((round) => round.id === effectivePendingRound.id || (round.number === effectivePendingRound.number && round.questionId === effectivePendingRound.questionId)))
+      ? Boolean(persistedRoundHistory.some((round) => round.id === effectivePendingRound.id || (round.number === effectivePendingRound.number && round.questionId === effectivePendingRound.questionId)))
       : true;
     const archivedRoundRef = effectivePendingRound && !alreadyArchivedCurrentRound ? doc(collection(gameRef, 'rounds')) : null;
     const archivedRoundResult = effectivePendingRound && !alreadyArchivedCurrentRound
@@ -20767,14 +20804,20 @@ function ProductionApp() {
               : {}),
           },
           effectivePendingRound.number || (loadedSummary?.roundsPlayed || gameDoc.roundsPlayed || 0) + 1,
-          gameDoc.totals || gameDoc.finalScores || nextFinalScores,
+          persistedRoundHistoryFinalScores || gameDoc.totals || gameDoc.finalScores || nextFinalScores,
         )
+      : null;
+    const finalizedRoundHistory = archivedRoundResult && !alreadyArchivedCurrentRound
+      ? normalizeStoredRounds([...persistedRoundHistory, archivedRoundResult])
+      : persistedRoundHistory;
+    const finalizedRoundHistoryScores = canDeriveFinalScoresFromRounds
+      ? getRoundHistoryFinalScores(finalizedRoundHistory)
       : null;
     nextFinalScores = archivedRoundResult
       ? getRoundPenaltyTotals(archivedRoundResult)
       : shouldUseStoredFinalScores
         ? (gameDoc.finalScores || gameDoc.totals || nextFinalScores)
-        : (gameDoc.totals || gameDoc.finalScores || nextFinalScores);
+        : (finalizedRoundHistoryScores || gameDoc.totals || gameDoc.finalScores || nextFinalScores);
     nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
     const archivedQuizPoints = isQuizGame && archivedRoundResult
       ? {
@@ -20794,9 +20837,9 @@ function ProductionApp() {
     nextQuizWinner = Number(nextQuizTotals.jay || 0) === Number(nextQuizTotals.kim || 0) ? 'tie' : Number(nextQuizTotals.jay || 0) > Number(nextQuizTotals.kim || 0) ? 'jay' : 'kim';
     const finalizedRoundsPlayed = persistedRoundsPlayed + (effectivePendingRound && !alreadyArchivedCurrentRound ? 1 : 0);
     const finalizedUsedQuestionIds = mergeUniqueIds(
-      loadedSummary?.rounds?.map((round) => round.questionId) || [],
+      finalizedRoundHistory.map((round) => round.questionId) || [],
       effectivePendingRound && !alreadyArchivedCurrentRound && effectivePendingRound.questionId ? [effectivePendingRound.questionId] : [],
-      !(loadedSummary?.rounds?.length) ? (gameDoc.usedQuestionIds || []) : [],
+      !finalizedRoundHistory.length ? (gameDoc.usedQuestionIds || []) : [],
     );
 
     let jayCurrent = 0;
@@ -20912,10 +20955,7 @@ function ProductionApp() {
       }));
     }
 
-    const finalizedRoundsData =
-      archivedRoundResult && !alreadyArchivedCurrentRound
-        ? normalizeStoredRounds([...(loadedSummary?.rounds || []), archivedRoundResult])
-        : normalizeStoredRounds(loadedSummary?.rounds || []);
+    const finalizedRoundsData = finalizedRoundHistory;
     const finalizedGameFallback = {
       ...gameDoc,
       status: finalStatus,
