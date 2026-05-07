@@ -43,7 +43,7 @@ import mostLikelyTileImage from './assets/lobby-most-likely.png';
 import pokerTileImage from './assets/lobby-poker.webp';
 import putYourPointsTileImage from './assets/lobby-put-your-points.png';
 import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
-import randomTileImage from '../Random.png';
+import randomTileImage from './assets/lobby-random.png';
 import redGreenFlagTileImage from './assets/lobby-red-green-flag.png';
 import thisOrThatTileImage from './assets/lobby-this-or-that.webp';
 import trueOrFalseTileImage from './assets/lobby-true-or-false.webp';
