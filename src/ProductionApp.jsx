@@ -18873,16 +18873,6 @@ function ProductionApp() {
   const selectedGameSummary = enrichedGameLibrary.find((entry) => entry.id === selectedGameId) || null;
   const selectedLocalGameSummary = enrichedLocalArchivedGames.find((entry) => entry.id === selectedGameId) || null;
   const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || enrichedLocalEndedGameSummary;
-  const lobbyRounds = useMemo(
-    () => {
-      const mergedById = new Map();
-      [...trackedGameEntries, ...previousGames].forEach((entry) => {
-        if (entry?.id && !mergedById.has(entry.id)) mergedById.set(entry.id, entry);
-      });
-      return [...mergedById.values()].flatMap((entry) => entry.rounds || []);
-    },
-    [previousGames, trackedGameEntries],
-  );
   const gameBankRecords = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'game'),
     [bankQuestions],
@@ -19036,6 +19026,16 @@ function ProductionApp() {
     else nextEntries.push(currentGameSummary);
     return nextEntries;
   }, [enrichedGameLibrary, game, rounds]);
+  const lobbyRounds = useMemo(
+    () => {
+      const mergedById = new Map();
+      [...trackedGameEntries, ...previousGames].forEach((entry) => {
+        if (entry?.id && !mergedById.has(entry.id)) mergedById.set(entry.id, entry);
+      });
+      return [...mergedById.values()].flatMap((entry) => entry.rounds || []);
+    },
+    [previousGames, trackedGameEntries],
+  );
   const bankQuestionIds = useMemo(
     () => new Set(standardSelectableQuestions.map((question) => question.id).filter(Boolean)),
     [standardSelectableQuestions],

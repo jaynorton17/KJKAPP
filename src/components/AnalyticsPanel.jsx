@@ -186,8 +186,8 @@ function RoundBars({ data }) {
   const max = maxValue(visible, ['jay', 'kim']);
   return (
     <div className="bar-chart" role="img" aria-label="Per-round penalty bar chart">
-      {visible.map((round) => (
-        <div className="bar-group" key={round.round}>
+      {visible.map((round, index) => (
+        <div className="bar-group" key={round.eventId || `${round.round}-${index}`}>
           <div className="bars">
             <span className="bar jay" style={{ height: `${Math.max(6, (round.jay / max) * 100)}%` }} title={`Jay ${round.jay}`} />
             <span className="bar kim" style={{ height: `${Math.max(6, (round.kim / max) * 100)}%` }} title={`Kim ${round.kim}`} />
