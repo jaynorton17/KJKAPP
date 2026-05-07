@@ -4032,6 +4032,292 @@ const buildPutYourPointsRoundOutcome = (round = {}, outcomeOptions = {}) => {
     complete: Boolean(jayResult && kimResult),
   };
 };
+const collectAnalyticsSessionsForMode = (activeEntries = [], previousEntries = [], modePredicate = () => false) => {
+  const mergedById = new Map();
+  [...(activeEntries || []), ...(previousEntries || [])].forEach((entry) => {
+    if (!entry?.id || !modePredicate(entry?.gameMode || 'standard', entry)) return;
+    if (!mergedById.has(entry.id)) mergedById.set(entry.id, entry);
+  });
+  return [...mergedById.values()];
+};
+const getAnalyticsRoundsForSessions = (sessions = [], fallbackGameName = 'Game') =>
+  sessions.flatMap((entry) =>
+    normalizeStoredRounds(entry?.rounds || []).map((round) => ({
+      ...round,
+      gameId: entry.id,
+      gameName: entry.name || entry.gameName || entry.joinCode || fallbackGameName,
+    })),
+  );
+const summarizeAnalyticsSessions = (sessions = []) => ({
+  sessionsTracked: sessions.length,
+  totalGamesPlayed: sessions.filter((entry) => COMPLETED_GAME_STATUSES.includes(entry?.status || '')).length,
+  activeGames: sessions.filter((entry) => ACTIVE_GAME_STATUSES.includes(entry?.status || '')).length,
+});
+const getRoundPenaltyForAnalytics = (round = {}, seat = 'jay') =>
+  Number(round?.penaltyAdded?.[seat] ?? round?.scores?.[seat] ?? round?.penalties?.[seat] ?? 0) || 0;
+const buildChoiceGuessGameAnalytics = ({
+  sessions = [],
+  fallbackGameName = 'Game',
+  buildOutcome = () => ({}),
+  seededChoices = [],
+} = {}) => {
+  const roundsData = getAnalyticsRoundsForSessions(sessions, fallbackGameName);
+  const choiceCounts = new Map();
+  seededChoices.forEach((option) => {
+    if (option) choiceCounts.set(option, { option, jay: 0, kim: 0 });
+  });
+  const categoryStats = new Map();
+  const totals = {
+    ...summarizeAnalyticsSessions(sessions),
+    totalQuestionsAnswered: roundsData.length,
+    bothCorrect: 0,
+    splitCorrect: 0,
+    missedResponses: 0,
+    jayCorrectGuesses: 0,
+    kimCorrectGuesses: 0,
+    jayWrongGuesses: 0,
+    kimWrongGuesses: 0,
+    jayMissingResponses: 0,
+    kimMissingResponses: 0,
+    jayPenaltyPoints: 0,
+    kimPenaltyPoints: 0,
+  };
+
+  const recordChoice = (seatName, option) => {
+    if (!option) return;
+    const current = choiceCounts.get(option) || { option, jay: 0, kim: 0 };
+    current[seatName] += 1;
+    choiceCounts.set(option, current);
+  };
+
+  roundsData.forEach((round) => {
+    const outcome = buildOutcome(round, { useStoredPenalties: false }) || {};
+    const categoryKey = normalizeText(round?.category) || 'uncategorised';
+    const categoryEntry = categoryStats.get(categoryKey) || {
+      category: round?.category || 'Uncategorised',
+      rounds: 0,
+      bothCorrect: 0,
+      splitCorrect: 0,
+      missedResponses: 0,
+      jayCorrect: 0,
+      kimCorrect: 0,
+      jayWrong: 0,
+      kimWrong: 0,
+      jayPenalty: 0,
+      kimPenalty: 0,
+    };
+    categoryEntry.rounds += 1;
+
+    const jayMissing = Boolean(outcome.jayMissingResponse);
+    const kimMissing = Boolean(outcome.kimMissingResponse);
+    const jayCorrect = Boolean(outcome.jayCorrect);
+    const kimCorrect = Boolean(outcome.kimCorrect);
+
+    if (jayCorrect) {
+      totals.jayCorrectGuesses += 1;
+      categoryEntry.jayCorrect += 1;
+    } else if (jayMissing) {
+      totals.jayMissingResponses += 1;
+    } else {
+      totals.jayWrongGuesses += 1;
+      categoryEntry.jayWrong += 1;
+    }
+
+    if (kimCorrect) {
+      totals.kimCorrectGuesses += 1;
+      categoryEntry.kimCorrect += 1;
+    } else if (kimMissing) {
+      totals.kimMissingResponses += 1;
+    } else {
+      totals.kimWrongGuesses += 1;
+      categoryEntry.kimWrong += 1;
+    }
+
+    if (jayCorrect && kimCorrect) {
+      totals.bothCorrect += 1;
+      categoryEntry.bothCorrect += 1;
+    } else if (jayMissing || kimMissing) {
+      totals.missedResponses += 1;
+      categoryEntry.missedResponses += 1;
+    } else if (jayCorrect !== kimCorrect) {
+      totals.splitCorrect += 1;
+      categoryEntry.splitCorrect += 1;
+    }
+
+    recordChoice('jay', outcome.jayActual);
+    recordChoice('kim', outcome.kimActual);
+    totals.jayPenaltyPoints += Number(outcome.jayPenalty || 0);
+    totals.kimPenaltyPoints += Number(outcome.kimPenalty || 0);
+    categoryEntry.jayPenalty += Number(outcome.jayPenalty || 0);
+    categoryEntry.kimPenalty += Number(outcome.kimPenalty || 0);
+    categoryStats.set(categoryKey, categoryEntry);
+  });
+
+  const jayAttempts = totals.jayCorrectGuesses + totals.jayWrongGuesses;
+  const kimAttempts = totals.kimCorrectGuesses + totals.kimWrongGuesses;
+
+  return {
+    ...totals,
+    jayAccuracy: jayAttempts ? Math.round((totals.jayCorrectGuesses / jayAttempts) * 100) : 0,
+    kimAccuracy: kimAttempts ? Math.round((totals.kimCorrectGuesses / kimAttempts) * 100) : 0,
+    choiceRows: [...choiceCounts.values()].sort((left, right) => (right.jay + right.kim) - (left.jay + left.kim) || left.option.localeCompare(right.option)),
+    categoryRows: [...categoryStats.values()].sort(
+      (left, right) =>
+        right.rounds - left.rounds
+        || right.splitCorrect - left.splitCorrect
+        || left.category.localeCompare(right.category),
+    ),
+  };
+};
+const getCompatibilityAnalyticsBand = (score = 0) => {
+  if (score >= 95) return 'strong';
+  if (score >= 85) return 'close';
+  if (score >= 70) return 'mixed';
+  return 'low';
+};
+const COMPATIBILITY_ANALYTICS_BANDS = [
+  { id: 'strong', label: '95%+', title: 'Strong match' },
+  { id: 'close', label: '85-94%', title: 'Close match' },
+  { id: 'mixed', label: '70-84%', title: 'Mixed match' },
+  { id: 'low', label: '0-69%', title: 'Low match' },
+];
+const buildCompatibilityMeterAnalytics = (sessions = []) => {
+  const roundsData = getAnalyticsRoundsForSessions(sessions, 'Compatibility Meter');
+  const categoryStats = new Map();
+  const bandCounts = Object.fromEntries(COMPATIBILITY_ANALYTICS_BANDS.map((band) => [band.id, 0]));
+  const totals = {
+    ...summarizeAnalyticsSessions(sessions),
+    totalQuestionsAnswered: roundsData.length,
+    totalScore: 0,
+    highestScore: 0,
+    lowestScore: roundsData.length ? 100 : 0,
+    jayPenaltyPoints: 0,
+    kimPenaltyPoints: 0,
+  };
+
+  roundsData.forEach((round) => {
+    const outcome = buildCompatibilityRoundOutcome(round, { useStoredPenalties: false });
+    const score = Number(outcome.score || 0);
+    const bandId = getCompatibilityAnalyticsBand(score);
+    const categoryKey = normalizeText(round?.category) || 'uncategorised';
+    const categoryEntry = categoryStats.get(categoryKey) || {
+      category: round?.category || 'Uncategorised',
+      rounds: 0,
+      totalScore: 0,
+      strong: 0,
+      close: 0,
+      mixed: 0,
+      low: 0,
+      jayPenalty: 0,
+      kimPenalty: 0,
+    };
+    categoryEntry.rounds += 1;
+    categoryEntry.totalScore += score;
+    categoryEntry[bandId] += 1;
+    categoryEntry.jayPenalty += Number(outcome.jayPenalty || 0);
+    categoryEntry.kimPenalty += Number(outcome.kimPenalty || 0);
+    categoryStats.set(categoryKey, categoryEntry);
+
+    totals.totalScore += score;
+    totals.highestScore = Math.max(totals.highestScore, score);
+    totals.lowestScore = Math.min(totals.lowestScore, score);
+    totals.jayPenaltyPoints += Number(outcome.jayPenalty || 0);
+    totals.kimPenaltyPoints += Number(outcome.kimPenalty || 0);
+    bandCounts[bandId] += 1;
+  });
+
+  return {
+    ...totals,
+    averageScore: roundsData.length ? Math.round(totals.totalScore / roundsData.length) : 0,
+    bandRows: COMPATIBILITY_ANALYTICS_BANDS.map((band) => ({
+      ...band,
+      count: bandCounts[band.id] || 0,
+    })),
+    categoryRows: [...categoryStats.values()]
+      .map((row) => ({ ...row, averageScore: row.rounds ? Math.round(row.totalScore / row.rounds) : 0 }))
+      .sort((left, right) => right.rounds - left.rounds || right.averageScore - left.averageScore || left.category.localeCompare(right.category)),
+  };
+};
+const buildMemoryLaneAnalytics = (sessions = []) => {
+  const roundsData = getAnalyticsRoundsForSessions(sessions, 'Memory Lane');
+  const categoryStats = new Map();
+  const typeStats = new Map();
+  const totals = {
+    ...summarizeAnalyticsSessions(sessions),
+    totalQuestionsAnswered: roundsData.length,
+    memoryPromptRounds: 0,
+    recallRounds: 0,
+    recallCorrect: 0,
+    recallWrong: 0,
+    jayPenaltyPoints: 0,
+    kimPenaltyPoints: 0,
+    jayRoundWins: 0,
+    kimRoundWins: 0,
+    tiedRounds: 0,
+  };
+
+  roundsData.forEach((round) => {
+    const isRecall = isMemoryLaneRecallRound(round);
+    const categoryKey = normalizeText(round?.category) || 'uncategorised';
+    const typeKey = normalizeText(round?.roundType) || 'unknown';
+    const jayPenalty = getRoundPenaltyForAnalytics(round, 'jay');
+    const kimPenalty = getRoundPenaltyForAnalytics(round, 'kim');
+    const categoryEntry = categoryStats.get(categoryKey) || {
+      category: round?.category || 'Uncategorised',
+      rounds: 0,
+      recallRounds: 0,
+      memoryPromptRounds: 0,
+      jayPenalty: 0,
+      kimPenalty: 0,
+    };
+    const typeEntry = typeStats.get(typeKey) || {
+      roundType: typeKey,
+      rounds: 0,
+      recallRounds: 0,
+      jayPenalty: 0,
+      kimPenalty: 0,
+    };
+    categoryEntry.rounds += 1;
+    typeEntry.rounds += 1;
+    categoryEntry.jayPenalty += jayPenalty;
+    categoryEntry.kimPenalty += kimPenalty;
+    typeEntry.jayPenalty += jayPenalty;
+    typeEntry.kimPenalty += kimPenalty;
+    totals.jayPenaltyPoints += jayPenalty;
+    totals.kimPenaltyPoints += kimPenalty;
+
+    if (round?.winner === 'jay') totals.jayRoundWins += 1;
+    else if (round?.winner === 'kim') totals.kimRoundWins += 1;
+    else totals.tiedRounds += 1;
+
+    if (isRecall) {
+      totals.recallRounds += 1;
+      categoryEntry.recallRounds += 1;
+      typeEntry.recallRounds += 1;
+      const correctKey = normalizeIdentity(round?.correctAnswer || '');
+      seats.forEach((seatName) => {
+        const answerKey = normalizeIdentity(round?.actualAnswers?.[seatName] ?? round?.answers?.[seatName]?.ownAnswer ?? '');
+        if (!correctKey || !answerKey) return;
+        if (answerKey === correctKey) totals.recallCorrect += 1;
+        else totals.recallWrong += 1;
+      });
+    } else {
+      totals.memoryPromptRounds += 1;
+      categoryEntry.memoryPromptRounds += 1;
+    }
+
+    categoryStats.set(categoryKey, categoryEntry);
+    typeStats.set(typeKey, typeEntry);
+  });
+
+  const recallAttempts = totals.recallCorrect + totals.recallWrong;
+  return {
+    ...totals,
+    recallAccuracy: recallAttempts ? Math.round((totals.recallCorrect / recallAttempts) * 100) : 0,
+    categoryRows: [...categoryStats.values()].sort((left, right) => right.rounds - left.rounds || left.category.localeCompare(right.category)),
+    typeRows: [...typeStats.values()].sort((left, right) => right.rounds - left.rounds || left.roundType.localeCompare(right.roundType)),
+  };
+};
 const buildAutoScoredRoundPenaltyMap = (gameMode = 'standard', round = {}, options = {}) => {
   if (isTrueFalseGameMode(gameMode)) {
     const outcome = buildTrueFalseRoundOutcome(round, options);
@@ -6133,6 +6419,39 @@ function LobbyScreen({
     };
   }, [activeGames, previousGames]);
 
+  const thisOrThatAnalytics = useMemo(
+    () => buildChoiceGuessGameAnalytics({
+      sessions: collectAnalyticsSessionsForMode(activeGames, previousGames, isThisOrThatGameMode),
+      fallbackGameName: 'This or That',
+      buildOutcome: buildThisOrThatRoundOutcome,
+    }),
+    [activeGames, previousGames],
+  );
+
+  const redFlagGreenFlagAnalytics = useMemo(
+    () => buildChoiceGuessGameAnalytics({
+      sessions: collectAnalyticsSessionsForMode(activeGames, previousGames, isRedFlagGreenFlagGameMode),
+      fallbackGameName: 'Red Flag Green Flag',
+      buildOutcome: buildRedFlagGreenFlagRoundOutcome,
+      seededChoices: RED_FLAG_GREEN_FLAG_OPTIONS,
+    }),
+    [activeGames, previousGames],
+  );
+
+  const compatibilityMeterAnalytics = useMemo(
+    () => buildCompatibilityMeterAnalytics(
+      collectAnalyticsSessionsForMode(activeGames, previousGames, isCompatibilityMeterGameMode),
+    ),
+    [activeGames, previousGames],
+  );
+
+  const memoryLaneAnalytics = useMemo(
+    () => buildMemoryLaneAnalytics(
+      collectAnalyticsSessionsForMode(activeGames, previousGames, isMemoryLaneGameMode),
+    ),
+    [activeGames, previousGames],
+  );
+
   const questionBankLoadedCount = questionBankSegment === 'quiz'
     ? quizQuestionCount
     : questionBankSegment === 'thisOrThat'
@@ -6602,6 +6921,263 @@ function LobbyScreen({
         </div>
       </section>
     </div>
+  );
+
+  const renderChoiceGuessAnalyticsPanel = ({ analytics, modeLabel, questionCount = 0, emptyCopy = 'No rounds have been recorded yet.' }) => (
+    <section className="analytics-questions-panel">
+      <div className="question-bank-status-grid">
+        <article className="stat-tile">
+          <small>Questions Ready</small>
+          <strong>{questionCount}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Total Games Played</small>
+          <strong>{analytics.totalGamesPlayed}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Total Questions</small>
+          <strong>{analytics.totalQuestionsAnswered}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Both Correct</small>
+          <strong>{analytics.bothCorrect}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Split Results</small>
+          <strong>{analytics.splitCorrect}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Missing Responses</small>
+          <strong>{analytics.missedResponses}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Jay Accuracy</small>
+          <strong>{analytics.jayAccuracy}%</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Kim Accuracy</small>
+          <strong>{analytics.kimAccuracy}%</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Jay Penalty</small>
+          <strong>{formatScore(analytics.jayPenaltyPoints)}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Kim Penalty</small>
+          <strong>{formatScore(analytics.kimPenaltyPoints)}</strong>
+        </article>
+      </div>
+      <div className="summary-columns">
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>{modeLabel}</span><h3>Guess Results</h3></div></div>
+          <div className="summary-list">
+            <article className="mini-list-row"><strong>Jay correct guesses</strong><span>{analytics.jayCorrectGuesses}</span></article>
+            <article className="mini-list-row"><strong>Kim correct guesses</strong><span>{analytics.kimCorrectGuesses}</span></article>
+            <article className="mini-list-row"><strong>Jay wrong guesses</strong><span>{analytics.jayWrongGuesses}</span></article>
+            <article className="mini-list-row"><strong>Kim wrong guesses</strong><span>{analytics.kimWrongGuesses}</span></article>
+            <article className="mini-list-row"><strong>Tracked games</strong><span>{analytics.sessionsTracked}</span></article>
+          </div>
+        </section>
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>Choices</span><h3>Actual Picks</h3></div></div>
+          <div className="summary-list">
+            {analytics.choiceRows.length ? (
+              analytics.choiceRows.slice(0, 14).map((row) => (
+                <article className="mini-list-row" key={`${modeLabel}-choice-${row.option}`}>
+                  <strong>{row.option}</strong>
+                  <span>{`Jay ${row.jay} · Kim ${row.kim}`}</span>
+                </article>
+              ))
+            ) : (
+              <p className="empty-copy">{emptyCopy}</p>
+            )}
+          </div>
+        </section>
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>Categories</span><h3>Problem Spots</h3></div></div>
+          <div className="summary-list">
+            {analytics.categoryRows.length ? (
+              analytics.categoryRows.slice(0, 14).map((row) => (
+                <article className="mini-list-row" key={`${modeLabel}-cat-${row.category}`}>
+                  <strong>{row.category}</strong>
+                  <span>{`${row.rounds} rounds · ${row.splitCorrect} split`}</span>
+                  <small>{`Both correct ${row.bothCorrect} · Missing ${row.missedResponses} · Jay ${formatScore(row.jayPenalty)} / Kim ${formatScore(row.kimPenalty)}`}</small>
+                </article>
+              ))
+            ) : (
+              <p className="empty-copy">{emptyCopy}</p>
+            )}
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+
+  const renderCompatibilityMeterAnalyticsPanel = () => (
+    <section className="analytics-questions-panel">
+      <div className="question-bank-status-grid">
+        <article className="stat-tile">
+          <small>Questions Ready</small>
+          <strong>{compatibilityMeterQuestionCount}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Total Games Played</small>
+          <strong>{compatibilityMeterAnalytics.totalGamesPlayed}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Total Questions</small>
+          <strong>{compatibilityMeterAnalytics.totalQuestionsAnswered}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Average Match</small>
+          <strong>{compatibilityMeterAnalytics.averageScore}%</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Highest Match</small>
+          <strong>{compatibilityMeterAnalytics.highestScore}%</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Lowest Match</small>
+          <strong>{compatibilityMeterAnalytics.lowestScore}%</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Jay Penalty</small>
+          <strong>{formatScore(compatibilityMeterAnalytics.jayPenaltyPoints)}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Kim Penalty</small>
+          <strong>{formatScore(compatibilityMeterAnalytics.kimPenaltyPoints)}</strong>
+        </article>
+      </div>
+      <div className="summary-columns">
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>Compatibility</span><h3>Score Bands</h3></div></div>
+          <div className="summary-list">
+            {compatibilityMeterAnalytics.bandRows.map((row) => (
+              <article className="mini-list-row" key={`compat-band-${row.id}`}>
+                <strong>{row.title}</strong>
+                <span>{`${row.label} · ${row.count} rounds`}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>Penalty Points</span><h3>Score Band Charges</h3></div></div>
+          <div className="summary-list">
+            <article className="mini-list-row"><strong>95%+</strong><span>+0 each</span></article>
+            <article className="mini-list-row"><strong>85-94%</strong><span>+100 each</span></article>
+            <article className="mini-list-row"><strong>70-84%</strong><span>+250 each</span></article>
+            <article className="mini-list-row"><strong>0-69%</strong><span>+500 each</span></article>
+          </div>
+        </section>
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>Categories</span><h3>Match Strength</h3></div></div>
+          <div className="summary-list">
+            {compatibilityMeterAnalytics.categoryRows.length ? (
+              compatibilityMeterAnalytics.categoryRows.slice(0, 14).map((row) => (
+                <article className="mini-list-row" key={`compat-cat-${row.category}`}>
+                  <strong>{row.category}</strong>
+                  <span>{`${row.rounds} rounds · ${row.averageScore}% avg`}</span>
+                  <small>{`Strong ${row.strong} · Close ${row.close} · Mixed ${row.mixed} · Low ${row.low}`}</small>
+                </article>
+              ))
+            ) : (
+              <p className="empty-copy">No Compatibility Meter rounds have been recorded yet.</p>
+            )}
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+
+  const renderMemoryLaneAnalyticsPanel = () => (
+    <section className="analytics-questions-panel">
+      <div className="question-bank-status-grid">
+        <article className="stat-tile">
+          <small>Questions Ready</small>
+          <strong>{memoryLaneQuestionCount}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Total Games Played</small>
+          <strong>{memoryLaneAnalytics.totalGamesPlayed}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Total Questions</small>
+          <strong>{memoryLaneAnalytics.totalQuestionsAnswered}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Memory Prompts</small>
+          <strong>{memoryLaneAnalytics.memoryPromptRounds}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Recall Rounds</small>
+          <strong>{memoryLaneAnalytics.recallRounds}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Recall Accuracy</small>
+          <strong>{memoryLaneAnalytics.recallAccuracy}%</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Jay Penalty</small>
+          <strong>{formatScore(memoryLaneAnalytics.jayPenaltyPoints)}</strong>
+        </article>
+        <article className="stat-tile">
+          <small>Kim Penalty</small>
+          <strong>{formatScore(memoryLaneAnalytics.kimPenaltyPoints)}</strong>
+        </article>
+      </div>
+      <div className="summary-columns">
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>Memory Lane</span><h3>Round Mix</h3></div></div>
+          <div className="summary-list">
+            <article className="mini-list-row"><strong>Memory prompts</strong><span>{memoryLaneAnalytics.memoryPromptRounds}</span></article>
+            <article className="mini-list-row"><strong>Past-answer recalls</strong><span>{memoryLaneAnalytics.recallRounds}</span></article>
+            <article className="mini-list-row"><strong>Jay round wins</strong><span>{memoryLaneAnalytics.jayRoundWins}</span></article>
+            <article className="mini-list-row"><strong>Kim round wins</strong><span>{memoryLaneAnalytics.kimRoundWins}</span></article>
+            <article className="mini-list-row"><strong>Tied rounds</strong><span>{memoryLaneAnalytics.tiedRounds}</span></article>
+          </div>
+        </section>
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>Recall</span><h3>Past Answer Checks</h3></div></div>
+          <div className="summary-list">
+            <article className="mini-list-row"><strong>Correct recalls</strong><span>{memoryLaneAnalytics.recallCorrect}</span></article>
+            <article className="mini-list-row"><strong>Wrong recalls</strong><span>{memoryLaneAnalytics.recallWrong}</span></article>
+            <article className="mini-list-row"><strong>Recall accuracy</strong><span>{`${memoryLaneAnalytics.recallAccuracy}%`}</span></article>
+          </div>
+        </section>
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>Categories</span><h3>Memory Hotspots</h3></div></div>
+          <div className="summary-list">
+            {memoryLaneAnalytics.categoryRows.length ? (
+              memoryLaneAnalytics.categoryRows.slice(0, 14).map((row) => (
+                <article className="mini-list-row" key={`memory-cat-${row.category}`}>
+                  <strong>{row.category}</strong>
+                  <span>{`${row.rounds} rounds · ${row.recallRounds} recall`}</span>
+                  <small>{`Prompts ${row.memoryPromptRounds} · Jay ${formatScore(row.jayPenalty)} / Kim ${formatScore(row.kimPenalty)}`}</small>
+                </article>
+              ))
+            ) : (
+              <p className="empty-copy">No Memory Lane rounds have been recorded yet.</p>
+            )}
+          </div>
+        </section>
+        <section className="summary-column">
+          <div className="mini-heading"><div><span>Question Types</span><h3>Format Mix</h3></div></div>
+          <div className="summary-list">
+            {memoryLaneAnalytics.typeRows.length ? (
+              memoryLaneAnalytics.typeRows.slice(0, 14).map((row) => (
+                <article className="mini-list-row" key={`memory-type-${row.roundType}`}>
+                  <strong>{ROUND_TYPE_LABEL[row.roundType] || row.roundType}</strong>
+                  <span>{`${row.rounds} rounds · ${row.recallRounds} recall`}</span>
+                </article>
+              ))
+            ) : (
+              <p className="empty-copy">No Memory Lane question types have been recorded yet.</p>
+            )}
+          </div>
+        </section>
+      </div>
+    </section>
   );
 
 	  return (
@@ -7931,11 +8507,23 @@ function LobbyScreen({
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('trueFalse')}>
                   True or False
                 </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'thisOrThat' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('thisOrThat')}>
+                  This or That
+                </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'mostLikely' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('mostLikely')}>
                   Most Likely To
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'putYourPoints' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('putYourPoints')}>
                   Put Your Points
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'redFlagGreenFlag' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('redFlagGreenFlag')}>
+                  Red Flag Green Flag
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'compatibilityMeter' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('compatibilityMeter')}>
+                  Compatibility
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'memoryLane' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('memoryLane')}>
+                  Memory Lane
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'holdem' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('holdem')}>
                   Texas Hold Em
@@ -8332,6 +8920,13 @@ function LobbyScreen({
                     </section>
                   </div>
                 </section>
+              ) : analyticsSegment === 'thisOrThat' ? (
+                renderChoiceGuessAnalyticsPanel({
+                  analytics: thisOrThatAnalytics,
+                  modeLabel: 'This or That',
+                  questionCount: thisOrThatQuestionCount,
+                  emptyCopy: 'No This or That rounds have been recorded yet.',
+                })
               ) : analyticsSegment === 'mostLikely' ? (
                 <section className="analytics-questions-panel">
                   <div className="question-bank-status-grid">
@@ -8504,6 +9099,17 @@ function LobbyScreen({
                     </section>
                   </div>
                 </section>
+              ) : analyticsSegment === 'redFlagGreenFlag' ? (
+                renderChoiceGuessAnalyticsPanel({
+                  analytics: redFlagGreenFlagAnalytics,
+                  modeLabel: 'Red Flag Green Flag',
+                  questionCount: redFlagGreenFlagQuestionCount,
+                  emptyCopy: 'No Red Flag Green Flag rounds have been recorded yet.',
+                })
+              ) : analyticsSegment === 'compatibilityMeter' ? (
+                renderCompatibilityMeterAnalyticsPanel()
+              ) : analyticsSegment === 'memoryLane' ? (
+                renderMemoryLaneAnalyticsPanel()
               ) : analyticsSegment === 'holdem' ? (
                 <section className="analytics-questions-panel">
                   <div className="question-bank-status-grid">
