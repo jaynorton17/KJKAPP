@@ -6841,7 +6841,7 @@ function LobbyScreen({
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [questionUploadBankType, setQuestionUploadBankType] = useState('game');
-  const [questionUploadMode, setQuestionUploadMode] = useState('replace');
+  const [questionUploadMode, setQuestionUploadMode] = useState('add');
   const [questionUploadDraft, setQuestionUploadDraft] = useState(null);
   const [questionUploadProgress, setQuestionUploadProgress] = useState({ status: 'idle', percent: 0, message: '' });
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
@@ -9841,8 +9841,8 @@ function LobbyScreen({
                   <label className="field">
                     <span>Mode</span>
                     <select value={questionUploadMode} onChange={(event) => setQuestionUploadMode(event.target.value)} disabled={isBusy}>
+                      <option value="add">Add new questions only</option>
                       <option value="replace">Replace this game bank</option>
-                      <option value="add">Add new only</option>
                     </select>
                   </label>
                   <Button className="ghost-button compact" onClick={handleDownloadQuestionUploadTemplate} disabled={isBusy}>
