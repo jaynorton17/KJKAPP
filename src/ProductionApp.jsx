@@ -1606,6 +1606,7 @@ const buildAiDiaryGenerationKey = (sourceType = '', sourceId = '') =>
   `${normalizeIdentity(sourceType || 'game')}::${normalizeText(sourceId) || 'unknown'}`;
 
 const getDiaryGameModeLabel = (gameMode = 'standard') => {
+  if (isHoldemGameMode(gameMode)) return "Texas Hold'em";
   if (resolveGameMode(gameMode) === 'quiz') return 'Quick Fire Quiz';
   if (isMostLikelyGameMode(gameMode)) return 'Most Likely To';
   if (isPutYourPointsGameMode(gameMode)) return 'Put Your Points';
@@ -1639,6 +1640,27 @@ const buildGameDiaryScoreContext = (gameSummary = {}) => {
       summary,
       finalScores: null,
       quizTotals,
+    };
+  }
+
+  if (isHoldemGameMode(gameMode)) {
+    const finalScores = {
+      jay: Number(gameSummary?.finalScores?.jay ?? gameSummary?.totals?.jay ?? gameSummary?.holdemState?.lastSettledBalances?.jay ?? 0),
+      kim: Number(gameSummary?.finalScores?.kim ?? gameSummary?.totals?.kim ?? gameSummary?.holdemState?.lastSettledBalances?.kim ?? 0),
+    };
+    const summary = winnerSeat
+      ? `${winnerLabel} finished ahead in Texas Hold'em with Jay ${formatScore(finalScores.jay)} and Kim ${formatScore(finalScores.kim)}.`
+      : `Texas Hold'em finished level with Jay ${formatScore(finalScores.jay)} and Kim ${formatScore(finalScores.kim)}.`;
+    return {
+      gameMode,
+      winnerSeat,
+      winnerLabel,
+      scoreLabel: "Texas Hold'em bankroll",
+      scoreStyle: 'Higher bankroll wins.',
+      scoreDisplay: `Jay ${formatScore(finalScores.jay)} · Kim ${formatScore(finalScores.kim)}`,
+      summary,
+      finalScores,
+      quizTotals: null,
     };
   }
 
@@ -2231,7 +2253,7 @@ const buildAiGameDiaryFacts = ({
   const rounds = normalizeStoredRounds(gameSummary?.rounds || []);
   const gameMode = resolveGameMode(gameSummary?.gameMode || 'standard');
   const scoreContext = buildGameDiaryScoreContext(gameSummary);
-  const analytics = gameMode === 'quiz' ? null : calculateAnalytics(rounds);
+  const analytics = gameMode === 'quiz' || gameMode === HOLDEM_GAME_MODE ? null : calculateAnalytics(rounds);
   const feedbackSummary = buildDiaryFeedbackSummary(questionFeedback, gameSummary?.id || '');
   const replaySummary = buildDiaryReplaySummary(questionReplays, gameSummary?.id || '');
   const quizSummary = gameMode === 'quiz' ? buildDiaryQuizSummary(quizAnswers, gameSummary?.id || '', gameSummary) : null;
@@ -2260,6 +2282,8 @@ const buildAiGameDiaryFacts = ({
       finalScores: scoreContext?.finalScores,
       quizTotals: scoreContext?.quizTotals,
       wagerSettlement: gameSummary?.wagerSettlement || null,
+      holdemStats: gameSummary?.holdemStats || null,
+      holdemHandsPlayed: Number(gameSummary?.holdemStats?.handsPlayed || gameSummary?.roundsPlayed || 0),
     },
     categories: topCategories,
     analytics: buildGameDiaryAnalyticsSummary(analytics),
@@ -2335,6 +2359,7 @@ const buildAiDiarySystemInstruction = (sourceType = 'game') => [
   'Explain what Jay and Kim learned about each other, what went well, and who struggled where, while staying kind and playful.',
   'For Most Likely To chapters, use facts.mostLikely to preserve matched votes, split votes, missed votes, and the exact Jay/Kim vote contrast on key split rounds.',
   'For Put Your Points chapters, mention the round stakes and whether the host marked each player as matched or missed when those facts are present.',
+  'For Texas Hold’em chapters, use facts.game.holdemStats and facts.game.scoreSummary; do not invent card-by-card hand history when it is not supplied.',
   'Do not sound clinical, robotic, mean, or generic.',
   'Keep quiz scoring and penalty-point scoring separate: quiz points are higher-is-better, penalty points are lower-is-better.',
   'Do not mention private notes, prompts, raw JSON, Firestore, databases, or internal tooling.',
@@ -2348,6 +2373,8 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   const analytics = facts?.analytics || null;
   const quiz = facts?.quiz || null;
   const mostLikely = facts?.mostLikely || null;
+  const isHoldemDiary = facts?.game?.gameMode === HOLDEM_GAME_MODE;
+  const holdemStats = facts?.game?.holdemStats || null;
   const chatHighlights = Array.isArray(facts?.gameChat?.highlights) ? facts.gameChat.highlights : [];
   const firstMoment = facts?.questionHighlights?.[0] || null;
   const secondMoment = facts?.questionHighlights?.[1] || null;
@@ -2360,9 +2387,13 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   }, facts, facts?.reservedChapterTitleKeys instanceof Set ? facts.reservedChapterTitleKeys : null);
   const summary = game?.scoreSummary || `${game?.gameModeLabel || 'Game night'} finished with plenty to talk about.`;
 
-  const opening = `By the time ${game?.name || 'this game'} became a diary chapter, the scoreboard already had a plot. ${summary} ${game?.name ? `${game.name} gave them ${Math.max(1, Number(game?.roundsPlayed || 0))} rounds of answers, second-guesses, and little moments worth keeping.` : ''}`.trim();
+  const sessionCount = Math.max(1, Number(isHoldemDiary ? (holdemStats?.handsPlayed || game?.holdemHandsPlayed || game?.roundsPlayed || 0) : (game?.roundsPlayed || 0)));
+  const sessionUnitLabel = isHoldemDiary ? 'hands at the table' : 'rounds of answers, second-guesses, and little moments worth keeping';
+  const opening = `By the time ${game?.name || 'this game'} became a diary chapter, the scoreboard already had a plot. ${summary} ${game?.name ? `${game.name} gave them ${sessionCount} ${sessionUnitLabel}.` : ''}`.trim();
   const middle = mostLikely
     ? `Most Likely To left a clear little trail: ${mostLikely.matchedVotes || 0} matched votes, ${mostLikely.splitVotes || 0} split votes, and ${mostLikely.missedVotes || 0} missed votes. The split-vote penalties finished at Jay ${formatScore(mostLikely.jayPenaltyPoints || 0)} and Kim ${formatScore(mostLikely.kimPenaltyPoints || 0)}.`
+    : isHoldemDiary
+      ? `Texas Hold'em turned the penalty totals into a table: ${game?.scoreSummary || 'the bankroll settled the result.'} They played ${Number(holdemStats?.handsPlayed || game?.holdemHandsPlayed || game?.roundsPlayed || 0)} hands, with the biggest pot reaching ${formatScore(holdemStats?.biggestPot || 0)}.`
     : analytics
       ? `${analytics.leaderboardSummary || 'The score stayed lively.'} Jay looked strongest in ${analytics.strongestCategoryJay || 'a few familiar lanes'}, while Kim shone in ${analytics.strongestCategoryKim || 'some sharp little moments'}. ${analytics.weakestCategoryJay ? `Jay had a wobble around ${analytics.weakestCategoryJay}.` : ''} ${analytics.weakestCategoryKim ? `Kim had a wobble around ${analytics.weakestCategoryKim}.` : ''}`.trim()
     : quiz
@@ -18964,8 +18995,7 @@ function ProductionApp() {
       previousGames.filter(
         (entry) =>
           Boolean(entry?.id)
-          && !isLocalTestGame(entry)
-          && !isHoldemGameMode(entry?.gameMode || 'standard'),
+          && !isLocalTestGame(entry),
       ),
     [previousGames],
   );
@@ -20126,7 +20156,7 @@ function ProductionApp() {
     quizAnswersOverride = null,
     chatMessagesOverride = null,
   } = {}) => {
-    if (!firestore || !gameSummary?.id || isLocalTestGame(gameSummary) || isHoldemGameMode(gameSummary?.gameMode || 'standard')) {
+    if (!firestore || !gameSummary?.id || isLocalTestGame(gameSummary)) {
       return { status: 'skipped' };
     }
 
@@ -20190,7 +20220,7 @@ function ProductionApp() {
       existingChapterTitles,
       reservedChapterTitleKeys,
     };
-    const analyticsSnapshot = facts?.game?.gameMode === 'quiz'
+    const analyticsSnapshot = facts?.game?.gameMode === 'quiz' || facts?.game?.gameMode === HOLDEM_GAME_MODE
       ? null
       : buildDiaryAnalyticsSnapshot(calculateAnalytics(normalizeStoredRounds(gameSummary?.rounds || [])), []);
     const relatedCategories = (facts?.categories || []).map((entry) => entry?.label).filter(Boolean);
@@ -20492,7 +20522,7 @@ function ProductionApp() {
       if ((!gameSummary || (needsFullSummary && !hasLoadedRounds)) && normalizedGameId) {
         gameSummary = await loadGameSummaryById(normalizedGameId, gameSummary).catch(() => gameSummary);
       }
-      if (!gameSummary || isLocalTestGame(gameSummary) || isHoldemGameMode(gameSummary?.gameMode || 'standard')) {
+      if (!gameSummary || isLocalTestGame(gameSummary)) {
         processed += 1;
         skipped += 1;
         setGameDiaryBackfillState({
@@ -20715,6 +20745,11 @@ function ProductionApp() {
       const gameSummary = await loadGameSummaryById(targetGameId, finalizedGameDoc).catch(() =>
         buildGameLibraryEntry(targetGameId, finalizedGameDoc, loadedSummary?.rounds || []),
       );
+      if (gameSummary) {
+        void ensureGameDiaryEntryGenerated({ gameSummary, chatMessagesOverride: chatMessages }).catch((error) => {
+          console.warn('Background Hold’em diary generation failed after game finalization.', error);
+        });
+      }
       return { appliedLifetimePoints: false, finalScores: finalHoldemScores, winner: holdemWinner, gameSummary };
     }
     const canDeriveFinalScoresFromRounds = shouldDerivePenaltyScoresFromRoundHistory(gameMode);
