@@ -458,6 +458,25 @@ const ANALYTICS_GAME_SCORE_MODES = [
   { id: 'memoryLane', label: 'Memory Lane' },
   { id: 'holdem', label: 'Texas Hold Em' },
 ];
+const SURPRISE_ME_GAME_OPTIONS = [
+  { id: 'standard', label: 'Normal Game', gameMode: 'standard', gameName: 'Normal Game' },
+  { id: 'quiz', label: 'Quick Fire Quiz', gameMode: 'quiz', gameName: 'Quick Fire Quiz' },
+  { id: 'trueFalse', label: 'True or False', gameMode: TRUE_FALSE_GAME_MODE, gameName: 'True or False' },
+  { id: 'thisOrThat', label: 'This or That', gameMode: THIS_OR_THAT_GAME_MODE, gameName: 'This or That' },
+  { id: 'mostLikely', label: 'Most Likely To', gameMode: MOST_LIKELY_GAME_MODE, gameName: 'Most Likely To' },
+  { id: 'putYourPoints', label: 'Put Your Points', gameMode: PUT_YOUR_POINTS_GAME_MODE, gameName: 'Put Your Points Where Your Mouth Is' },
+  { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag', gameMode: RED_FLAG_GREEN_FLAG_GAME_MODE, gameName: 'Red Flag Green Flag' },
+  { id: 'compatibilityMeter', label: 'Compatibility Meter', gameMode: COMPATIBILITY_METER_GAME_MODE, gameName: 'Compatibility Meter' },
+  { id: 'memoryLane', label: 'Memory Lane', gameMode: MEMORY_LANE_GAME_MODE, gameName: 'Memory Lane' },
+];
+const SURPRISE_ME_REVEAL_CYCLE_LENGTH = 18;
+const SURPRISE_ME_REVEAL_INTERVAL_MS = 170;
+const SURPRISE_ME_REVEAL_SETTLE_MS = 900;
+const buildSurpriseMeRevealLabels = (selectedOption, options = SURPRISE_ME_GAME_OPTIONS) =>
+  Array.from({ length: SURPRISE_ME_REVEAL_CYCLE_LENGTH }, (_, index) => {
+    if (index === SURPRISE_ME_REVEAL_CYCLE_LENGTH - 1) return selectedOption?.label || 'Game mode';
+    return pickRandom(options)?.label || selectedOption?.label || 'Game mode';
+  });
 const getAnalyticsGameScoreModeId = (value = 'standard') => {
   const gameMode = resolveGameMode(value);
   if (gameMode === 'quiz') return 'quiz';
@@ -5940,22 +5959,17 @@ function LobbyScreen({
     [randomQuestionCountDraft],
   );
 
-  const handleCreateRandomGame = (sendInvite = false) => {
-    const requestedQuestionCount = String(Math.max(1, parseNumber(randomQuestionCountDraft, 10) || 10));
-    const selectedMode = pickRandom(randomLobbyGameModes) || randomLobbyGameModes[0] || null;
-    if (!selectedMode) return;
-    const cycleLength = 18;
-    const labels = Array.from({ length: cycleLength }, (_, index) => {
-      if (index === cycleLength - 1) return selectedMode.label;
-      return (pickRandom(randomLobbyGameModes)?.label || selectedMode.label);
+  const handleCreateRandomGame = (sendInvite = false) =>
+    onCreateGame({
+      gameName: 'Surprise Me',
+      mode: 'random',
+      gameMode: 'standard',
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: String(Math.max(1, parseNumber(randomQuestionCountDraft, 10) || 10)),
+      surpriseMe: true,
+      ...(sendInvite ? { sendInvite: true } : {}),
     });
-    setRandomLobbyPickerState({
-      activeIndex: 0,
-      labels,
-      finalLabel: selectedMode.label,
-      config: selectedMode.buildConfig(sendInvite, requestedQuestionCount),
-    });
-  };
 
   const handleCreateHoldemGame = (sendInvite = false) =>
     onCreateGame({
@@ -17508,6 +17522,9 @@ function ProductionApp() {
   const gameLibraryRoundsCacheRef = useRef(new Map());
   const gameLibrarySnapshotRequestRef = useRef(0);
   const lowQuestionBankWarningShownRef = useRef('');
+  const surpriseRevealStartRef = useRef('');
+  const surpriseRevealFinalizeRef = useRef('');
+  const [surpriseRevealNowMs, setSurpriseRevealNowMs] = useState(() => Date.now());
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
   const hiddenGameIdSet = useMemo(() => new Set(pendingDeletedGameIds), [pendingDeletedGameIds]);
@@ -18553,6 +18570,43 @@ function ProductionApp() {
   const currentPlayerLifetimeLabel = dashboardSeat
     ? `${PLAYER_LABEL[dashboardSeat] || dashboardSeat}: ${formatScore(Number(playerAccounts?.[dashboardSeat]?.lifetimePenaltyPoints || 0))} penalty points`
     : '';
+  const surpriseRoomPickerState = useMemo(() => {
+    const selection = game?.pendingSurpriseSelection || null;
+    if (!selection || !Array.isArray(selection.labels) || !selection.labels.length) return null;
+    const bothPlayersJoined = Boolean(game?.seats?.jay && game?.seats?.kim);
+    const startedAtMs = Date.parse(selection.startedAt || '');
+    const resolveAfterAtMs = Date.parse(selection.resolveAfterAt || '');
+    const isRevealing = selection.status === 'revealing' && bothPlayersJoined;
+    const progressMs = isRevealing && Number.isFinite(startedAtMs)
+      ? Math.max(0, surpriseRevealNowMs - startedAtMs)
+      : 0;
+    const stepIndex = isRevealing
+      ? Math.min(
+          selection.labels.length - 1,
+          Math.floor(progressMs / SURPRISE_ME_REVEAL_INTERVAL_MS),
+        )
+      : 0;
+    const activeIndex = selection.status === 'waiting'
+      ? 0
+      : selection.status === 'revealing'
+        ? stepIndex
+        : selection.labels.length - 1;
+    return {
+      labels: selection.labels,
+      activeIndex,
+      finalLabel: selection.finalLabel || selection.selectedGameName || 'Game mode',
+      waitingForPlayers: selection.status === 'waiting' || !bothPlayersJoined,
+      isRevealing,
+      resolveAfterAtMs,
+    };
+  }, [game?.pendingSurpriseSelection, game?.seats?.jay, game?.seats?.kim, surpriseRevealNowMs]);
+  useEffect(() => {
+    if (!surpriseRoomPickerState?.isRevealing) return undefined;
+    const timer = window.setInterval(() => {
+      setSurpriseRevealNowMs(Date.now());
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [surpriseRoomPickerState?.isRevealing]);
   const incomingGameInvites = useMemo(
     () => {
       const mergedInvites = new Map();
@@ -23618,6 +23672,7 @@ function ProductionApp() {
       setLocalEndedGameSummary(null);
       if (!firestore || !user) throw new Error('Firebase is not configured.');
       const gameMode = resolveGameMode(options.gameMode || 'standard');
+      const isSurpriseMeGame = Boolean(options.surpriseMe);
       const isHoldemGame = isHoldemGameMode(gameMode);
       const isTrueFalseGame = isTrueFalseGameMode(gameMode);
       const isThisOrThatGame = isThisOrThatGameMode(gameMode);
@@ -23640,12 +23695,26 @@ function ProductionApp() {
         if (isMemoryLaneGame) return 'Memory Lane';
         return 'Jay vs Kim';
       })();
+      const surpriseSelection = isSurpriseMeGame
+        ? (pickRandom(SURPRISE_ME_GAME_OPTIONS) || SURPRISE_ME_GAME_OPTIONS[0] || null)
+        : null;
+      const queueGameMode = surpriseSelection ? resolveGameMode(surpriseSelection.gameMode || 'standard') : gameMode;
+      const queueGameName = surpriseSelection?.gameName || surpriseSelection?.label || effectiveGameName;
+      const queueIsThisOrThatGame = isThisOrThatGameMode(queueGameMode);
+      const queueIsMostLikelyGame = isMostLikelyGameMode(queueGameMode);
+      const queueIsPutYourPointsGame = isPutYourPointsGameMode(queueGameMode);
+      const queueIsRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(queueGameMode);
+      const queueIsCompatibilityMeterGame = isCompatibilityMeterGameMode(queueGameMode);
+      const queueIsMemoryLaneGame = isMemoryLaneGameMode(queueGameMode);
+      const surpriseRevealLabels = surpriseSelection ? buildSurpriseMeRevealLabels(surpriseSelection) : [];
       console.debug('Create New Game clicked', {
-        gameName: effectiveGameName || lobbyGameName,
+        gameName: isSurpriseMeGame ? 'Surprise Me' : (effectiveGameName || lobbyGameName),
         requestedQuestionCount: options.requestedQuestionCount ?? lobbyQuestionCount,
         createCode: requestedCreateCode,
         mode: options.mode || 'random',
         gameMode,
+        queueGameMode,
+        surpriseMe: isSurpriseMeGame,
         roundTypes: options.roundTypes || [],
         categories: options.categories || [],
       });
@@ -23658,7 +23727,7 @@ function ProductionApp() {
       const previousRounds = rounds;
       const previousChatMessages = chatMessages;
       const selectionMode = options.mode === 'custom' ? 'custom' : 'random';
-      const targetBankType = isHoldemGame ? 'holdem' : getQuestionBankTypeForGameMode(gameMode);
+      const targetBankType = isHoldemGame ? 'holdem' : getQuestionBankTypeForGameMode(queueGameMode);
       const selectedRoundTypes = !isHoldemGame && selectionMode === 'custom' ? options.roundTypes || [] : [];
       const selectedCategories = !isHoldemGame && selectionMode === 'custom' ? options.categories || [] : [];
       const creatorSeat = preferredSeatForUser(user, profile);
@@ -23685,20 +23754,20 @@ function ProductionApp() {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
             bankType: targetBankType,
-            gameMode,
+            gameMode: queueGameMode,
             questionPool: readyQuestionPool,
           });
           queue = queueResult.queue;
           warning = queueResult.warning;
           actualCount = queueResult.actualCount;
           if (!queue.length) {
-            throw new Error(isPutYourPointsGame
+            throw new Error(queueIsPutYourPointsGame
               ? 'No Put Your Points questions are available. Add questions to the Put Your Money Where Your Mouth Is sheet, then sync the Put Your Points bank.'
               : selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
             if (actualCount < requestedQuestionCount) {
-              if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame || isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame) {
-                console.debug(`${effectiveGameName} local game auto-accepting shorter queue`, {
+              if (queueIsThisOrThatGame || queueIsMostLikelyGame || queueIsPutYourPointsGame || queueIsRedFlagGreenFlagGame || queueIsCompatibilityMeterGame || queueIsMemoryLaneGame || isSurpriseMeGame) {
+                console.debug(`${queueGameName} local game auto-accepting shorter queue`, {
                   requestedQuestionCount,
                   actualCount,
                 });
@@ -23720,7 +23789,7 @@ function ProductionApp() {
           joinCode: localJoinCode,
           code: localJoinCode,
           roomCode: localJoinCode,
-          gameName: effectiveGameName || `Editing Mode ${localJoinCode}`,
+          gameName: isSurpriseMeGame ? 'Surprise Me' : (effectiveGameName || `Editing Mode ${localJoinCode}`),
           status: 'active',
           hostUid: user.uid,
           hostDisplayName: hostName,
@@ -23747,23 +23816,23 @@ function ProductionApp() {
 	          totals: isHoldemGame ? (initialHoldemState?.lastSettledBalances || { jay: 0, kim: 0 }) : { jay: 0, kim: 0 },
 	          quizTotals: { jay: 0, kim: 0 },
 	          quizWagers: { jay: 0, kim: 0 },
-          quizWagerAgreement: gameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
-          quizReadyState: gameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
+          quizWagerAgreement: gameMode === 'quiz' && !isSurpriseMeGame ? defaultQuizWagerAgreement() : null,
+          quizReadyState: gameMode === 'quiz' && !isSurpriseMeGame ? defaultQuizReadyState('opening') : null,
           holdemState: initialHoldemState,
           holdemStats: initialHoldemStats,
 	          currentRound: null,
           pairId: buildPairKey(),
-          gameMode,
-          questionBankType: targetBankType,
+          gameMode: isSurpriseMeGame ? 'standard' : gameMode,
+          questionBankType: isSurpriseMeGame ? 'game' : targetBankType,
           questionSelectionMode: selectionMode,
           questionSelectionFilters: {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
           },
-          questionQueueIds: queue.map((question) => question.id),
-          retiredQuestionIds: queue.map((question) => question.id),
+          questionQueueIds: isSurpriseMeGame ? [] : queue.map((question) => question.id),
+          retiredQuestionIds: isSurpriseMeGame ? [] : queue.map((question) => question.id),
           requestedQuestionCount,
-          actualQuestionCount: actualCount,
+          actualQuestionCount: isSurpriseMeGame ? 0 : actualCount,
           usedQuestionIds: [],
           roundsPlayed: 0,
           finalScores: { jay: 0, kim: 0 },
@@ -23777,6 +23846,22 @@ function ProductionApp() {
           updatedAt: createdAt,
           isEditingMode: true,
           isLocalOnly: true,
+          pendingSurpriseSelection: isSurpriseMeGame
+            ? {
+                status: 'waiting',
+                labels: surpriseRevealLabels,
+                finalLabel: surpriseSelection?.label || 'Surprise Me',
+                selectedGameMode: queueGameMode,
+                selectedGameName: queueGameName,
+                targetBankType,
+                requestedQuestionCount,
+                actualQuestionCount: actualCount,
+                questionQueueIds: queue.map((question) => question.id),
+                warning,
+                startedAt: '',
+                resolveAfterAt: '',
+              }
+            : null,
           ...(isHoldemGame ? buildHoldemSummaryFields(initialHoldemState, initialHoldemStats) : {}),
         };
         autoResumedGameIdRef.current = '';
@@ -23791,7 +23876,9 @@ function ProductionApp() {
         setNotice(
           isHoldemGame
             ? `Editing Mode Texas Hold’em room opened locally.${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`
-            : `Editing Mode room opened locally with ${actualCount} questions.${warning ? ` ${warning}` : ''}${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`,
+            : isSurpriseMeGame
+              ? `Editing Mode Surprise Me room opened locally.${warning ? ` ${warning}` : ''}${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`
+              : `Editing Mode room opened locally with ${actualCount} questions.${warning ? ` ${warning}` : ''}${options.sendInvite ? ' Invite not sent because local test rooms are device-only.' : ' Nothing from this game will be saved.'}`,
         );
         return;
       }
@@ -23807,7 +23894,7 @@ function ProductionApp() {
         joinCode: optimisticJoinCode,
         code: optimisticJoinCode,
         roomCode: optimisticJoinCode,
-        gameName: effectiveGameName || `Jay vs Kim ${optimisticJoinCode || 'opening'}`,
+        gameName: isSurpriseMeGame ? 'Surprise Me' : (effectiveGameName || `Jay vs Kim ${optimisticJoinCode || 'opening'}`),
         status: isHoldemGame ? 'active' : 'opening',
         hostUid: user.uid,
         hostDisplayName: profile?.displayName || user.displayName || user.email?.split('@')[0] || PLAYER_LABEL[creatorSeat] || 'Player',
@@ -23828,14 +23915,14 @@ function ProductionApp() {
         totals: isHoldemGame ? (initialHoldemState?.lastSettledBalances || { jay: 0, kim: 0 }) : { jay: 0, kim: 0 },
         quizTotals: { jay: 0, kim: 0 },
         quizWagers: { jay: 0, kim: 0 },
-        quizWagerAgreement: gameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
-        quizReadyState: gameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
+        quizWagerAgreement: gameMode === 'quiz' && !isSurpriseMeGame ? defaultQuizWagerAgreement() : null,
+        quizReadyState: gameMode === 'quiz' && !isSurpriseMeGame ? defaultQuizReadyState('opening') : null,
         holdemState: initialHoldemState,
         holdemStats: initialHoldemStats,
         currentRound: null,
         pairId: buildPairKey(),
-        gameMode,
-        questionBankType: targetBankType,
+        gameMode: isSurpriseMeGame ? 'standard' : gameMode,
+        questionBankType: isSurpriseMeGame ? 'game' : targetBankType,
         questionSelectionMode: selectionMode,
         questionSelectionFilters: {
           roundTypes: selectedRoundTypes,
@@ -23856,12 +23943,28 @@ function ProductionApp() {
         endedBy: '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        pendingSurpriseSelection: isSurpriseMeGame
+          ? {
+              status: 'waiting',
+              labels: surpriseRevealLabels,
+              finalLabel: surpriseSelection?.label || 'Surprise Me',
+              selectedGameMode: queueGameMode,
+              selectedGameName: queueGameName,
+              targetBankType,
+              requestedQuestionCount,
+              actualQuestionCount: 0,
+              questionQueueIds: [],
+              warning: '',
+              startedAt: '',
+              resolveAfterAt: '',
+            }
+          : null,
         ...(isHoldemGame ? buildHoldemSummaryFields(initialHoldemState, initialHoldemStats) : {}),
       };
       autoResumedGameIdRef.current = '';
       leavePendingGameRef.current = '';
       resetRoomLoadState();
-      setNotice(`Opening ${effectiveGameName || 'new game'}…`);
+      setNotice(`Opening ${isSurpriseMeGame ? 'Surprise Me' : (effectiveGameName || 'new game')}…`);
       let roomCreated = false;
 
       try {
@@ -23874,20 +23977,20 @@ function ProductionApp() {
             roundTypes: selectedRoundTypes,
             categories: selectedCategories,
             bankType: targetBankType,
-            gameMode,
+            gameMode: queueGameMode,
             questionPool: readyQuestionPool,
           });
           queue = queueResult.queue;
           warning = queueResult.warning;
           actualCount = queueResult.actualCount;
           if (!queue.length) {
-            throw new Error(isPutYourPointsGame
+            throw new Error(queueIsPutYourPointsGame
               ? 'No Put Your Points questions are available. Add questions to the Put Your Money Where Your Mouth Is sheet, then sync the Put Your Points bank.'
               : selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
           if (actualCount < requestedQuestionCount) {
-            if (isThisOrThatGame || isMostLikelyGame || isPutYourPointsGame || isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame) {
-              console.debug(`${effectiveGameName} live game auto-accepting shorter queue`, {
+            if (queueIsThisOrThatGame || queueIsMostLikelyGame || queueIsPutYourPointsGame || queueIsRedFlagGreenFlagGame || queueIsCompatibilityMeterGame || queueIsMemoryLaneGame || isSurpriseMeGame) {
+              console.debug(`${queueGameName} live game auto-accepting shorter queue`, {
                 requestedQuestionCount,
                 actualCount,
               });
@@ -23907,7 +24010,7 @@ function ProductionApp() {
               joinCode,
               code: joinCode,
               roomCode: joinCode,
-              gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
+              gameName: isSurpriseMeGame ? 'Surprise Me' : (effectiveGameName || `Jay vs Kim ${joinCode}`),
               status: 'active',
             }
           : {
@@ -23915,16 +24018,32 @@ function ProductionApp() {
               joinCode,
               code: joinCode,
               roomCode: joinCode,
-              gameName: effectiveGameName || `Jay vs Kim ${joinCode}`,
+              gameName: isSurpriseMeGame ? 'Surprise Me' : (effectiveGameName || `Jay vs Kim ${joinCode}`),
               status: 'active',
               questionSelectionMode: selectionMode,
               questionSelectionFilters: {
                 roundTypes: selectedRoundTypes,
                 categories: selectedCategories,
               },
-              questionQueueIds: queue.map((question) => question.id),
-              retiredQuestionIds: queue.map((question) => question.id),
-              actualQuestionCount: actualCount,
+              questionQueueIds: isSurpriseMeGame ? [] : queue.map((question) => question.id),
+              retiredQuestionIds: isSurpriseMeGame ? [] : queue.map((question) => question.id),
+              actualQuestionCount: isSurpriseMeGame ? 0 : actualCount,
+              pendingSurpriseSelection: isSurpriseMeGame
+                ? {
+                    status: 'waiting',
+                    labels: surpriseRevealLabels,
+                    finalLabel: surpriseSelection?.label || 'Surprise Me',
+                    selectedGameMode: queueGameMode,
+                    selectedGameName: queueGameName,
+                    targetBankType,
+                    requestedQuestionCount,
+                    actualQuestionCount: actualCount,
+                    questionQueueIds: queue.map((question) => question.id),
+                    warning,
+                    startedAt: '',
+                    resolveAfterAt: '',
+                  }
+                : null,
             };
         if (!isHoldemGame) {
           console.debug('Create New Game queue selected', {
@@ -24021,10 +24140,12 @@ function ProductionApp() {
         safeLocalStorageSet(activeGameKey, gameRef.id);
         setNotice(
           options.sendInvite
-            ? `Game ${joinCode} created and invite sent to ${PLAYER_LABEL[inviteTargetSeat] || inviteTargetSeat}.`
+            ? `${isSurpriseMeGame ? 'Surprise Me room' : 'Game'} ${joinCode} created and invite sent to ${PLAYER_LABEL[inviteTargetSeat] || inviteTargetSeat}.`
             : isHoldemGame
               ? `Texas Hold’em game ${joinCode} created.`
-              : `Game ${joinCode} created with ${actualCount} questions.${warning ? ` ${warning}` : ''}`,
+              : isSurpriseMeGame
+                ? `Surprise Me room ${joinCode} created.${warning ? ` ${warning}` : ''}`
+                : `Game ${joinCode} created with ${actualCount} questions.${warning ? ` ${warning}` : ''}`,
         );
         console.debug('Create New Game queue committed', { gameId: gameRef.id, joinCode, actualCount, inviteSent: Boolean(options.sendInvite) });
 
@@ -24045,6 +24166,29 @@ function ProductionApp() {
         throw error;
       }
     }, 'Could not create game.');
+
+  const buildSurpriseMePromotionPatch = useCallback((selection = null) => {
+    const selectedGameMode = resolveGameMode(selection?.selectedGameMode || 'standard');
+    const queueIds = Array.isArray(selection?.questionQueueIds) ? selection.questionQueueIds.filter(Boolean) : [];
+    return {
+      gameName: selection?.selectedGameName || selection?.finalLabel || 'Surprise Me',
+      gameMode: selectedGameMode,
+      questionBankType: selection?.targetBankType || getQuestionBankTypeForGameMode(selectedGameMode),
+      questionSelectionMode: 'random',
+      questionSelectionFilters: {
+        roundTypes: [],
+        categories: [],
+      },
+      questionQueueIds: queueIds,
+      retiredQuestionIds: queueIds,
+      requestedQuestionCount: Math.max(1, Number(selection?.requestedQuestionCount || queueIds.length || 10)),
+      actualQuestionCount: Math.max(0, Number(selection?.actualQuestionCount || queueIds.length || 0)),
+      quizWagerAgreement: selectedGameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
+      quizReadyState: selectedGameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
+      pendingSurpriseSelection: null,
+      status: 'active',
+    };
+  }, []);
 
   const joinGameSessionById = async (targetGameId, { fallbackCode = '', inviteId = '' } = {}) => {
     setLocalEndedGameSummary(null);
@@ -24348,6 +24492,117 @@ function ProductionApp() {
     setProfile((current) => (current ? { ...current, activeGameId: '' } : current));
     setNotice('Room closed locally. Game state stays on Firebase.');
   };
+
+  useEffect(() => {
+    const selection = game?.pendingSurpriseSelection || null;
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const bothPlayersJoined = Boolean(game?.seats?.jay && game?.seats?.kim);
+    const revealKey = `${game?.id || ''}:${selection?.status || ''}:${Boolean(game?.seats?.jay)}:${Boolean(game?.seats?.kim)}`;
+    if (!selection || selection.status !== 'waiting' || currentSeat !== coordinatorSeat || !bothPlayersJoined) {
+      if (surpriseRevealStartRef.current === revealKey) surpriseRevealStartRef.current = '';
+      return undefined;
+    }
+    if (surpriseRevealStartRef.current === revealKey) return undefined;
+    surpriseRevealStartRef.current = revealKey;
+    const nowMs = Date.now();
+    const startedAt = new Date(nowMs).toISOString();
+    const revealDurationMs = Math.max(1, (selection.labels?.length || 1) - 1) * SURPRISE_ME_REVEAL_INTERVAL_MS;
+    const resolveAfterAt = new Date(nowMs + revealDurationMs + SURPRISE_ME_REVEAL_SETTLE_MS).toISOString();
+
+    if (isCurrentLocalTestGame) {
+      setGame((current) =>
+        current?.pendingSurpriseSelection?.status === 'waiting'
+          ? {
+              ...current,
+              pendingSurpriseSelection: {
+                ...current.pendingSurpriseSelection,
+                status: 'revealing',
+                startedAt,
+                resolveAfterAt,
+              },
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+      setNotice('Surprise Me is picking the game...');
+      return undefined;
+    }
+
+    const gameRef = makeGameRef();
+    if (!gameRef) return undefined;
+    updateDoc(gameRef, {
+      'pendingSurpriseSelection.status': 'revealing',
+      'pendingSurpriseSelection.startedAt': startedAt,
+      'pendingSurpriseSelection.resolveAfterAt': resolveAfterAt,
+      updatedAt: serverTimestamp(),
+    }).then(() => {
+      setNotice('Surprise Me is picking the game...');
+    }).catch((error) => {
+      surpriseRevealStartRef.current = '';
+      if (isFirestoreRateLimitedError(error)) {
+        setNotice('Firebase is rate-limiting the surprise picker right now. Waiting for the room to catch up.');
+        return;
+      }
+      setNotice(error?.message || 'Could not start the surprise game picker.');
+    });
+    return undefined;
+  }, [currentSeat, game?.hostUid, game?.id, game?.pendingSurpriseSelection, game?.seats?.jay, game?.seats?.kim, isCurrentLocalTestGame]);
+
+  useEffect(() => {
+    const selection = game?.pendingSurpriseSelection || null;
+    const coordinatorSeat = seatForUid(game, game?.hostUid) || 'jay';
+    const resolveAfterAtMs = Date.parse(selection?.resolveAfterAt || '');
+    const finalizeKey = `${game?.id || ''}:${selection?.status || ''}:${selection?.resolveAfterAt || ''}`;
+    if (
+      !selection
+      || selection.status !== 'revealing'
+      || currentSeat !== coordinatorSeat
+      || !Number.isFinite(resolveAfterAtMs)
+    ) {
+      if (surpriseRevealFinalizeRef.current === finalizeKey) surpriseRevealFinalizeRef.current = '';
+      return undefined;
+    }
+    const delayMs = Math.max(0, resolveAfterAtMs - Date.now());
+    const timer = window.setTimeout(() => {
+      if (surpriseRevealFinalizeRef.current === finalizeKey) return;
+      surpriseRevealFinalizeRef.current = finalizeKey;
+      const promotionPatch = buildSurpriseMePromotionPatch(selection);
+      const promotionMessage = selection.warning
+        ? `${promotionPatch.gameName} selected. ${selection.warning}`
+        : `${promotionPatch.gameName} selected.`;
+
+      if (isCurrentLocalTestGame) {
+        setGame((current) =>
+          current?.pendingSurpriseSelection?.status === 'revealing'
+            ? {
+                ...current,
+                ...promotionPatch,
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+        setNotice(promotionMessage);
+        return;
+      }
+
+      const gameRef = makeGameRef();
+      if (!gameRef) return;
+      updateDoc(gameRef, {
+        ...promotionPatch,
+        updatedAt: serverTimestamp(),
+      }).then(() => {
+        setNotice(promotionMessage);
+      }).catch((error) => {
+        surpriseRevealFinalizeRef.current = '';
+        if (isFirestoreRateLimitedError(error)) {
+          setNotice('Firebase is rate-limiting the surprise room right now. Waiting for the selected game to appear.');
+          return;
+        }
+        setNotice(error?.message || 'Could not finish the surprise game reveal.');
+      });
+    }, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [buildSurpriseMePromotionPatch, currentSeat, game?.hostUid, game?.id, game?.pendingSurpriseSelection, isCurrentLocalTestGame]);
 
   const authSubmit = async () =>
     withBusy(async () => {
@@ -27725,6 +27980,7 @@ function ProductionApp() {
   }
 
 	  return (
+    <>
     <GameRoomView
       user={user}
       profile={profile}
@@ -27791,6 +28047,16 @@ function ProductionApp() {
       quizWagerDraft={quizWagerDraft}
       setQuizWagerDraft={setQuizWagerDraft}
     />
+    {surpriseRoomPickerState ? (
+      <section className="random-lobby-picker-backdrop" role="presentation">
+        <div className="random-lobby-picker-modal" role="dialog" aria-modal="true" aria-label="Surprise game picker">
+          <span className="status-pill">Surprise Me</span>
+          <small>{surpriseRoomPickerState.waitingForPlayers ? 'Waiting for both players to join...' : 'Picking your game...'}</small>
+          <strong>{surpriseRoomPickerState.labels?.[surpriseRoomPickerState.activeIndex] || surpriseRoomPickerState.finalLabel || 'Game mode'}</strong>
+        </div>
+      </section>
+    ) : null}
+    </>
   );
 }
 
