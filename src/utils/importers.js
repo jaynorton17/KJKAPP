@@ -41,6 +41,7 @@ const FIELD_ALIASES = {
   answerType: ['answertype'],
   multipleChoiceOptions: ['multiplechoiceoptions', 'options', 'choices', 'optionlist', 'answeroptions', 'rankoptions', 'orderoptions'],
   correctAnswer: ['correctanswer', 'answer', 'correct', 'solution'],
+  memoryLaneMode: ['memorylanemode', 'memorytype', 'memorymode', 'recalltype', 'prompttype'],
 };
 
 const GOOGLE_SHEET_DIRECT_ID = /^[A-Za-z0-9-_]{20,}$/;
