@@ -43,6 +43,7 @@ import mostLikelyTileImage from './assets/lobby-most-likely.png';
 import pokerTileImage from './assets/lobby-poker.webp';
 import putYourPointsTileImage from './assets/lobby-put-your-points.png';
 import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
+import randomTileImage from '../Random.png';
 import redGreenFlagTileImage from './assets/lobby-red-green-flag.png';
 import thisOrThatTileImage from './assets/lobby-this-or-that.webp';
 import trueOrFalseTileImage from './assets/lobby-true-or-false.webp';
@@ -5624,6 +5625,7 @@ function LobbyScreen({
   const [compatibilityMeterQuestionCountDraft, setCompatibilityMeterQuestionCountDraft] = useState('10');
   const [memoryLaneCreateCodeDraft, setMemoryLaneCreateCodeDraft] = useState('');
   const [memoryLaneQuestionCountDraft, setMemoryLaneQuestionCountDraft] = useState('10');
+  const [randomQuestionCountDraft, setRandomQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
   const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
   const [flippedLobbyTiles, setFlippedLobbyTiles] = useState(() => ({
@@ -5636,8 +5638,10 @@ function LobbyScreen({
     redFlagGreenFlag: false,
     compatibilityMeter: false,
     memoryLane: false,
+    random: false,
     holdem: false,
   }));
+  const [randomLobbyPickerState, setRandomLobbyPickerState] = useState(null);
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
   const [lobbyTileImagesEnabled, setLobbyTileImagesEnabled] = useState(false);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
@@ -5680,6 +5684,17 @@ function LobbyScreen({
   const redFlagGreenFlagReadyCount = Number(redFlagGreenFlagQuestionCount || 0);
   const compatibilityMeterReadyCount = Number(compatibilityMeterQuestionCount || 0);
   const memoryLaneReadyCount = Number(memoryLaneQuestionCount || 0);
+  const randomReadyCount = Math.max(
+    Number(questionCount || 0),
+    Number(quizQuestionCount || 0),
+    Number(trueFalseQuestionCount || 0),
+    Number(thisOrThatQuestionCount || 0),
+    Number(mostLikelyQuestionCount || 0),
+    Number(putYourPointsQuestionCount || 0),
+    Number(redFlagGreenFlagQuestionCount || 0),
+    Number(compatibilityMeterQuestionCount || 0),
+    Number(memoryLaneQuestionCount || 0),
+  );
   const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
   const lobbyChatUnreadCount = useChatUnreadCount(
     lobbyChatMessages,
@@ -5803,6 +5818,144 @@ function LobbyScreen({
       requestedQuestionCount: memoryLaneQuestionCountDraft,
       ...(sendInvite ? { sendInvite: true } : {}),
     });
+
+  const randomLobbyGameModes = useMemo(
+    () => ([
+      {
+        id: 'standard',
+        label: 'Normal Game',
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          mode: 'random',
+          gameMode: 'standard',
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+      {
+        id: 'quiz',
+        label: 'Quick Fire Quiz',
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          mode: 'random',
+          gameMode: 'quiz',
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+      {
+        id: 'trueFalse',
+        label: 'True or False',
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          gameName: 'True or False',
+          mode: 'random',
+          gameMode: TRUE_FALSE_GAME_MODE,
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+      {
+        id: 'thisOrThat',
+        label: 'This or That',
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          gameName: 'This or That',
+          mode: 'random',
+          gameMode: THIS_OR_THAT_GAME_MODE,
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+      {
+        id: 'mostLikely',
+        label: 'Most Likely To',
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          gameName: 'Most Likely To',
+          mode: 'random',
+          gameMode: MOST_LIKELY_GAME_MODE,
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+      {
+        id: 'putYourPoints',
+        label: 'Put Your Points',
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          gameName: 'Put Your Points Where Your Mouth Is',
+          mode: 'random',
+          gameMode: PUT_YOUR_POINTS_GAME_MODE,
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+      {
+        id: 'redFlagGreenFlag',
+        label: 'Red Flag Green Flag',
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          gameName: 'Red Flag Green Flag',
+          mode: 'random',
+          gameMode: RED_FLAG_GREEN_FLAG_GAME_MODE,
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+      {
+        id: 'compatibilityMeter',
+        label: 'Compatibility Meter',
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          gameName: 'Compatibility Meter',
+          mode: 'random',
+          gameMode: COMPATIBILITY_METER_GAME_MODE,
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+      {
+        id: 'memoryLane',
+        label: 'Memory Lane',
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          gameName: 'Memory Lane',
+          mode: 'random',
+          gameMode: MEMORY_LANE_GAME_MODE,
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+    ]),
+    [randomQuestionCountDraft],
+  );
+
+  const handleCreateRandomGame = (sendInvite = false) => {
+    const requestedQuestionCount = String(Math.max(1, parseNumber(randomQuestionCountDraft, 10) || 10));
+    const selectedMode = pickRandom(randomLobbyGameModes) || randomLobbyGameModes[0] || null;
+    if (!selectedMode) return;
+    const cycleLength = 18;
+    const labels = Array.from({ length: cycleLength }, (_, index) => {
+      if (index === cycleLength - 1) return selectedMode.label;
+      return (pickRandom(randomLobbyGameModes)?.label || selectedMode.label);
+    });
+    setRandomLobbyPickerState({
+      activeIndex: 0,
+      labels,
+      finalLabel: selectedMode.label,
+      config: selectedMode.buildConfig(sendInvite, requestedQuestionCount),
+    });
+  };
 
   const handleCreateHoldemGame = (sendInvite = false) =>
     onCreateGame({
@@ -6674,6 +6827,30 @@ function LobbyScreen({
     };
   }, []);
 
+  useEffect(() => {
+    if (!randomLobbyPickerState?.labels?.length) return undefined;
+    const finalIndex = randomLobbyPickerState.labels.length - 1;
+    if (randomLobbyPickerState.activeIndex >= finalIndex) {
+      const finalizeTimer = window.setTimeout(() => {
+        const config = randomLobbyPickerState.config || null;
+        setRandomLobbyPickerState(null);
+        if (config) onCreateGame(config);
+      }, 900);
+      return () => window.clearTimeout(finalizeTimer);
+    }
+    const nextTimer = window.setTimeout(() => {
+      setRandomLobbyPickerState((current) => (
+        current
+          ? {
+              ...current,
+              activeIndex: Math.min((current.activeIndex || 0) + 1, current.labels.length - 1),
+            }
+          : current
+      ));
+    }, 170);
+    return () => window.clearTimeout(nextTimer);
+  }, [onCreateGame, randomLobbyPickerState]);
+
   const lobbyCarouselCards = [
     { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
     { id: 'putYourPoints', label: 'Put Your Points', image: putYourPointsTileImage },
@@ -6684,6 +6861,7 @@ function LobbyScreen({
     { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag', image: redGreenFlagTileImage },
     { id: 'compatibilityMeter', label: 'Compatibility Meter', image: compatibilityTileImage },
     { id: 'memoryLane', label: 'Memory Lane', image: memoryLaneTileImage },
+    { id: 'random', label: 'Random', image: randomTileImage },
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
 
@@ -6739,6 +6917,7 @@ function LobbyScreen({
   const isRedFlagGreenFlagTileFlipped = Boolean(flippedLobbyTiles.redFlagGreenFlag);
   const isCompatibilityMeterTileFlipped = Boolean(flippedLobbyTiles.compatibilityMeter);
   const isMemoryLaneTileFlipped = Boolean(flippedLobbyTiles.memoryLane);
+  const isRandomTileFlipped = Boolean(flippedLobbyTiles.random);
   const isHoldemTileFlipped = Boolean(flippedLobbyTiles.holdem);
   const getLobbyTileImageStyle = (imageUrl) => ({
     '--lobby-tile-image': lobbyTileImagesEnabled && imageUrl ? `url("${imageUrl}")` : 'none',
@@ -6797,6 +6976,12 @@ function LobbyScreen({
       howItWorks: 'A mix of new memory prompts and recall rounds based on things already answered in the app. Memory prompts use answer-and-guess; recall rounds ask players to identify a past answer from options.',
       questionTypes: ['Text Answer', 'Open Answer', 'Fill in the Blank', 'Multiple Choice', 'Numeric', 'Ranked / Top 3', 'Favourite', 'Rating', 'True or False'],
       categories: ['Us / Relationship Memories', 'Earliest Memories', 'Childhood', 'Achievements', 'Embarrassments', 'Firsts', 'Funny Moments', 'Family', 'Friends', 'School', 'Work', 'Travel', 'Milestones', 'Songs / Places / Food', 'Forgotten Details'],
+    },
+    random: {
+      name: 'Surprise Me',
+      howItWorks: 'Set how many questions you want and hit Surprise Me. The lobby flicks through the available game modes, lands on one, and launches that mode for you.',
+      questionTypes: ['Every supported type from the chosen game'],
+      categories: ['Every supported category from the chosen game'],
     },
     holdem: {
       name: "Texas Hold'em",
@@ -6920,6 +7105,7 @@ function LobbyScreen({
     codeLabel,
     codeValue,
     onCodeChange,
+    showCodeField = true,
     questionCountValue,
     onQuestionCountChange,
     fieldNote,
@@ -6974,10 +7160,12 @@ function LobbyScreen({
             </div>
             {renderLobbyTileDetails(cardId)}
             <p className="panel-copy">{description}</p>
-            <label className="field">
-              <span>{codeLabel}</span>
-              <input value={codeValue} onChange={(event) => onCodeChange(normalizeJoinCode(event.target.value))} placeholder="Optional" />
-            </label>
+            {showCodeField ? (
+              <label className="field">
+                <span>{codeLabel}</span>
+                <input value={codeValue} onChange={(event) => onCodeChange(normalizeJoinCode(event.target.value))} placeholder="Optional" />
+              </label>
+            ) : null}
             <label className="field">
               <span>Number of Questions</span>
               <input
@@ -8100,10 +8288,31 @@ function LobbyScreen({
                     isFlipped: isMemoryLaneTileFlipped,
                   })}
 
+                  {renderSimpleLobbySetupCard({
+                    index: 9,
+                    cardId: 'random',
+                    className: 'lobby-image-tile--random',
+                    image: randomTileImage,
+                    eyebrow: 'Wildcard',
+                    title: 'Surprise Me',
+                    readyCount: randomReadyCount,
+                    description: 'Choose how many questions you want and let the lobby randomly choose the game mode for you. It can land on any game except Texas Hold’em.',
+                    codeLabel: 'Random Mode',
+                    codeValue: '',
+                    onCodeChange: () => {},
+                    showCodeField: false,
+                    questionCountValue: randomQuestionCountDraft,
+                    onQuestionCountChange: setRandomQuestionCountDraft,
+                    fieldNote: 'Cycles through Normal Game, Quick Fire Quiz, True or False, This or That, Most Likely To, Put Your Points, Red Flag Green Flag, Compatibility Meter, and Memory Lane.',
+                    createLabel: 'Surprise Me',
+                    onCreate: handleCreateRandomGame,
+                    isFlipped: isRandomTileFlipped,
+                  })}
+
                   <div
-                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(9)}`}
-                    inert={getLobbyCarouselPosition(9) !== 'center'}
-                    aria-hidden={getLobbyCarouselPosition(9) !== 'center'}
+                    className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(10)}`}
+                    inert={getLobbyCarouselPosition(10) !== 'center'}
+                    aria-hidden={getLobbyCarouselPosition(10) !== 'center'}
                   >
                     <section
                       className="panel lobby-panel lobby-panel--lobby hold-em-game-card lobby-image-tile lobby-image-tile--holdem"
@@ -9567,6 +9776,16 @@ function LobbyScreen({
                 )}
               </div>
             </section>
+          </div>
+        </section>
+      ) : null}
+
+      {randomLobbyPickerState ? (
+        <section className="random-lobby-picker-backdrop" role="presentation">
+          <div className="random-lobby-picker-modal" role="dialog" aria-modal="true" aria-label="Surprise game picker">
+            <span className="status-pill">Surprise Me</span>
+            <small>Picking your game...</small>
+            <strong>{randomLobbyPickerState.labels?.[randomLobbyPickerState.activeIndex] || randomLobbyPickerState.finalLabel || 'Game mode'}</strong>
           </div>
         </section>
       ) : null}

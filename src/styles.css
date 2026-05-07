@@ -634,6 +634,10 @@ button:disabled {
   --lobby-tile-position: center 18%;
 }
 
+.lobby-image-tile--random {
+  --lobby-tile-position: center 18%;
+}
+
 .lobby-image-tile--holdem {
   --lobby-tile-position: center 20%;
 }
@@ -690,6 +694,49 @@ button:disabled {
 .lobby-carousel-dot.is-active {
   width: 26px;
   background: var(--accent);
+}
+
+.random-lobby-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(3, 7, 15, 0.72);
+  backdrop-filter: blur(18px);
+}
+
+.random-lobby-picker-modal {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  width: min(560px, 100%);
+  padding: 28px 24px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background:
+    radial-gradient(circle at top left, rgba(255, 215, 124, 0.18), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(72, 122, 255, 0.2), transparent 36%),
+    rgba(8, 14, 28, 0.94);
+  box-shadow:
+    0 30px 60px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  text-align: center;
+}
+
+.random-lobby-picker-modal small {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.random-lobby-picker-modal strong {
+  color: #fff;
+  font-size: clamp(2rem, 6vw, 4.4rem);
+  line-height: 1.05;
 }
 
 .lobby-chat-card {
