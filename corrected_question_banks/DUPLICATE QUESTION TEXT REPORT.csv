@@ -1,0 +1,558 @@
+Sheet,Duplicate Count,Rows,Question,Question Type,Category
+Questions,3,602 | 936 | 1383,Who is more likely to want a quickie?,Multiple Choice,Sexual
+Questions,2,1147 | 1272,"Rank these from most to least important after sex: cuddles, reassurance, jokes, sleep",Sort Into Order,Sexual
+Questions,2,608 | 1386,Rank your top 3 biggest turn-ons.,Ranked / Top 3,Sexual
+Questions,2,18 | 1421,Rank your top 3 dream holiday destinations.,Ranked / Top 3,Travel
+Questions,2,1077 | 1242,Rate from 1 to 10: how dominant is Kim when she wants to be?,Rating,Sexual
+Questions,2,1120 | 1248,Rate from 1 to 10: how likely is one look to start trouble?,Rating,Sexual
+Questions,2,5 | 1406,What age did you have your first kiss?,Numeric,Childhood
+Questions,2,19 | 1505,What celebrity would you want to have dinner with?,Text Answer,Celebrities
+Questions,2,3 | 1378,What do you think my biggest turn-on is?,Text Answer,Sexual
+Questions,2,6 | 1416,What do you think my dream holiday looks like?,Text Answer,Travel
+Questions,2,14 | 1399,What do you think my favourite movie is?,Text Answer,Films & TV
+Questions,2,11 | 1465,What do you think my ideal date night is?,Text Answer,Romance
+Questions,2,10 | 1456,What is one thing you think I overthink?,Text Answer,Personality
+Questions,2,17 | 1380,What is the sexiest thing I do without trying?,Text Answer,Sexual
+Questions,2,58 | 1612,What is your biggest driving pet peeve?,Text Answer,Cars & Driving
+Questions,2,16 | 1495,What is your biggest pet peeve about me?,Pet Peeve,Pet Peeves
+Questions,2,21 | 1515,What is your favorite memory of us?,Text Answer,Memories
+Questions,2,44 | 1613,What is your favourite holiday tradition?,Favourite,Holidays
+Questions,2,2 | 1376,What is your favourite sex position?,Favourite,Sexual
+Questions,2,39 | 1626,What is your favourite sport to watch?,Favourite,Sports
+Questions,2,13 | 1485,What is your go-to comfort food?,Favourite,Food & Drink
+Questions,2,9 | 1446,What is your most embarrassing drunk moment?,Text Answer,Embarrassing Moments
+Questions,2,8 | 1436,What outfit do you think suits me best?,Text Answer,Fashion & Style
+Questions,2,12 | 1475,What song always makes you think of me?,Text Answer,Music
+Questions,2,4 | 1398,Who is more likely to cry during a film?,Multiple Choice,Films & TV
+Questions,2,15 | 1419,Who is more likely to fall asleep first on a road trip?,Multiple Choice,Travel
+Questions,2,956 | 1355,Who is more likely to make the other beg for attention?,Multiple Choice,Sexual
+Questions,2,20 | 1477,Who is more likely to start a karaoke session?,Multiple Choice,Music
+Questions,2,597 | 925,Who is more likely to suggest trying something new in bed?,Multiple Choice,Sexual
+Questions,2,934 | 1393,Who is more likely to talk dirty first?,Multiple Choice,Sexual
+Questions,2,976 | 1370,Would you rather be surprised with lingerie or surprise the other with it?,Preference,Sexual
+Questions,2,964 | 1385,Would you rather be teased all day or surprised at night?,Preference,Sexual
+Questions,2,7 | 1426,Would you rather give up social media or alcohol?,Preference,Lifestyle
+Questions,2,965 | 1394,Would you rather have lights on or lights off?,Preference,Sexual
+Questions,2,981 | 1011,Would you rather make the other blush or be made to blush?,Preference,Sexual
+Put Your Money Where Your Mouth Is,2,35 | 44,True or false: I check my phone too much.,True or False,Technology
+Put Your Money Where Your Mouth Is,2,36 | 46,True or false: I could eat pizza every week.,True or False,Food
+Put Your Money Where Your Mouth Is,2,37 | 45,True or false: I enjoy planning holidays.,True or False,Travel
+Put Your Money Where Your Mouth Is,2,34 | 43,True or false: I would rather stay home than go clubbing.,True or False,Social
+Most Like To,2,88 | 177,Who is most likely to notice when someone needs encouragement?,Multiple Choice,Connection
+This or That,10,44 | 149 | 254 | 359 | 464 | 569 | 674 | 779 | 884 | 989,Ancient ruins or modern skyline?,Preference,Travel
+This or That,10,42 | 147 | 252 | 357 | 462 | 567 | 672 | 777 | 882 | 987,Backpacking or luxury resort?,Preference,Travel
+This or That,10,37 | 142 | 247 | 352 | 457 | 562 | 667 | 772 | 877 | 982,Beach or city break?,Preference,Travel
+This or That,10,21 | 126 | 231 | 336 | 441 | 546 | 651 | 756 | 861 | 966,Being in control or letting go?,Preference,Sexual
+This or That,10,13 | 118 | 223 | 328 | 433 | 538 | 643 | 748 | 853 | 958,Blindfold or ice cubes?,Preference,Sexual
+This or That,10,53 | 158 | 263 | 368 | 473 | 578 | 683 | 788 | 893 | 998,Breakfast in bed or midnight snack?,Preference,Food & Drink
+This or That,10,46 | 151 | 256 | 361 | 466 | 571 | 676 | 781 | 886 | 991,Camping under the stars or glamping?,Preference,Travel
+This or That,10,3 | 108 | 213 | 318 | 423 | 528 | 633 | 738 | 843 | 948,Candlelit dinner or breakfast in bed?,Preference,Sexual
+This or That,10,34 | 139 | 244 | 349 | 454 | 559 | 664 | 769 | 874 | 979,Candlelit dinner or spontaneous road trip?,Preference,Romance
+This or That,10,51 | 156 | 261 | 366 | 471 | 576 | 681 | 786 | 891 | 996,Chocolate or vanilla?,Preference,Food & Drink
+This or That,10,15 | 120 | 225 | 330 | 435 | 540 | 645 | 750 | 855 | 960,Chocolate sauce or whipped cream?,Preference,Sexual
+This or That,10,50 | 155 | 260 | 365 | 470 | 575 | 680 | 785 | 890 | 995,Coffee date or brunch date?,Preference,Food & Drink
+This or That,10,35 | 140 | 245 | 350 | 455 | 560 | 665 | 770 | 875 | 980,Couple’s spa day or cooking together?,Preference,Romance
+This or That,10,39 | 144 | 249 | 354 | 459 | 564 | 669 | 774 | 879 | 984,Cultural tour or adventure holiday?,Preference,Travel
+This or That,10,31 | 136 | 241 | 346 | 451 | 556 | 661 | 766 | 871 | 976,Dancing under the stars or cuddling on the couch?,Preference,Romance
+This or That,10,5 | 110 | 215 | 320 | 425 | 530 | 635 | 740 | 845 | 950,Dirty talk or romantic whispers?,Preference,Sexual
+This or That,10,2 | 107 | 212 | 317 | 422 | 527 | 632 | 737 | 842 | 947,Dominant or submissive?,Preference,Sexual
+This or That,10,25 | 130 | 235 | 340 | 445 | 550 | 655 | 760 | 865 | 970,Flirting in public or whispering in private?,Preference,Sexual
+This or That,10,22 | 127 | 232 | 337 | 442 | 547 | 652 | 757 | 862 | 967,Foreplay or afterplay?,Preference,Sexual
+This or That,10,14 | 119 | 224 | 329 | 434 | 539 | 644 | 749 | 854 | 959,Handcuffs or silk tie?,Preference,Sexual
+This or That,10,30 | 135 | 240 | 345 | 450 | 555 | 660 | 765 | 870 | 975,Holding hands or hugging tight?,Preference,Romance
+This or That,10,49 | 154 | 259 | 364 | 469 | 574 | 679 | 784 | 889 | 994,Home-cooked meal or fancy restaurant?,Preference,Food & Drink
+This or That,10,54 | 159 | 264 | 369 | 474 | 579 | 684 | 789 | 894 | 999,Hot and spicy or rich and creamy?,Preference,Food & Drink
+This or That,10,12 | 117 | 222 | 327 | 432 | 537 | 642 | 747 | 852 | 957,Lingerie or cosy pyjamas?,Preference,Sexual
+This or That,10,33 | 138 | 243 | 348 | 453 | 558 | 663 | 768 | 873 | 978,Long walk on the beach or cosy movie night?,Preference,Romance
+This or That,10,28 | 133 | 238 | 343 | 448 | 553 | 658 | 763 | 868 | 973,Love note or love song?,Preference,Romance
+This or That,10,11 | 116 | 221 | 326 | 431 | 536 | 641 | 746 | 851 | 956,Massage or cuddle session?,Preference,Sexual
+This or That,10,8 | 113 | 218 | 323 | 428 | 533 | 638 | 743 | 848 | 953,Morning intimacy or late-night passion?,Preference,Sexual
+This or That,10,38 | 143 | 248 | 353 | 458 | 563 | 668 | 773 | 878 | 983,Mountains or desert?,Preference,Travel
+This or That,10,52 | 157 | 262 | 367 | 472 | 577 | 682 | 787 | 892 | 997,Pizza night or sushi night?,Preference,Food & Drink
+This or That,10,7 | 112 | 217 | 322 | 427 | 532 | 637 | 742 | 847 | 952,Public flirt or private affection?,Preference,Sexual
+This or That,10,10 | 115 | 220 | 325 | 430 | 535 | 640 | 745 | 850 | 955,Quick make-out or long make-out session?,Preference,Sexual
+This or That,10,56 | 161 | 266 | 371 | 476 | 581 | 686 | 791 | 896 | 1001,Red wine or white wine?,Preference,Food & Drink
+This or That,10,40 | 145 | 250 | 355 | 460 | 565 | 670 | 775 | 880 | 985,Road trip or cruise?,Preference,Travel
+This or That,10,16 | 121 | 226 | 331 | 436 | 541 | 646 | 751 | 856 | 961,Roleplay or costumes?,Preference,Sexual
+This or That,10,32 | 137 | 242 | 347 | 452 | 557 | 662 | 767 | 872 | 977,Saying i love you or showing it?,Preference,Romance
+This or That,10,23 | 128 | 233 | 338 | 443 | 548 | 653 | 758 | 863 | 968,Secret fantasies or shared fantasies?,Preference,Sexual
+This or That,10,24 | 129 | 234 | 339 | 444 | 549 | 654 | 759 | 864 | 969,Sensual massage oil or candles?,Preference,Sexual
+This or That,10,18 | 123 | 228 | 333 | 438 | 543 | 648 | 753 | 858 | 963,Shower fun or bath together?,Preference,Sexual
+This or That,10,36 | 141 | 246 | 351 | 456 | 561 | 666 | 771 | 876 | 981,Slow dance or playful karaoke?,Preference,Romance
+This or That,10,4 | 109 | 214 | 319 | 424 | 529 | 634 | 739 | 844 | 949,Slow sensual kiss or playful peck?,Preference,Sexual
+This or That,10,26 | 131 | 236 | 341 | 446 | 551 | 656 | 761 | 866 | 971,Slow undressing or ripped clothes?,Preference,Sexual
+This or That,10,20 | 125 | 230 | 335 | 440 | 545 | 650 | 755 | 860 | 965,Soft moans or loud moans?,Preference,Sexual
+This or That,10,45 | 150 | 255 | 360 | 465 | 570 | 675 | 780 | 885 | 990,Spa retreat or ski trip?,Preference,Travel
+This or That,10,19 | 124 | 229 | 334 | 439 | 544 | 649 | 754 | 859 | 964,Sunrise cuddle or sunset kiss?,Preference,Sexual
+This or That,10,43 | 148 | 253 | 358 | 463 | 568 | 673 | 778 | 883 | 988,Sunrise hike or sunset boat ride?,Preference,Travel
+This or That,10,27 | 132 | 237 | 342 | 447 | 552 | 657 | 762 | 867 | 972,Sunset picnic or stargazing?,Preference,Romance
+This or That,10,29 | 134 | 239 | 344 | 449 | 554 | 659 | 764 | 869 | 974,Surprise getaway or surprise gift?,Preference,Romance
+This or That,10,17 | 122 | 227 | 332 | 437 | 542 | 647 | 752 | 857 | 962,Sweet compliments or naughty compliments?,Preference,Sexual
+This or That,10,47 | 152 | 257 | 362 | 467 | 572 | 677 | 782 | 887 | 992,Sweet dessert or savoury snack?,Preference,Food & Drink
+This or That,10,55 | 160 | 265 | 370 | 475 | 580 | 685 | 790 | 895 | 1000,Takeout or homemade?,Preference,Food & Drink
+This or That,10,6 | 111 | 216 | 321 | 426 | 531 | 636 | 741 | 846 | 951,Tease or be teased?,Preference,Sexual
+This or That,10,41 | 146 | 251 | 356 | 461 | 566 | 671 | 776 | 881 | 986,Tropical island or snowy cabin?,Preference,Travel
+This or That,10,9 | 114 | 219 | 324 | 429 | 534 | 639 | 744 | 849 | 954,Whisper in your ear or bite your lip?,Preference,Sexual
+This or That,10,48 | 153 | 258 | 363 | 468 | 573 | 678 | 783 | 888 | 993,Wine or cocktail?,Preference,Food & Drink
+This or That,9,104 | 209 | 314 | 419 | 524 | 629 | 734 | 839 | 944,Always hot or always cold?,Preference,Random / Wildcard
+This or That,9,102 | 207 | 312 | 417 | 522 | 627 | 732 | 837 | 942,Be able to read minds or talk to animals?,Preference,Random / Wildcard
+This or That,9,82 | 187 | 292 | 397 | 502 | 607 | 712 | 817 | 922,Book smart or street smart?,Preference,Personality
+This or That,9,84 | 189 | 294 | 399 | 504 | 609 | 714 | 819 | 924,Calm or energetic?,Preference,Personality
+This or That,9,74 | 179 | 284 | 389 | 494 | 599 | 704 | 809 | 914,Classic film or new release?,Preference,Films & TV
+This or That,9,92 | 197 | 302 | 407 | 512 | 617 | 722 | 827 | 932,Coffee first or tea first?,Preference,Habits
+This or That,9,85 | 190 | 295 | 400 | 505 | 610 | 715 | 820 | 925,Creative or analytical?,Preference,Personality
+This or That,9,62 | 167 | 272 | 377 | 482 | 587 | 692 | 797 | 902,Cuddling on the couch or dancing at a club?,Preference,Lifestyle
+This or That,9,70 | 175 | 280 | 385 | 490 | 595 | 700 | 805 | 910,Dance party or singalong?,Preference,Films & TV
+This or That,9,65 | 170 | 275 | 380 | 485 | 590 | 695 | 800 | 905,Dog person or cat person?,Preference,Lifestyle
+This or That,9,83 | 188 | 293 | 398 | 503 | 608 | 713 | 818 | 923,Dreamer or doer?,Preference,Personality
+This or That,9,90 | 195 | 300 | 405 | 510 | 615 | 720 | 825 | 930,Dressing up or dressing down?,Preference,Habits
+This or That,9,57 | 162 | 267 | 372 | 477 | 582 | 687 | 792 | 897,Early bird or night owl?,Preference,Lifestyle
+This or That,9,87 | 192 | 297 | 402 | 507 | 612 | 717 | 822 | 927,Early shower or late shower?,Preference,Habits
+This or That,9,76 | 181 | 286 | 391 | 496 | 601 | 706 | 811 | 916,Film festival or music festival?,Preference,Films & TV
+This or That,9,95 | 200 | 305 | 410 | 515 | 620 | 725 | 830 | 935,Fresh flowers or scented candles?,Preference,Habits
+This or That,9,73 | 178 | 283 | 388 | 493 | 598 | 703 | 808 | 913,Game night or trivia night?,Preference,Films & TV
+This or That,9,98 | 203 | 308 | 413 | 518 | 623 | 728 | 833 | 938,Gift of flight or gift of invisibility?,Preference,Random / Wildcard
+This or That,9,106 | 211 | 316 | 421 | 526 | 631 | 736 | 841 | 946,Have a pause button or rewind button?,Preference,Random / Wildcard
+This or That,9,88 | 193 | 298 | 403 | 508 | 613 | 718 | 823 | 928,Healthy breakfast or skip breakfast?,Preference,Habits
+This or That,9,72 | 177 | 282 | 387 | 492 | 597 | 702 | 807 | 912,Horror movie or documentary?,Preference,Films & TV
+This or That,9,103 | 208 | 313 | 418 | 523 | 628 | 733 | 838 | 943,Infinite knowledge or infinite wealth?,Preference,Random / Wildcard
+This or That,9,77 | 182 | 287 | 392 | 497 | 602 | 707 | 812 | 917,Introvert or extrovert?,Preference,Personality
+This or That,9,75 | 180 | 285 | 390 | 495 | 600 | 705 | 810 | 915,Karaoke bar or open mic?,Preference,Films & TV
+This or That,9,80 | 185 | 290 | 395 | 500 | 605 | 710 | 815 | 920,Leader or follower?,Preference,Personality
+This or That,9,79 | 184 | 289 | 394 | 499 | 604 | 709 | 814 | 919,Listener or talker?,Preference,Personality
+This or That,9,101 | 206 | 311 | 416 | 521 | 626 | 731 | 836 | 941,Live by the ocean or live in the forest?,Preference,Random / Wildcard
+This or That,9,69 | 174 | 279 | 384 | 489 | 594 | 699 | 804 | 909,Live concert or quiet playlist?,Preference,Films & TV
+This or That,9,96 | 201 | 306 | 411 | 516 | 621 | 726 | 831 | 936,Meal prep or spontaneous cooking?,Preference,Habits
+This or That,9,93 | 198 | 303 | 408 | 513 | 618 | 723 | 828 | 933,Morning person or night person?,Preference,Habits
+This or That,9,63 | 168 | 273 | 378 | 483 | 588 | 693 | 798 | 903,Morning workout or evening workout?,Preference,Lifestyle
+This or That,9,60 | 165 | 270 | 375 | 480 | 585 | 690 | 795 | 900,Mountain biking or yoga class?,Preference,Lifestyle
+This or That,9,59 | 164 | 269 | 374 | 479 | 584 | 689 | 794 | 899,Neat freak or a little messy?,Preference,Lifestyle
+This or That,9,78 | 183 | 288 | 393 | 498 | 603 | 708 | 813 | 918,Optimist or realist?,Preference,Personality
+This or That,9,81 | 186 | 291 | 396 | 501 | 606 | 711 | 816 | 921,Organized or spontaneous?,Preference,Personality
+This or That,9,86 | 191 | 296 | 401 | 506 | 611 | 716 | 821 | 926,Patient or impulsive?,Preference,Personality
+This or That,9,58 | 163 | 268 | 373 | 478 | 583 | 688 | 793 | 898,Planner or spontaneous?,Preference,Lifestyle
+This or That,9,94 | 199 | 304 | 409 | 514 | 619 | 724 | 829 | 934,Planning ahead or last minute?,Preference,Habits
+This or That,9,64 | 169 | 274 | 379 | 484 | 589 | 694 | 799 | 904,Reading books or watching movies?,Preference,Lifestyle
+This or That,9,97 | 202 | 307 | 412 | 517 | 622 | 727 | 832 | 937,Rich and lonely or poor and loved?,Preference,Random / Wildcard
+This or That,9,67 | 172 | 277 | 382 | 487 | 592 | 697 | 802 | 907,Rom-com or thriller?,Preference,Films & TV
+This or That,9,105 | 210 | 315 | 420 | 525 | 630 | 735 | 840 | 945,See the future or change the past?,Preference,Random / Wildcard
+This or That,9,68 | 173 | 278 | 383 | 488 | 593 | 698 | 803 | 908,Series binge or movie night?,Preference,Films & TV
+This or That,9,66 | 171 | 276 | 381 | 486 | 591 | 696 | 801 | 906,Social butterfly or homebody?,Preference,Lifestyle
+This or That,9,71 | 176 | 281 | 386 | 491 | 596 | 701 | 806 | 911,Stand-up comedy or drama film?,Preference,Films & TV
+This or That,9,61 | 166 | 271 | 376 | 481 | 586 | 691 | 796 | 901,Staying in or going out?,Preference,Lifestyle
+This or That,9,89 | 194 | 299 | 404 | 509 | 614 | 719 | 824 | 929,Texting or calling?,Preference,Habits
+This or That,9,91 | 196 | 301 | 406 | 511 | 616 | 721 | 826 | 931,Tidy desk or messy desk?,Preference,Habits
+This or That,9,99 | 204 | 309 | 414 | 519 | 624 | 729 | 834 | 939,Time travel to past or future?,Preference,Random / Wildcard
+This or That,9,100 | 205 | 310 | 415 | 520 | 625 | 730 | 835 | 940,Win the lottery or find true love?,Preference,Random / Wildcard
+Quiz,3,139 | 1347 | 2140,What is the capital of Argentina?,Text Answer,Geography
+Quiz,3,14 | 727 | 2152,What is the capital of Australia?,Text Answer,Geography
+Quiz,3,100 | 1462 | 2156,What is the capital of Austria?,Text Answer,Geography
+Quiz,3,197 | 358 | 2212,What is the capital of Brazil?,Text Answer,Geography
+Quiz,3,106 | 519 | 2244,What is the capital of Canada?,Text Answer,Geography
+Quiz,3,59 | 323 | 2268,What is the capital of China?,Text Answer,Geography
+Quiz,3,27 | 1241 | 2316,What is the capital of Denmark?,Text Answer,Geography
+Quiz,3,128 | 735 | 2340,What is the capital of Egypt?,Text Answer,Geography
+Quiz,3,248 | 364 | 2380,What is the capital of Finland?,Text Answer,Geography
+Quiz,3,119 | 439 | 2384,What is the capital of France?,Text Answer,Geography
+Quiz,3,2 | 612 | 2408,What is the capital of Germany?,Text Answer,Geography
+Quiz,3,38 | 1141 | 2420,What is the capital of Greece?,Text Answer,Geography
+Quiz,3,242 | 601 | 2480,What is the capital of India?,Text Answer,Geography
+Quiz,3,13 | 1168 | 2508,What is the capital of Italy?,Text Answer,Geography
+Quiz,3,75 | 1399 | 2520,What is the capital of Japan?,Text Answer,Geography
+Quiz,3,176 | 1512 | 2536,What is the capital of Kenya?,Text Answer,Geography
+Quiz,3,229 | 545 | 2632,What is the capital of Mexico?,Text Answer,Geography
+Quiz,3,226 | 1180 | 2672,What is the capital of Netherlands?,Text Answer,Geography
+Quiz,3,205 | 437 | 2692,What is the capital of Nigeria?,Text Answer,Geography
+Quiz,3,239 | 1000 | 2712,What is the capital of Norway?,Text Answer,Geography
+Quiz,3,213 | 655 | 2756,What is the capital of Portugal?,Text Answer,Geography
+Quiz,3,12 | 247 | 1768,What is the center of an atom called?,Text Answer,Nature
+Quiz,2,77 | 891,Bananas grow on trees.,True or False,Food
+Quiz,2,151 | 1622,Bats are blind.,True or False,Animals
+Quiz,2,1821 | 1869,Choose the word closest in meaning to bright.,Multiple Choice,Language
+Quiz,2,1817 | 1895,Choose the word closest in meaning to cold.,Multiple Choice,Language
+Quiz,2,1823 | 1871,Choose the word closest in meaning to dark.,Multiple Choice,Language
+Quiz,2,1805 | 1873,Choose the word closest in meaning to fast.,Multiple Choice,Language
+Quiz,2,1801 | 1877,Choose the word closest in meaning to happy.,Multiple Choice,Language
+Quiz,2,1845 | 1899,Choose the word closest in meaning to old.,Multiple Choice,Language
+Quiz,2,1803 | 1879,Choose the word closest in meaning to sad.,Multiple Choice,Language
+Quiz,2,1807 | 1875,Choose the word closest in meaning to slow.,Multiple Choice,Language
+Quiz,2,1813 | 1881,Choose the word closest in meaning to smart.,Multiple Choice,Language
+Quiz,2,1829 | 1865,Choose the word closest in meaning to strong.,Multiple Choice,Language
+Quiz,2,1831 | 1867,Choose the word closest in meaning to weak.,Multiple Choice,Language
+Quiz,2,53 | 1494,Honey never spoils.,True or False,Food
+Quiz,2,3216 | 3400,In which country is the city of Kingston located?,Text Answer,Cities
+Quiz,2,3217 | 3401,Kingston is the capital of which country?,Text Answer,Cities
+Quiz,2,3219 | 3403,Kingston serves as the capital of which country?,Text Answer,Cities
+Quiz,2,149 | 1135,Lightning never strikes the same place twice.,True or False,Nature
+Quiz,2,225 | 1368,Octopuses have three hearts.,True or False,Animals
+Quiz,2,104 | 695,Sharks are mammals.,True or False,Animals
+Quiz,2,214 | 1749,What color do you get when you mix red and white?,Text Answer,Everyday Facts
+Quiz,2,201 | 1763,What force keeps us on the ground?,Text Answer,Nature
+Quiz,2,90 | 1760,What gas do plants absorb from the atmosphere?,Text Answer,Nature
+Quiz,2,1822 | 1870,What is another word for bright?,Text Answer,Language
+Quiz,2,1818 | 1896,What is another word for cold?,Text Answer,Language
+Quiz,2,1824 | 1872,What is another word for dark?,Text Answer,Language
+Quiz,2,1806 | 1874,What is another word for fast?,Text Answer,Language
+Quiz,2,1802 | 1878,What is another word for happy?,Text Answer,Language
+Quiz,2,1804 | 1880,What is another word for sad?,Text Answer,Language
+Quiz,2,1808 | 1876,What is another word for slow?,Text Answer,Language
+Quiz,2,1814 | 1882,What is another word for smart?,Text Answer,Language
+Quiz,2,1830 | 1866,What is another word for strong?,Text Answer,Language
+Quiz,2,1832 | 1868,What is another word for weak?,Text Answer,Language
+Quiz,2,1152 | 2112,What is the capital of Afghanistan?,Multiple Choice,Geography
+Quiz,2,431 | 2116,What is the capital of Albania?,Multiple Choice,Geography
+Quiz,2,604 | 2120,What is the capital of Algeria?,Multiple Choice,Geography
+Quiz,2,1445 | 2124,What is the capital of American Samoa?,Multiple Choice,Geography
+Quiz,2,1143 | 2128,What is the capital of Angola?,Multiple Choice,Geography
+Quiz,2,850 | 2132,What is the capital of Anguilla?,Multiple Choice,Geography
+Quiz,2,574 | 2136,What is the capital of Antigua and Barbuda?,Multiple Choice,Geography
+Quiz,2,637 | 2144,What is the capital of Armenia?,Multiple Choice,Geography
+Quiz,2,542 | 2148,What is the capital of Aruba?,Multiple Choice,Geography
+Quiz,2,863 | 2160,What is the capital of Azerbaijan?,Multiple Choice,Geography
+Quiz,2,1020 | 2164,What is the capital of Bahrain?,Multiple Choice,Geography
+Quiz,2,1497 | 2168,What is the capital of Bangladesh?,Multiple Choice,Geography
+Quiz,2,1075 | 2172,What is the capital of Barbados?,Multiple Choice,Geography
+Quiz,2,1404 | 2176,What is the capital of Belarus?,Multiple Choice,Geography
+Quiz,2,1349 | 2180,What is the capital of Belgium?,Multiple Choice,Geography
+Quiz,2,1208 | 2184,What is the capital of Belize?,Multiple Choice,Geography
+Quiz,2,1572 | 2188,What is the capital of Benin?,Multiple Choice,Geography
+Quiz,2,329 | 2192,What is the capital of Bermuda?,Multiple Choice,Geography
+Quiz,2,1611 | 2196,What is the capital of Bhutan?,Multiple Choice,Geography
+Quiz,2,307 | 2204,What is the capital of Bosnia and Herzegovina?,Multiple Choice,Geography
+Quiz,2,1124 | 2208,What is the capital of Botswana?,Multiple Choice,Geography
+Quiz,2,607 | 2216,What is the capital of British Indian Ocean Territory?,Multiple Choice,Geography
+Quiz,2,994 | 2224,What is the capital of Bulgaria?,Multiple Choice,Geography
+Quiz,2,1397 | 2228,What is the capital of Burkina Faso?,Multiple Choice,Geography
+Quiz,2,1500 | 2232,What is the capital of Burundi?,Multiple Choice,Geography
+Quiz,2,1449 | 2236,What is the capital of Cambodia?,Multiple Choice,Geography
+Quiz,2,1501 | 2240,What is the capital of Cameroon?,Multiple Choice,Geography
+Quiz,2,1216 | 2252,What is the capital of Cayman Islands?,Multiple Choice,Geography
+Quiz,2,1439 | 2256,What is the capital of Central African Republic?,Multiple Choice,Geography
+Quiz,2,667 | 2260,What is the capital of Chad?,Multiple Choice,Geography
+Quiz,2,1126 | 2264,What is the capital of Chile?,Multiple Choice,Geography
+Quiz,2,820 | 2272,What is the capital of Christmas Island?,Multiple Choice,Geography
+Quiz,2,988 | 2276,What is the capital of Cocos (Keeling) Islands?,Multiple Choice,Geography
+Quiz,2,1532 | 2280,What is the capital of Colombia?,Multiple Choice,Geography
+Quiz,2,989 | 2284,What is the capital of Comoros?,Multiple Choice,Geography
+Quiz,2,707 | 2288,What is the capital of Cook Islands?,Multiple Choice,Geography
+Quiz,2,1551 | 2292,What is the capital of Costa Rica?,Multiple Choice,Geography
+Quiz,2,724 | 2296,What is the capital of Croatia?,Multiple Choice,Geography
+Quiz,2,1066 | 2300,What is the capital of Cuba?,Multiple Choice,Geography
+Quiz,2,1114 | 2304,What is the capital of Cyprus?,Multiple Choice,Geography
+Quiz,2,1022 | 2320,What is the capital of Djibouti?,Multiple Choice,Geography
+Quiz,2,1127 | 2324,What is the capital of Dominica?,Multiple Choice,Geography
+Quiz,2,270 | 2328,What is the capital of Dominican Republic?,Multiple Choice,Geography
+Quiz,2,1031 | 2336,What is the capital of Ecuador?,Multiple Choice,Geography
+Quiz,2,1496 | 2344,What is the capital of El Salvador?,Multiple Choice,Geography
+Quiz,2,952 | 2348,What is the capital of Equatorial Guinea?,Multiple Choice,Geography
+Quiz,2,833 | 2352,What is the capital of Eritrea?,Multiple Choice,Geography
+Quiz,2,1169 | 2356,What is the capital of Estonia?,Multiple Choice,Geography
+Quiz,2,1490 | 2360,What is the capital of Ethiopia?,Multiple Choice,Geography
+Quiz,2,803 | 2368,What is the capital of Faroe Islands?,Multiple Choice,Geography
+Quiz,2,280 | 2376,What is the capital of Fiji?,Multiple Choice,Geography
+Quiz,2,385 | 2388,What is the capital of French Guiana?,Multiple Choice,Geography
+Quiz,2,1172 | 2392,What is the capital of French Polynesia?,Multiple Choice,Geography
+Quiz,2,681 | 2400,What is the capital of Gabon?,Multiple Choice,Geography
+Quiz,2,1398 | 2404,What is the capital of Georgia?,Multiple Choice,Geography
+Quiz,2,1037 | 2412,What is the capital of Ghana?,Multiple Choice,Geography
+Quiz,2,1179 | 2416,What is the capital of Gibraltar?,Multiple Choice,Geography
+Quiz,2,1072 | 2424,What is the capital of Greenland?,Multiple Choice,Geography
+Quiz,2,1631 | 2428,What is the capital of Grenada?,Multiple Choice,Geography
+Quiz,2,589 | 2432,What is the capital of Guadeloupe?,Multiple Choice,Geography
+Quiz,2,932 | 2436,What is the capital of Guam?,Multiple Choice,Geography
+Quiz,2,1600 | 2440,What is the capital of Guatemala?,Multiple Choice,Geography
+Quiz,2,532 | 2444,What is the capital of Guernsey?,Multiple Choice,Geography
+Quiz,2,979 | 2452,What is the capital of Guinea-Bissau?,Multiple Choice,Geography
+Quiz,2,314 | 2448,What is the capital of Guinea?,Multiple Choice,Geography
+Quiz,2,1345 | 2456,What is the capital of Guyana?,Multiple Choice,Geography
+Quiz,2,1508 | 2460,What is the capital of Haiti?,Multiple Choice,Geography
+Quiz,2,355 | 2464,What is the capital of Honduras?,Multiple Choice,Geography
+Quiz,2,362 | 2468,What is the capital of Hong Kong?,Multiple Choice,Geography
+Quiz,2,317 | 2472,What is the capital of Hungary?,Multiple Choice,Geography
+Quiz,2,558 | 2476,What is the capital of Iceland?,Multiple Choice,Geography
+Quiz,2,1473 | 2484,What is the capital of Indonesia?,Multiple Choice,Geography
+Quiz,2,1144 | 2492,What is the capital of Iraq?,Multiple Choice,Geography
+Quiz,2,1436 | 2496,What is the capital of Ireland?,Multiple Choice,Geography
+Quiz,2,310 | 2500,What is the capital of Isle of Man?,Multiple Choice,Geography
+Quiz,2,458 | 2504,What is the capital of Israel?,Multiple Choice,Geography
+Quiz,2,1238 | 2516,What is the capital of Jamaica?,Multiple Choice,Geography
+Quiz,2,342 | 2524,What is the capital of Jersey?,Multiple Choice,Geography
+Quiz,2,1401 | 2528,What is the capital of Jordan?,Multiple Choice,Geography
+Quiz,2,1300 | 2532,What is the capital of Kazakhstan?,Multiple Choice,Geography
+Quiz,2,400 | 2540,What is the capital of Kiribati?,Multiple Choice,Geography
+Quiz,2,450 | 2544,What is the capital of Kuwait?,Multiple Choice,Geography
+Quiz,2,508 | 2548,What is the capital of Kyrgyzstan?,Multiple Choice,Geography
+Quiz,2,673 | 2556,What is the capital of Latvia?,Multiple Choice,Geography
+Quiz,2,1132 | 2560,What is the capital of Lebanon?,Multiple Choice,Geography
+Quiz,2,345 | 2564,What is the capital of Lesotho?,Multiple Choice,Geography
+Quiz,2,748 | 2568,What is the capital of Liberia?,Multiple Choice,Geography
+Quiz,2,1406 | 2572,What is the capital of Libya?,Multiple Choice,Geography
+Quiz,2,335 | 2576,What is the capital of Liechtenstein?,Multiple Choice,Geography
+Quiz,2,698 | 2580,What is the capital of Lithuania?,Multiple Choice,Geography
+Quiz,2,368 | 2584,What is the capital of Luxembourg?,Multiple Choice,Geography
+Quiz,2,766 | 2588,What is the capital of Madagascar?,Multiple Choice,Geography
+Quiz,2,1232 | 2592,What is the capital of Malawi?,Multiple Choice,Geography
+Quiz,2,576 | 2600,What is the capital of Maldives?,Multiple Choice,Geography
+Quiz,2,1624 | 2604,What is the capital of Mali?,Multiple Choice,Geography
+Quiz,2,878 | 2608,What is the capital of Malta?,Multiple Choice,Geography
+Quiz,2,1199 | 2612,What is the capital of Marshall Islands?,Multiple Choice,Geography
+Quiz,2,1282 | 2616,What is the capital of Martinique?,Multiple Choice,Geography
+Quiz,2,768 | 2620,What is the capital of Mauritania?,Multiple Choice,Geography
+Quiz,2,294 | 2624,What is the capital of Mauritius?,Multiple Choice,Geography
+Quiz,2,549 | 2628,What is the capital of Mayotte?,Multiple Choice,Geography
+Quiz,2,285 | 2640,What is the capital of Monaco?,Multiple Choice,Geography
+Quiz,2,527 | 2644,What is the capital of Mongolia?,Multiple Choice,Geography
+Quiz,2,1244 | 2648,What is the capital of Montserrat?,Multiple Choice,Geography
+Quiz,2,1338 | 2652,What is the capital of Morocco?,Multiple Choice,Geography
+Quiz,2,1309 | 2656,What is the capital of Mozambique?,Multiple Choice,Geography
+Quiz,2,1359 | 2660,What is the capital of Namibia?,Multiple Choice,Geography
+Quiz,2,658 | 2664,What is the capital of Nauru?,Multiple Choice,Geography
+Quiz,2,1472 | 2668,What is the capital of Nepal?,Multiple Choice,Geography
+Quiz,2,516 | 2676,What is the capital of New Caledonia?,Multiple Choice,Geography
+Quiz,2,908 | 2680,What is the capital of New Zealand?,Multiple Choice,Geography
+Quiz,2,1281 | 2684,What is the capital of Nicaragua?,Multiple Choice,Geography
+Quiz,2,1245 | 2688,What is the capital of Niger?,Multiple Choice,Geography
+Quiz,2,798 | 2696,What is the capital of Niue?,Multiple Choice,Geography
+Quiz,2,819 | 2700,What is the capital of Norfolk Island?,Multiple Choice,Geography
+Quiz,2,1278 | 2708,What is the capital of Northern Mariana Islands?,Multiple Choice,Geography
+Quiz,2,584 | 2716,What is the capital of Oman?,Multiple Choice,Geography
+Quiz,2,315 | 2720,What is the capital of Pakistan?,Multiple Choice,Geography
+Quiz,2,1528 | 2724,What is the capital of Palau?,Multiple Choice,Geography
+Quiz,2,636 | 2728,What is the capital of Panama?,Multiple Choice,Geography
+Quiz,2,287 | 2732,What is the capital of Papua New Guinea?,Multiple Choice,Geography
+Quiz,2,728 | 2736,What is the capital of Paraguay?,Multiple Choice,Geography
+Quiz,2,795 | 2740,What is the capital of Peru?,Multiple Choice,Geography
+Quiz,2,1580 | 2744,What is the capital of Philippines?,Multiple Choice,Geography
+Quiz,2,1420 | 2752,What is the capital of Poland?,Multiple Choice,Geography
+Quiz,2,1090 | 2760,What is the capital of Puerto Rico?,Multiple Choice,Geography
+Quiz,2,1464 | 2764,What is the capital of Qatar?,Multiple Choice,Geography
+Quiz,2,838 | 2776,What is the capital of Romania?,Multiple Choice,Geography
+Quiz,2,73 | 2780,What is the capital of Russia?,Text Answer,Geography
+Quiz,2,1320 | 2784,What is the capital of Rwanda?,Multiple Choice,Geography
+Quiz,2,1200 | 2788,What is the capital of Réunion?,Multiple Choice,Geography
+Quiz,2,267 | 2796,What is the capital of Saint Kitts and Nevis?,Multiple Choice,Geography
+Quiz,2,1069 | 2800,What is the capital of Saint Lucia?,Multiple Choice,Geography
+Quiz,2,1463 | 2804,What is the capital of Saint Pierre and Miquelon?,Multiple Choice,Geography
+Quiz,2,1627 | 2808,What is the capital of Saint Vincent and the Grenadines?,Multiple Choice,Geography
+Quiz,2,156 | 1538,What is the capital of Saudi Arabia?,Text Answer,Geography
+Quiz,2,6 | 751,What is the capital of South Africa?,Text Answer,Geography
+Quiz,2,199 | 1084,What is the capital of Spain?,Text Answer,Geography
+Quiz,2,192 | 1270,What is the capital of Sweden?,Text Answer,Geography
+Quiz,2,193 | 1147,What is the capital of Switzerland?,Text Answer,Geography
+Quiz,2,86 | 420,What is the capital of Thailand?,Text Answer,Geography
+Quiz,2,3218 | 3402,Which country does the city of Kingston belong to?,Text Answer,Cities
+Quiz,2,580 | 715,Which country has the capital Kingston?,Multiple Choice,Geography
+Quiz,2,25 | 559,Which language is primarily spoken in Austria?,Text Answer,Language
+Quiz,2,733 | 1562,Which of these words is a synonym of bright?,Multiple Choice,Language
+Quiz,2,1060 | 1176,Which of these words is a synonym of cold?,Multiple Choice,Language
+Quiz,2,268 | 722,Which of these words is a synonym of dark?,Multiple Choice,Language
+Quiz,2,403 | 1337,Which of these words is a synonym of fast?,Multiple Choice,Language
+Quiz,2,1035 | 1612,Which of these words is a synonym of happy?,Multiple Choice,Language
+Quiz,2,479 | 786,Which of these words is a synonym of old?,Multiple Choice,Language
+Quiz,2,996 | 1138,Which of these words is a synonym of sad?,Multiple Choice,Language
+Quiz,2,507 | 1601,Which of these words is a synonym of slow?,Multiple Choice,Language
+Quiz,2,449 | 1205,Which of these words is a synonym of smart?,Multiple Choice,Language
+Quiz,2,1239 | 1258,Which of these words is a synonym of strong?,Multiple Choice,Language
+Quiz,2,504 | 869,Which of these words is a synonym of weak?,Multiple Choice,Language
+Quiz,2,132 | 1764,Which planet is known as the Red Planet?,Text Answer,Nature
+Quiz,2,83 | 1767,Which planet is known for its rings?,Text Answer,Space
+True or False,13,30 | 230 | 430 | 630 | 830 | 1030 | 1230 | 1430 | 1630 | 1830 | 2030 | 2230 | 2430,Jay enjoys being unpredictable in relationships and wouldn't admit it straight away.,True or False,Personality
+True or False,13,50 | 250 | 450 | 650 | 850 | 1050 | 1250 | 1450 | 1650 | 1850 | 2050 | 2250 | 2450,Jay enjoys being unpredictable in relationships especially in the right situation.,True or False,Personality
+True or False,13,10 | 210 | 410 | 610 | 810 | 1010 | 1210 | 1410 | 1610 | 1810 | 2010 | 2210 | 2410,Jay enjoys being unpredictable in relationships even if it caused tension.,True or False,Personality
+True or False,13,90 | 290 | 490 | 690 | 890 | 1090 | 1290 | 1490 | 1690 | 1890 | 2090 | 2290 | 2490,Jay enjoys being unpredictable in relationships even if it made things complicated.,True or False,Personality
+True or False,13,70 | 270 | 470 | 670 | 870 | 1070 | 1270 | 1470 | 1670 | 1870 | 2070 | 2270 | 2470,Jay enjoys being unpredictable in relationships if they knew they wouldn't get caught.,True or False,Personality
+True or False,13,26 | 226 | 426 | 626 | 826 | 1026 | 1226 | 1426 | 1626 | 1826 | 2026 | 2226 | 2426,Jay enjoys pushing boundaries in subtle ways and wouldn't admit it straight away.,True or False,Personality
+True or False,13,46 | 246 | 446 | 646 | 846 | 1046 | 1246 | 1446 | 1646 | 1846 | 2046 | 2246 | 2446,Jay enjoys pushing boundaries in subtle ways especially in the right situation.,True or False,Personality
+True or False,13,6 | 206 | 406 | 606 | 806 | 1006 | 1206 | 1406 | 1606 | 1806 | 2006 | 2206 | 2406,Jay enjoys pushing boundaries in subtle ways even if it caused tension.,True or False,Personality
+True or False,13,86 | 286 | 486 | 686 | 886 | 1086 | 1286 | 1486 | 1686 | 1886 | 2086 | 2286 | 2486,Jay enjoys pushing boundaries in subtle ways even if it made things complicated.,True or False,Personality
+True or False,13,66 | 266 | 466 | 666 | 866 | 1066 | 1266 | 1466 | 1666 | 1866 | 2066 | 2266 | 2466,Jay enjoys pushing boundaries in subtle ways if they knew they wouldn't get caught.,True or False,Personality
+True or False,13,36 | 236 | 436 | 636 | 836 | 1036 | 1236 | 1436 | 1636 | 1836 | 2036 | 2236 | 2436,Jay enjoys teasing and creating tension and wouldn't admit it straight away.,True or False,Personality
+True or False,13,56 | 256 | 456 | 656 | 856 | 1056 | 1256 | 1456 | 1656 | 1856 | 2056 | 2256 | 2456,Jay enjoys teasing and creating tension especially in the right situation.,True or False,Personality
+True or False,13,16 | 216 | 416 | 616 | 816 | 1016 | 1216 | 1416 | 1616 | 1816 | 2016 | 2216 | 2416,Jay enjoys teasing and creating tension even if it caused tension.,True or False,Personality
+True or False,13,96 | 296 | 496 | 696 | 896 | 1096 | 1296 | 1496 | 1696 | 1896 | 2096 | 2296 | 2496,Jay enjoys teasing and creating tension even if it made things complicated.,True or False,Personality
+True or False,13,76 | 276 | 476 | 676 | 876 | 1076 | 1276 | 1476 | 1676 | 1876 | 2076 | 2276 | 2476,Jay enjoys teasing and creating tension if they knew they wouldn't get caught.,True or False,Personality
+True or False,13,32 | 232 | 432 | 632 | 832 | 1032 | 1232 | 1432 | 1632 | 1832 | 2032 | 2232 | 2432,Jay has acted more confident than they felt and wouldn't admit it straight away.,True or False,Personality
+True or False,13,52 | 252 | 452 | 652 | 852 | 1052 | 1252 | 1452 | 1652 | 1852 | 2052 | 2252 | 2452,Jay has acted more confident than they felt especially in the right situation.,True or False,Personality
+True or False,13,12 | 212 | 412 | 612 | 812 | 1012 | 1212 | 1412 | 1612 | 1812 | 2012 | 2212 | 2412,Jay has acted more confident than they felt even if it caused tension.,True or False,Personality
+True or False,13,92 | 292 | 492 | 692 | 892 | 1092 | 1292 | 1492 | 1692 | 1892 | 2092 | 2292 | 2492,Jay has acted more confident than they felt even if it made things complicated.,True or False,Personality
+True or False,13,72 | 272 | 472 | 672 | 872 | 1072 | 1272 | 1472 | 1672 | 1872 | 2072 | 2272 | 2472,Jay has acted more confident than they felt if they knew they wouldn't get caught.,True or False,Personality
+True or False,13,38 | 238 | 438 | 638 | 838 | 1038 | 1238 | 1438 | 1638 | 1838 | 2038 | 2238 | 2438,Jay has imagined a different version of their life and wouldn't admit it straight away.,True or False,Hypotheticals
+True or False,13,58 | 258 | 458 | 658 | 858 | 1058 | 1258 | 1458 | 1658 | 1858 | 2058 | 2258 | 2458,Jay has imagined a different version of their life especially in the right situation.,True or False,Hypotheticals
+True or False,13,18 | 218 | 418 | 618 | 818 | 1018 | 1218 | 1418 | 1618 | 1818 | 2018 | 2218 | 2418,Jay has imagined a different version of their life even if it caused tension.,True or False,Hypotheticals
+True or False,13,98 | 298 | 498 | 698 | 898 | 1098 | 1298 | 1498 | 1698 | 1898 | 2098 | 2298 | 2498,Jay has imagined a different version of their life even if it made things complicated.,True or False,Hypotheticals
+True or False,13,78 | 278 | 478 | 678 | 878 | 1078 | 1278 | 1478 | 1678 | 1878 | 2078 | 2278 | 2478,Jay has imagined a different version of their life if they knew they wouldn't get caught.,True or False,Hypotheticals
+True or False,13,40 | 240 | 440 | 640 | 840 | 1040 | 1240 | 1440 | 1640 | 1840 | 2040 | 2240 | 2440,Jay would break routine for excitement and wouldn't admit it straight away.,True or False,Lifestyle
+True or False,13,60 | 260 | 460 | 660 | 860 | 1060 | 1260 | 1460 | 1660 | 1860 | 2060 | 2260 | 2460,Jay would break routine for excitement especially in the right situation.,True or False,Lifestyle
+True or False,13,20 | 220 | 420 | 620 | 820 | 1020 | 1220 | 1420 | 1620 | 1820 | 2020 | 2220 | 2420,Jay would break routine for excitement even if it caused tension.,True or False,Lifestyle
+True or False,13,100 | 300 | 500 | 700 | 900 | 1100 | 1300 | 1500 | 1700 | 1900 | 2100 | 2300 | 2500,Jay would break routine for excitement even if it made things complicated.,True or False,Lifestyle
+True or False,13,80 | 280 | 480 | 680 | 880 | 1080 | 1280 | 1480 | 1680 | 1880 | 2080 | 2280 | 2480,Jay would break routine for excitement if they knew they wouldn't get caught.,True or False,Lifestyle
+True or False,13,24 | 224 | 424 | 624 | 824 | 1024 | 1224 | 1424 | 1624 | 1824 | 2024 | 2224 | 2424,Jay would flirt just to test their confidence and wouldn't admit it straight away.,True or False,Sexual
+True or False,13,44 | 244 | 444 | 644 | 844 | 1044 | 1244 | 1444 | 1644 | 1844 | 2044 | 2244 | 2444,Jay would flirt just to test their confidence especially in the right situation.,True or False,Sexual
+True or False,13,4 | 204 | 404 | 604 | 804 | 1004 | 1204 | 1404 | 1604 | 1804 | 2004 | 2204 | 2404,Jay would flirt just to test their confidence even if it caused tension.,True or False,Sexual
+True or False,13,84 | 284 | 484 | 684 | 884 | 1084 | 1284 | 1484 | 1684 | 1884 | 2084 | 2284 | 2484,Jay would flirt just to test their confidence even if it made things complicated.,True or False,Sexual
+True or False,13,64 | 264 | 464 | 664 | 864 | 1064 | 1264 | 1464 | 1664 | 1864 | 2064 | 2264 | 2464,Jay would flirt just to test their confidence if they knew they wouldn't get caught.,True or False,Sexual
+True or False,13,22 | 222 | 422 | 622 | 822 | 1022 | 1222 | 1422 | 1622 | 1822 | 2022 | 2222 | 2422,Jay would secretly enjoy a bit of jealousy in a relationship and wouldn't admit it straight away.,True or False,Sexual
+True or False,13,42 | 242 | 442 | 642 | 842 | 1042 | 1242 | 1442 | 1642 | 1842 | 2042 | 2242 | 2442,Jay would secretly enjoy a bit of jealousy in a relationship especially in the right situation.,True or False,Sexual
+True or False,13,2 | 202 | 402 | 602 | 802 | 1002 | 1202 | 1402 | 1602 | 1802 | 2002 | 2202 | 2402,Jay would secretly enjoy a bit of jealousy in a relationship even if it caused tension.,True or False,Sexual
+True or False,13,82 | 282 | 482 | 682 | 882 | 1082 | 1282 | 1482 | 1682 | 1882 | 2082 | 2282 | 2482,Jay would secretly enjoy a bit of jealousy in a relationship even if it made things complicated.,True or False,Sexual
+True or False,13,62 | 262 | 462 | 662 | 862 | 1062 | 1262 | 1462 | 1662 | 1862 | 2062 | 2262 | 2462,Jay would secretly enjoy a bit of jealousy in a relationship if they knew they wouldn't get caught.,True or False,Sexual
+True or False,13,34 | 234 | 434 | 634 | 834 | 1034 | 1234 | 1434 | 1634 | 1834 | 2034 | 2234 | 2434,Jay would struggle to admit being wrong and wouldn't admit it straight away.,True or False,Personality
+True or False,13,54 | 254 | 454 | 654 | 854 | 1054 | 1254 | 1454 | 1654 | 1854 | 2054 | 2254 | 2454,Jay would struggle to admit being wrong especially in the right situation.,True or False,Personality
+True or False,13,14 | 214 | 414 | 614 | 814 | 1014 | 1214 | 1414 | 1614 | 1814 | 2014 | 2214 | 2414,Jay would struggle to admit being wrong even if it caused tension.,True or False,Personality
+True or False,13,94 | 294 | 494 | 694 | 894 | 1094 | 1294 | 1494 | 1694 | 1894 | 2094 | 2294 | 2494,Jay would struggle to admit being wrong even if it made things complicated.,True or False,Personality
+True or False,13,74 | 274 | 474 | 674 | 874 | 1074 | 1274 | 1474 | 1674 | 1874 | 2074 | 2274 | 2474,Jay would struggle to admit being wrong if they knew they wouldn't get caught.,True or False,Personality
+True or False,13,28 | 228 | 428 | 628 | 828 | 1028 | 1228 | 1428 | 1628 | 1828 | 2028 | 2228 | 2428,Jay would take a risk if the moment felt exciting and wouldn't admit it straight away.,True or False,Lifestyle
+True or False,13,48 | 248 | 448 | 648 | 848 | 1048 | 1248 | 1448 | 1648 | 1848 | 2048 | 2248 | 2448,Jay would take a risk if the moment felt exciting especially in the right situation.,True or False,Lifestyle
+True or False,13,8 | 208 | 408 | 608 | 808 | 1008 | 1208 | 1408 | 1608 | 1808 | 2008 | 2208 | 2408,Jay would take a risk if the moment felt exciting even if it caused tension.,True or False,Lifestyle
+True or False,13,88 | 288 | 488 | 688 | 888 | 1088 | 1288 | 1488 | 1688 | 1888 | 2088 | 2288 | 2488,Jay would take a risk if the moment felt exciting even if it made things complicated.,True or False,Lifestyle
+True or False,13,68 | 268 | 468 | 668 | 868 | 1068 | 1268 | 1468 | 1668 | 1868 | 2068 | 2268 | 2468,Jay would take a risk if the moment felt exciting if they knew they wouldn't get caught.,True or False,Lifestyle
+True or False,13,33 | 233 | 433 | 633 | 833 | 1033 | 1233 | 1433 | 1633 | 1833 | 2033 | 2233 | 2433,Kim enjoys attention more than they admit and wouldn't admit it straight away.,True or False,Sexual
+True or False,13,53 | 253 | 453 | 653 | 853 | 1053 | 1253 | 1453 | 1653 | 1853 | 2053 | 2253 | 2453,Kim enjoys attention more than they admit especially in the right situation.,True or False,Sexual
+True or False,13,13 | 213 | 413 | 613 | 813 | 1013 | 1213 | 1413 | 1613 | 1813 | 2013 | 2213 | 2413,Kim enjoys attention more than they admit even if it caused tension.,True or False,Sexual
+True or False,13,93 | 293 | 493 | 693 | 893 | 1093 | 1293 | 1493 | 1693 | 1893 | 2093 | 2293 | 2493,Kim enjoys attention more than they admit even if it made things complicated.,True or False,Sexual
+True or False,13,73 | 273 | 473 | 673 | 873 | 1073 | 1273 | 1473 | 1673 | 1873 | 2073 | 2273 | 2473,Kim enjoys attention more than they admit if they knew they wouldn't get caught.,True or False,Sexual
+True or False,13,39 | 239 | 439 | 639 | 839 | 1039 | 1239 | 1439 | 1639 | 1839 | 2039 | 2239 | 2439,Kim enjoys having control in situations and wouldn't admit it straight away.,True or False,Relationships
+True or False,13,59 | 259 | 459 | 659 | 859 | 1059 | 1259 | 1459 | 1659 | 1859 | 2059 | 2259 | 2459,Kim enjoys having control in situations especially in the right situation.,True or False,Relationships
+True or False,13,19 | 219 | 419 | 619 | 819 | 1019 | 1219 | 1419 | 1619 | 1819 | 2019 | 2219 | 2419,Kim enjoys having control in situations even if it caused tension.,True or False,Relationships
+True or False,13,99 | 299 | 499 | 699 | 899 | 1099 | 1299 | 1499 | 1699 | 1899 | 2099 | 2299 | 2499,Kim enjoys having control in situations even if it made things complicated.,True or False,Relationships
+True or False,13,79 | 279 | 479 | 679 | 879 | 1079 | 1279 | 1479 | 1679 | 1879 | 2079 | 2279 | 2479,Kim enjoys having control in situations if they knew they wouldn't get caught.,True or False,Relationships
+True or False,13,23 | 223 | 423 | 623 | 823 | 1023 | 1223 | 1423 | 1623 | 1823 | 2023 | 2223 | 2423,Kim has been tempted by someone they shouldn't have been and wouldn't admit it straight away.,True or False,Sexual
+True or False,13,43 | 243 | 443 | 643 | 843 | 1043 | 1243 | 1443 | 1643 | 1843 | 2043 | 2243 | 2443,Kim has been tempted by someone they shouldn't have been especially in the right situation.,True or False,Sexual
+True or False,13,3 | 203 | 403 | 603 | 803 | 1003 | 1203 | 1403 | 1603 | 1803 | 2003 | 2203 | 2403,Kim has been tempted by someone they shouldn't have been even if it caused tension.,True or False,Sexual
+True or False,13,83 | 283 | 483 | 683 | 883 | 1083 | 1283 | 1483 | 1683 | 1883 | 2083 | 2283 | 2483,Kim has been tempted by someone they shouldn't have been even if it made things complicated.,True or False,Sexual
+True or False,13,63 | 263 | 463 | 663 | 863 | 1063 | 1263 | 1463 | 1663 | 1863 | 2063 | 2263 | 2463,Kim has been tempted by someone they shouldn't have been if they knew they wouldn't get caught.,True or False,Sexual
+True or False,13,35 | 235 | 435 | 635 | 835 | 1035 | 1235 | 1435 | 1635 | 1835 | 2035 | 2235 | 2435,Kim has done something purely for the thrill and wouldn't admit it straight away.,True or False,Lifestyle
+True or False,13,55 | 255 | 455 | 655 | 855 | 1055 | 1255 | 1455 | 1655 | 1855 | 2055 | 2255 | 2455,Kim has done something purely for the thrill especially in the right situation.,True or False,Lifestyle
+True or False,13,15 | 215 | 415 | 615 | 815 | 1015 | 1215 | 1415 | 1615 | 1815 | 2015 | 2215 | 2415,Kim has done something purely for the thrill even if it caused tension.,True or False,Lifestyle
+True or False,13,95 | 295 | 495 | 695 | 895 | 1095 | 1295 | 1495 | 1695 | 1895 | 2095 | 2295 | 2495,Kim has done something purely for the thrill even if it made things complicated.,True or False,Lifestyle
+True or False,13,75 | 275 | 475 | 675 | 875 | 1075 | 1275 | 1475 | 1675 | 1875 | 2075 | 2275 | 2475,Kim has done something purely for the thrill if they knew they wouldn't get caught.,True or False,Lifestyle
+True or False,13,25 | 225 | 425 | 625 | 825 | 1025 | 1225 | 1425 | 1625 | 1825 | 2025 | 2225 | 2425,Kim has imagined a risky scenario with someone else and wouldn't admit it straight away.,True or False,Lifestyle
+True or False,13,45 | 245 | 445 | 645 | 845 | 1045 | 1245 | 1445 | 1645 | 1845 | 2045 | 2245 | 2445,Kim has imagined a risky scenario with someone else especially in the right situation.,True or False,Lifestyle
+True or False,13,5 | 205 | 405 | 605 | 805 | 1005 | 1205 | 1405 | 1605 | 1805 | 2005 | 2205 | 2405,Kim has imagined a risky scenario with someone else even if it caused tension.,True or False,Lifestyle
+True or False,13,85 | 285 | 485 | 685 | 885 | 1085 | 1285 | 1485 | 1685 | 1885 | 2085 | 2285 | 2485,Kim has imagined a risky scenario with someone else even if it made things complicated.,True or False,Lifestyle
+True or False,13,65 | 265 | 465 | 665 | 865 | 1065 | 1265 | 1465 | 1665 | 1865 | 2065 | 2265 | 2465,Kim has imagined a risky scenario with someone else if they knew they wouldn't get caught.,True or False,Lifestyle
+True or False,13,41 | 241 | 441 | 641 | 841 | 1041 | 1241 | 1441 | 1641 | 1841 | 2041 | 2241 | 2441,Kim has kept a secret they’ve never shared and wouldn't admit it straight away.,True or False,Relationships
+True or False,13,61 | 261 | 461 | 661 | 861 | 1061 | 1261 | 1461 | 1661 | 1861 | 2061 | 2261 | 2461,Kim has kept a secret they’ve never shared especially in the right situation.,True or False,Relationships
+True or False,13,21 | 221 | 421 | 621 | 821 | 1021 | 1221 | 1421 | 1621 | 1821 | 2021 | 2221 | 2421,Kim has kept a secret they’ve never shared even if it caused tension.,True or False,Relationships
+True or False,13,101 | 301 | 501 | 701 | 901 | 1101 | 1301 | 1501 | 1701 | 1901 | 2101 | 2301 | 2501,Kim has kept a secret they’ve never shared even if it made things complicated.,True or False,Relationships
+True or False,13,81 | 281 | 481 | 681 | 881 | 1081 | 1281 | 1481 | 1681 | 1881 | 2081 | 2281 | 2481,Kim has kept a secret they’ve never shared if they knew they wouldn't get caught.,True or False,Relationships
+True or False,13,27 | 227 | 427 | 627 | 827 | 1027 | 1227 | 1427 | 1627 | 1827 | 2027 | 2227 | 2427,Kim has kept something back to stay in control and wouldn't admit it straight away.,True or False,Relationships
+True or False,13,47 | 247 | 447 | 647 | 847 | 1047 | 1247 | 1447 | 1647 | 1847 | 2047 | 2247 | 2447,Kim has kept something back to stay in control especially in the right situation.,True or False,Relationships
+True or False,13,7 | 207 | 407 | 607 | 807 | 1007 | 1207 | 1407 | 1607 | 1807 | 2007 | 2207 | 2407,Kim has kept something back to stay in control even if it caused tension.,True or False,Relationships
+True or False,13,87 | 287 | 487 | 687 | 887 | 1087 | 1287 | 1487 | 1687 | 1887 | 2087 | 2287 | 2487,Kim has kept something back to stay in control even if it made things complicated.,True or False,Relationships
+True or False,13,67 | 267 | 467 | 667 | 867 | 1067 | 1267 | 1467 | 1667 | 1867 | 2067 | 2267 | 2467,Kim has kept something back to stay in control if they knew they wouldn't get caught.,True or False,Relationships
+True or False,13,29 | 229 | 429 | 629 | 829 | 1029 | 1229 | 1429 | 1629 | 1829 | 2029 | 2229 | 2429,Kim has replayed a moment wishing they acted differently and wouldn't admit it straight away.,True or False,Memories
+True or False,13,49 | 249 | 449 | 649 | 849 | 1049 | 1249 | 1449 | 1649 | 1849 | 2049 | 2249 | 2449,Kim has replayed a moment wishing they acted differently especially in the right situation.,True or False,Memories
+True or False,13,9 | 209 | 409 | 609 | 809 | 1009 | 1209 | 1409 | 1609 | 1809 | 2009 | 2209 | 2409,Kim has replayed a moment wishing they acted differently even if it caused tension.,True or False,Memories
+True or False,13,89 | 289 | 489 | 689 | 889 | 1089 | 1289 | 1489 | 1689 | 1889 | 2089 | 2289 | 2489,Kim has replayed a moment wishing they acted differently even if it made things complicated.,True or False,Memories
+True or False,13,69 | 269 | 469 | 669 | 869 | 1069 | 1269 | 1469 | 1669 | 1869 | 2069 | 2269 | 2469,Kim has replayed a moment wishing they acted differently if they knew they wouldn't get caught.,True or False,Memories
+True or False,13,37 | 237 | 437 | 637 | 837 | 1037 | 1237 | 1437 | 1637 | 1837 | 2037 | 2237 | 2437,Kim would get jealous but try to hide it and wouldn't admit it straight away.,True or False,Sexual
+True or False,13,57 | 257 | 457 | 657 | 857 | 1057 | 1257 | 1457 | 1657 | 1857 | 2057 | 2257 | 2457,Kim would get jealous but try to hide it especially in the right situation.,True or False,Sexual
+True or False,13,17 | 217 | 417 | 617 | 817 | 1017 | 1217 | 1417 | 1617 | 1817 | 2017 | 2217 | 2417,Kim would get jealous but try to hide it even if it caused tension.,True or False,Sexual
+True or False,13,97 | 297 | 497 | 697 | 897 | 1097 | 1297 | 1497 | 1697 | 1897 | 2097 | 2297 | 2497,Kim would get jealous but try to hide it even if it made things complicated.,True or False,Sexual
+True or False,13,77 | 277 | 477 | 677 | 877 | 1077 | 1277 | 1477 | 1677 | 1877 | 2077 | 2277 | 2477,Kim would get jealous but try to hide it if they knew they wouldn't get caught.,True or False,Sexual
+True or False,13,31 | 231 | 431 | 631 | 831 | 1031 | 1231 | 1431 | 1631 | 1831 | 2031 | 2231 | 2431,Kim would test the other person without them knowing and wouldn't admit it straight away.,True or False,Relationships
+True or False,13,51 | 251 | 451 | 651 | 851 | 1051 | 1251 | 1451 | 1651 | 1851 | 2051 | 2251 | 2451,Kim would test the other person without them knowing especially in the right situation.,True or False,Relationships
+True or False,13,11 | 211 | 411 | 611 | 811 | 1011 | 1211 | 1411 | 1611 | 1811 | 2011 | 2211 | 2411,Kim would test the other person without them knowing even if it caused tension.,True or False,Relationships
+True or False,13,91 | 291 | 491 | 691 | 891 | 1091 | 1291 | 1491 | 1691 | 1891 | 2091 | 2291 | 2491,Kim would test the other person without them knowing even if it made things complicated.,True or False,Relationships
+True or False,13,71 | 271 | 471 | 671 | 871 | 1071 | 1271 | 1471 | 1671 | 1871 | 2071 | 2271 | 2471,Kim would test the other person without them knowing if they knew they wouldn't get caught.,True or False,Relationships
+True or False,12,150 | 350 | 550 | 750 | 950 | 1150 | 1350 | 1550 | 1750 | 1950 | 2150 | 2350,Jay enjoys being unpredictable in relationships and secretly enjoyed it.,True or False,Relationships
+True or False,12,170 | 370 | 570 | 770 | 970 | 1170 | 1370 | 1570 | 1770 | 1970 | 2170 | 2370,Jay enjoys being unpredictable in relationships but would play it off as nothing.,True or False,Personality
+True or False,12,190 | 390 | 590 | 790 | 990 | 1190 | 1390 | 1590 | 1790 | 1990 | 2190 | 2390,Jay enjoys being unpredictable in relationships even if it crossed a line slightly.,True or False,Personality
+True or False,12,110 | 310 | 510 | 710 | 910 | 1110 | 1310 | 1510 | 1710 | 1910 | 2110 | 2310,Jay enjoys being unpredictable in relationships just to see what would happen.,True or False,Personality
+True or False,12,130 | 330 | 530 | 730 | 930 | 1130 | 1330 | 1530 | 1730 | 1930 | 2130 | 2330,Jay enjoys being unpredictable in relationships without fully thinking it through.,True or False,Personality
+True or False,12,146 | 346 | 546 | 746 | 946 | 1146 | 1346 | 1546 | 1746 | 1946 | 2146 | 2346,Jay enjoys pushing boundaries in subtle ways and secretly enjoyed it.,True or False,Relationships
+True or False,12,166 | 366 | 566 | 766 | 966 | 1166 | 1366 | 1566 | 1766 | 1966 | 2166 | 2366,Jay enjoys pushing boundaries in subtle ways but would play it off as nothing.,True or False,Personality
+True or False,12,186 | 386 | 586 | 786 | 986 | 1186 | 1386 | 1586 | 1786 | 1986 | 2186 | 2386,Jay enjoys pushing boundaries in subtle ways even if it crossed a line slightly.,True or False,Personality
+True or False,12,106 | 306 | 506 | 706 | 906 | 1106 | 1306 | 1506 | 1706 | 1906 | 2106 | 2306,Jay enjoys pushing boundaries in subtle ways just to see what would happen.,True or False,Personality
+True or False,12,126 | 326 | 526 | 726 | 926 | 1126 | 1326 | 1526 | 1726 | 1926 | 2126 | 2326,Jay enjoys pushing boundaries in subtle ways without fully thinking it through.,True or False,Personality
+True or False,12,156 | 356 | 556 | 756 | 956 | 1156 | 1356 | 1556 | 1756 | 1956 | 2156 | 2356,Jay enjoys teasing and creating tension and secretly enjoyed it.,True or False,Relationships
+True or False,12,176 | 376 | 576 | 776 | 976 | 1176 | 1376 | 1576 | 1776 | 1976 | 2176 | 2376,Jay enjoys teasing and creating tension but would play it off as nothing.,True or False,Personality
+True or False,12,196 | 396 | 596 | 796 | 996 | 1196 | 1396 | 1596 | 1796 | 1996 | 2196 | 2396,Jay enjoys teasing and creating tension even if it crossed a line slightly.,True or False,Personality
+True or False,12,116 | 316 | 516 | 716 | 916 | 1116 | 1316 | 1516 | 1716 | 1916 | 2116 | 2316,Jay enjoys teasing and creating tension just to see what would happen.,True or False,Personality
+True or False,12,136 | 336 | 536 | 736 | 936 | 1136 | 1336 | 1536 | 1736 | 1936 | 2136 | 2336,Jay enjoys teasing and creating tension without fully thinking it through.,True or False,Personality
+True or False,12,152 | 352 | 552 | 752 | 952 | 1152 | 1352 | 1552 | 1752 | 1952 | 2152 | 2352,Jay has acted more confident than they felt and secretly enjoyed it.,True or False,Relationships
+True or False,12,172 | 372 | 572 | 772 | 972 | 1172 | 1372 | 1572 | 1772 | 1972 | 2172 | 2372,Jay has acted more confident than they felt but would play it off as nothing.,True or False,Personality
+True or False,12,192 | 392 | 592 | 792 | 992 | 1192 | 1392 | 1592 | 1792 | 1992 | 2192 | 2392,Jay has acted more confident than they felt even if it crossed a line slightly.,True or False,Personality
+True or False,12,112 | 312 | 512 | 712 | 912 | 1112 | 1312 | 1512 | 1712 | 1912 | 2112 | 2312,Jay has acted more confident than they felt just to see what would happen.,True or False,Personality
+True or False,12,132 | 332 | 532 | 732 | 932 | 1132 | 1332 | 1532 | 1732 | 1932 | 2132 | 2332,Jay has acted more confident than they felt without fully thinking it through.,True or False,Personality
+True or False,12,158 | 358 | 558 | 758 | 958 | 1158 | 1358 | 1558 | 1758 | 1958 | 2158 | 2358,Jay has imagined a different version of their life and secretly enjoyed it.,True or False,Relationships
+True or False,12,178 | 378 | 578 | 778 | 978 | 1178 | 1378 | 1578 | 1778 | 1978 | 2178 | 2378,Jay has imagined a different version of their life but would play it off as nothing.,True or False,Hypotheticals
+True or False,12,198 | 398 | 598 | 798 | 998 | 1198 | 1398 | 1598 | 1798 | 1998 | 2198 | 2398,Jay has imagined a different version of their life even if it crossed a line slightly.,True or False,Hypotheticals
+True or False,12,118 | 318 | 518 | 718 | 918 | 1118 | 1318 | 1518 | 1718 | 1918 | 2118 | 2318,Jay has imagined a different version of their life just to see what would happen.,True or False,Hypotheticals
+True or False,12,138 | 338 | 538 | 738 | 938 | 1138 | 1338 | 1538 | 1738 | 1938 | 2138 | 2338,Jay has imagined a different version of their life without fully thinking it through.,True or False,Hypotheticals
+True or False,12,160 | 360 | 560 | 760 | 960 | 1160 | 1360 | 1560 | 1760 | 1960 | 2160 | 2360,Jay would break routine for excitement and secretly enjoyed it.,True or False,Relationships
+True or False,12,180 | 380 | 580 | 780 | 980 | 1180 | 1380 | 1580 | 1780 | 1980 | 2180 | 2380,Jay would break routine for excitement but would play it off as nothing.,True or False,Lifestyle
+True or False,12,200 | 400 | 600 | 800 | 1000 | 1200 | 1400 | 1600 | 1800 | 2000 | 2200 | 2400,Jay would break routine for excitement even if it crossed a line slightly.,True or False,Lifestyle
+True or False,12,120 | 320 | 520 | 720 | 920 | 1120 | 1320 | 1520 | 1720 | 1920 | 2120 | 2320,Jay would break routine for excitement just to see what would happen.,True or False,Lifestyle
+True or False,12,140 | 340 | 540 | 740 | 940 | 1140 | 1340 | 1540 | 1740 | 1940 | 2140 | 2340,Jay would break routine for excitement without fully thinking it through.,True or False,Lifestyle
+True or False,12,144 | 344 | 544 | 744 | 944 | 1144 | 1344 | 1544 | 1744 | 1944 | 2144 | 2344,Jay would flirt just to test their confidence and secretly enjoyed it.,True or False,Sexual
+True or False,12,164 | 364 | 564 | 764 | 964 | 1164 | 1364 | 1564 | 1764 | 1964 | 2164 | 2364,Jay would flirt just to test their confidence but would play it off as nothing.,True or False,Sexual
+True or False,12,184 | 384 | 584 | 784 | 984 | 1184 | 1384 | 1584 | 1784 | 1984 | 2184 | 2384,Jay would flirt just to test their confidence even if it crossed a line slightly.,True or False,Sexual
+True or False,12,104 | 304 | 504 | 704 | 904 | 1104 | 1304 | 1504 | 1704 | 1904 | 2104 | 2304,Jay would flirt just to test their confidence just to see what would happen.,True or False,Sexual
+True or False,12,124 | 324 | 524 | 724 | 924 | 1124 | 1324 | 1524 | 1724 | 1924 | 2124 | 2324,Jay would flirt just to test their confidence without fully thinking it through.,True or False,Sexual
+True or False,12,142 | 342 | 542 | 742 | 942 | 1142 | 1342 | 1542 | 1742 | 1942 | 2142 | 2342,Jay would secretly enjoy a bit of jealousy in a relationship and secretly enjoyed it.,True or False,Sexual
+True or False,12,162 | 362 | 562 | 762 | 962 | 1162 | 1362 | 1562 | 1762 | 1962 | 2162 | 2362,Jay would secretly enjoy a bit of jealousy in a relationship but would play it off as nothing.,True or False,Sexual
+True or False,12,182 | 382 | 582 | 782 | 982 | 1182 | 1382 | 1582 | 1782 | 1982 | 2182 | 2382,Jay would secretly enjoy a bit of jealousy in a relationship even if it crossed a line slightly.,True or False,Sexual
+True or False,12,102 | 302 | 502 | 702 | 902 | 1102 | 1302 | 1502 | 1702 | 1902 | 2102 | 2302,Jay would secretly enjoy a bit of jealousy in a relationship just to see what would happen.,True or False,Sexual
+True or False,12,122 | 322 | 522 | 722 | 922 | 1122 | 1322 | 1522 | 1722 | 1922 | 2122 | 2322,Jay would secretly enjoy a bit of jealousy in a relationship without fully thinking it through.,True or False,Sexual
+True or False,12,154 | 354 | 554 | 754 | 954 | 1154 | 1354 | 1554 | 1754 | 1954 | 2154 | 2354,Jay would struggle to admit being wrong and secretly enjoyed it.,True or False,Relationships
+True or False,12,174 | 374 | 574 | 774 | 974 | 1174 | 1374 | 1574 | 1774 | 1974 | 2174 | 2374,Jay would struggle to admit being wrong but would play it off as nothing.,True or False,Personality
+True or False,12,194 | 394 | 594 | 794 | 994 | 1194 | 1394 | 1594 | 1794 | 1994 | 2194 | 2394,Jay would struggle to admit being wrong even if it crossed a line slightly.,True or False,Personality
+True or False,12,114 | 314 | 514 | 714 | 914 | 1114 | 1314 | 1514 | 1714 | 1914 | 2114 | 2314,Jay would struggle to admit being wrong just to see what would happen.,True or False,Personality
+True or False,12,134 | 334 | 534 | 734 | 934 | 1134 | 1334 | 1534 | 1734 | 1934 | 2134 | 2334,Jay would struggle to admit being wrong without fully thinking it through.,True or False,Personality
+True or False,12,148 | 348 | 548 | 748 | 948 | 1148 | 1348 | 1548 | 1748 | 1948 | 2148 | 2348,Jay would take a risk if the moment felt exciting and secretly enjoyed it.,True or False,Relationships
+True or False,12,168 | 368 | 568 | 768 | 968 | 1168 | 1368 | 1568 | 1768 | 1968 | 2168 | 2368,Jay would take a risk if the moment felt exciting but would play it off as nothing.,True or False,Lifestyle
+True or False,12,188 | 388 | 588 | 788 | 988 | 1188 | 1388 | 1588 | 1788 | 1988 | 2188 | 2388,Jay would take a risk if the moment felt exciting even if it crossed a line slightly.,True or False,Lifestyle
+True or False,12,108 | 308 | 508 | 708 | 908 | 1108 | 1308 | 1508 | 1708 | 1908 | 2108 | 2308,Jay would take a risk if the moment felt exciting just to see what would happen.,True or False,Lifestyle
+True or False,12,128 | 328 | 528 | 728 | 928 | 1128 | 1328 | 1528 | 1728 | 1928 | 2128 | 2328,Jay would take a risk if the moment felt exciting without fully thinking it through.,True or False,Lifestyle
+True or False,12,153 | 353 | 553 | 753 | 953 | 1153 | 1353 | 1553 | 1753 | 1953 | 2153 | 2353,Kim enjoys attention more than they admit and secretly enjoyed it.,True or False,Sexual
+True or False,12,173 | 373 | 573 | 773 | 973 | 1173 | 1373 | 1573 | 1773 | 1973 | 2173 | 2373,Kim enjoys attention more than they admit but would play it off as nothing.,True or False,Sexual
+True or False,12,193 | 393 | 593 | 793 | 993 | 1193 | 1393 | 1593 | 1793 | 1993 | 2193 | 2393,Kim enjoys attention more than they admit even if it crossed a line slightly.,True or False,Sexual
+True or False,12,113 | 313 | 513 | 713 | 913 | 1113 | 1313 | 1513 | 1713 | 1913 | 2113 | 2313,Kim enjoys attention more than they admit just to see what would happen.,True or False,Sexual
+True or False,12,133 | 333 | 533 | 733 | 933 | 1133 | 1333 | 1533 | 1733 | 1933 | 2133 | 2333,Kim enjoys attention more than they admit without fully thinking it through.,True or False,Sexual
+True or False,12,159 | 359 | 559 | 759 | 959 | 1159 | 1359 | 1559 | 1759 | 1959 | 2159 | 2359,Kim enjoys having control in situations and secretly enjoyed it.,True or False,Relationships
+True or False,12,179 | 379 | 579 | 779 | 979 | 1179 | 1379 | 1579 | 1779 | 1979 | 2179 | 2379,Kim enjoys having control in situations but would play it off as nothing.,True or False,Relationships
+True or False,12,199 | 399 | 599 | 799 | 999 | 1199 | 1399 | 1599 | 1799 | 1999 | 2199 | 2399,Kim enjoys having control in situations even if it crossed a line slightly.,True or False,Relationships
+True or False,12,119 | 319 | 519 | 719 | 919 | 1119 | 1319 | 1519 | 1719 | 1919 | 2119 | 2319,Kim enjoys having control in situations just to see what would happen.,True or False,Relationships
+True or False,12,139 | 339 | 539 | 739 | 939 | 1139 | 1339 | 1539 | 1739 | 1939 | 2139 | 2339,Kim enjoys having control in situations without fully thinking it through.,True or False,Relationships
+True or False,12,143 | 343 | 543 | 743 | 943 | 1143 | 1343 | 1543 | 1743 | 1943 | 2143 | 2343,Kim has been tempted by someone they shouldn't have been and secretly enjoyed it.,True or False,Sexual
+True or False,12,163 | 363 | 563 | 763 | 963 | 1163 | 1363 | 1563 | 1763 | 1963 | 2163 | 2363,Kim has been tempted by someone they shouldn't have been but would play it off as nothing.,True or False,Sexual
+True or False,12,183 | 383 | 583 | 783 | 983 | 1183 | 1383 | 1583 | 1783 | 1983 | 2183 | 2383,Kim has been tempted by someone they shouldn't have been even if it crossed a line slightly.,True or False,Sexual
+True or False,12,103 | 303 | 503 | 703 | 903 | 1103 | 1303 | 1503 | 1703 | 1903 | 2103 | 2303,Kim has been tempted by someone they shouldn't have been just to see what would happen.,True or False,Sexual
+True or False,12,123 | 323 | 523 | 723 | 923 | 1123 | 1323 | 1523 | 1723 | 1923 | 2123 | 2323,Kim has been tempted by someone they shouldn't have been without fully thinking it through.,True or False,Sexual
+True or False,12,155 | 355 | 555 | 755 | 955 | 1155 | 1355 | 1555 | 1755 | 1955 | 2155 | 2355,Kim has done something purely for the thrill and secretly enjoyed it.,True or False,Relationships
+True or False,12,175 | 375 | 575 | 775 | 975 | 1175 | 1375 | 1575 | 1775 | 1975 | 2175 | 2375,Kim has done something purely for the thrill but would play it off as nothing.,True or False,Lifestyle
+True or False,12,195 | 395 | 595 | 795 | 995 | 1195 | 1395 | 1595 | 1795 | 1995 | 2195 | 2395,Kim has done something purely for the thrill even if it crossed a line slightly.,True or False,Lifestyle
+True or False,12,115 | 315 | 515 | 715 | 915 | 1115 | 1315 | 1515 | 1715 | 1915 | 2115 | 2315,Kim has done something purely for the thrill just to see what would happen.,True or False,Lifestyle
+True or False,12,135 | 335 | 535 | 735 | 935 | 1135 | 1335 | 1535 | 1735 | 1935 | 2135 | 2335,Kim has done something purely for the thrill without fully thinking it through.,True or False,Lifestyle
+True or False,12,145 | 345 | 545 | 745 | 945 | 1145 | 1345 | 1545 | 1745 | 1945 | 2145 | 2345,Kim has imagined a risky scenario with someone else and secretly enjoyed it.,True or False,Relationships
+True or False,12,165 | 365 | 565 | 765 | 965 | 1165 | 1365 | 1565 | 1765 | 1965 | 2165 | 2365,Kim has imagined a risky scenario with someone else but would play it off as nothing.,True or False,Lifestyle
+True or False,12,185 | 385 | 585 | 785 | 985 | 1185 | 1385 | 1585 | 1785 | 1985 | 2185 | 2385,Kim has imagined a risky scenario with someone else even if it crossed a line slightly.,True or False,Lifestyle
+True or False,12,105 | 305 | 505 | 705 | 905 | 1105 | 1305 | 1505 | 1705 | 1905 | 2105 | 2305,Kim has imagined a risky scenario with someone else just to see what would happen.,True or False,Lifestyle
+True or False,12,125 | 325 | 525 | 725 | 925 | 1125 | 1325 | 1525 | 1725 | 1925 | 2125 | 2325,Kim has imagined a risky scenario with someone else without fully thinking it through.,True or False,Lifestyle
+True or False,12,161 | 361 | 561 | 761 | 961 | 1161 | 1361 | 1561 | 1761 | 1961 | 2161 | 2361,Kim has kept a secret they’ve never shared and secretly enjoyed it.,True or False,Relationships
+True or False,12,181 | 381 | 581 | 781 | 981 | 1181 | 1381 | 1581 | 1781 | 1981 | 2181 | 2381,Kim has kept a secret they’ve never shared but would play it off as nothing.,True or False,Relationships
+True or False,12,201 | 401 | 601 | 801 | 1001 | 1201 | 1401 | 1601 | 1801 | 2001 | 2201 | 2401,Kim has kept a secret they’ve never shared even if it crossed a line slightly.,True or False,Relationships
+True or False,12,121 | 321 | 521 | 721 | 921 | 1121 | 1321 | 1521 | 1721 | 1921 | 2121 | 2321,Kim has kept a secret they’ve never shared just to see what would happen.,True or False,Relationships
+True or False,12,141 | 341 | 541 | 741 | 941 | 1141 | 1341 | 1541 | 1741 | 1941 | 2141 | 2341,Kim has kept a secret they’ve never shared without fully thinking it through.,True or False,Relationships
+True or False,12,147 | 347 | 547 | 747 | 947 | 1147 | 1347 | 1547 | 1747 | 1947 | 2147 | 2347,Kim has kept something back to stay in control and secretly enjoyed it.,True or False,Relationships
+True or False,12,167 | 367 | 567 | 767 | 967 | 1167 | 1367 | 1567 | 1767 | 1967 | 2167 | 2367,Kim has kept something back to stay in control but would play it off as nothing.,True or False,Relationships
+True or False,12,187 | 387 | 587 | 787 | 987 | 1187 | 1387 | 1587 | 1787 | 1987 | 2187 | 2387,Kim has kept something back to stay in control even if it crossed a line slightly.,True or False,Relationships
+True or False,12,107 | 307 | 507 | 707 | 907 | 1107 | 1307 | 1507 | 1707 | 1907 | 2107 | 2307,Kim has kept something back to stay in control just to see what would happen.,True or False,Relationships
+True or False,12,127 | 327 | 527 | 727 | 927 | 1127 | 1327 | 1527 | 1727 | 1927 | 2127 | 2327,Kim has kept something back to stay in control without fully thinking it through.,True or False,Relationships
+True or False,12,149 | 349 | 549 | 749 | 949 | 1149 | 1349 | 1549 | 1749 | 1949 | 2149 | 2349,Kim has replayed a moment wishing they acted differently and secretly enjoyed it.,True or False,Relationships
+True or False,12,169 | 369 | 569 | 769 | 969 | 1169 | 1369 | 1569 | 1769 | 1969 | 2169 | 2369,Kim has replayed a moment wishing they acted differently but would play it off as nothing.,True or False,Memories
+True or False,12,189 | 389 | 589 | 789 | 989 | 1189 | 1389 | 1589 | 1789 | 1989 | 2189 | 2389,Kim has replayed a moment wishing they acted differently even if it crossed a line slightly.,True or False,Memories
+True or False,12,109 | 309 | 509 | 709 | 909 | 1109 | 1309 | 1509 | 1709 | 1909 | 2109 | 2309,Kim has replayed a moment wishing they acted differently just to see what would happen.,True or False,Memories
+True or False,12,129 | 329 | 529 | 729 | 929 | 1129 | 1329 | 1529 | 1729 | 1929 | 2129 | 2329,Kim has replayed a moment wishing they acted differently without fully thinking it through.,True or False,Memories
+True or False,12,157 | 357 | 557 | 757 | 957 | 1157 | 1357 | 1557 | 1757 | 1957 | 2157 | 2357,Kim would get jealous but try to hide it and secretly enjoyed it.,True or False,Sexual
+True or False,12,177 | 377 | 577 | 777 | 977 | 1177 | 1377 | 1577 | 1777 | 1977 | 2177 | 2377,Kim would get jealous but try to hide it but would play it off as nothing.,True or False,Sexual
+True or False,12,197 | 397 | 597 | 797 | 997 | 1197 | 1397 | 1597 | 1797 | 1997 | 2197 | 2397,Kim would get jealous but try to hide it even if it crossed a line slightly.,True or False,Sexual
+True or False,12,117 | 317 | 517 | 717 | 917 | 1117 | 1317 | 1517 | 1717 | 1917 | 2117 | 2317,Kim would get jealous but try to hide it just to see what would happen.,True or False,Sexual
+True or False,12,137 | 337 | 537 | 737 | 937 | 1137 | 1337 | 1537 | 1737 | 1937 | 2137 | 2337,Kim would get jealous but try to hide it without fully thinking it through.,True or False,Sexual
+True or False,12,151 | 351 | 551 | 751 | 951 | 1151 | 1351 | 1551 | 1751 | 1951 | 2151 | 2351,Kim would test the other person without them knowing and secretly enjoyed it.,True or False,Relationships
+True or False,12,171 | 371 | 571 | 771 | 971 | 1171 | 1371 | 1571 | 1771 | 1971 | 2171 | 2371,Kim would test the other person without them knowing but would play it off as nothing.,True or False,Relationships
+True or False,12,191 | 391 | 591 | 791 | 991 | 1191 | 1391 | 1591 | 1791 | 1991 | 2191 | 2391,Kim would test the other person without them knowing even if it crossed a line slightly.,True or False,Relationships
+True or False,12,111 | 311 | 511 | 711 | 911 | 1111 | 1311 | 1511 | 1711 | 1911 | 2111 | 2311,Kim would test the other person without them knowing just to see what would happen.,True or False,Relationships
+True or False,12,131 | 331 | 531 | 731 | 931 | 1131 | 1331 | 1531 | 1731 | 1931 | 2131 | 2331,Kim would test the other person without them knowing without fully thinking it through.,True or False,Relationships
