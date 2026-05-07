@@ -16432,6 +16432,7 @@ function GameRoomView({
           && hasRoundAnswerSubmittedForMode(currentGameMode, currentRound, 'kim'),
         )
       : Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
+  const compatibilityFinalReveal = isCompatibilityFinalRevealRound(currentRound || {});
   const revealIsReady = compatibilityFinalReveal || (!isCompatibilityMeterGame && bothPlayersSubmitted) || currentRound?.status === 'reveal';
   const submissionState = isTrueFalseGame
     ? (hasCompletedTrueFalseRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
@@ -16444,7 +16445,6 @@ function GameRoomView({
     : isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame
       ? (hasRoundAnswerSubmittedForMode(currentGameMode, currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
       : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
-  const compatibilityFinalReveal = isCompatibilityFinalRevealRound(currentRound || {});
   const submittedBySeat = {
     jay: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'jay'),
     kim: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'kim'),
