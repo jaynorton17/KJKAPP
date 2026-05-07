@@ -163,3 +163,15 @@ Before returning a CSV, silently audit for:
 - invalid question type for the selected game
 
 Rewrite failed rows before output.
+
+## Using Current Remaining Question Exports
+
+The KJK app can export a selected game's current remaining questions. These are active questions that have not already been used or reserved in a live game.
+
+When the user uploads a current remaining questions CSV:
+
+- Treat it as the live "do not repeat" list for that game.
+- Do not generate any question that is the same or near-identical to a question in that file.
+- Do not reuse the same option pair from that file for games like This or That, Preference, Multiple Choice, Would You Rather, Ranking, or Sort Into Order.
+- Prefer new concepts, not just different wording for an existing concept.
+- If both a question ledger and a current remaining export are uploaded, avoid duplicates against both.

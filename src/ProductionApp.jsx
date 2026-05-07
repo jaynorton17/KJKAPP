@@ -319,6 +319,75 @@ const makeQuestionBankUploadTemplateFilename = (target = QUESTION_BANK_SYNC_TARG
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'question-bank'}-upload-template.csv`;
+const QUESTION_BANK_EXPORT_TYPE_LABELS = {
+  favourite: 'Favourite',
+  manual: 'Manual / Custom',
+  multipleChoice: 'Multiple Choice',
+  numeric: 'Numeric',
+  petPeeve: 'Pet Peeve',
+  preference: 'Preference',
+  ranked: 'Ranked / Top 3',
+  rating: 'Rating',
+  sortIntoOrder: 'Sort Into Order',
+  text: 'Text Answer',
+  trueFalse: 'True or False',
+};
+const formatQuestionBankQuestionTypeForExport = (type = 'text') => {
+  const normalizedType = normalizeQuestionType(type, 'text');
+  return QUESTION_BANK_EXPORT_TYPE_LABELS[normalizedType] || ROUND_TYPE_LABEL[normalizedType] || normalizedType || 'Text Answer';
+};
+const joinQuestionBankExportList = (value = '') => {
+  if (Array.isArray(value)) return value.map(normalizeText).filter(Boolean).join(' | ');
+  return normalizeText(value);
+};
+const buildQuestionBankRemainingExportFilename = (target = QUESTION_BANK_SYNC_TARGETS[0]) =>
+  `${String(target.sheetName || target.gameName || 'question-bank')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'question-bank'}-remaining-questions.csv`;
+const buildQuestionBankExportCsv = (questions = [], target = QUESTION_BANK_SYNC_TARGETS[0]) => {
+  const rows = (Array.isArray(questions) ? questions : []).map((question) => {
+    const roundType = normalizeQuestionType(question?.roundType || question?.questionType, 'text');
+    const defaultAnswerType = normalizeText(question?.defaultAnswerType || getDefaultAnswerType(roundType));
+    const answerType = normalizeText(question?.answerType || defaultAnswerType);
+    const row = {
+      Sheet: target.sheetName || '',
+      Game: target.gameName || '',
+      Question: normalizeText(question?.question || ''),
+      Category: normalizeText(question?.category || ''),
+      'Question Type': formatQuestionBankQuestionTypeForExport(roundType),
+      Options: joinQuestionBankExportList(question?.multipleChoiceOptions || question?.options || ''),
+      'Correct Answer': normalizeText(question?.correctAnswer || ''),
+      Active: 'Yes',
+      Intensity: question?.intensity ? String(Number(question.intensity) || '') : '',
+      Tone: normalizeText(question?.tone || ''),
+      'Relationship Area': normalizeText(question?.relationshipArea || ''),
+      Tags: joinQuestionBankExportList(question?.tags || ''),
+      Notes: normalizeText(question?.notes || ''),
+      'Memory Lane Mode': normalizeText(question?.memoryLaneMode || ''),
+      'Avoid If': joinQuestionBankExportList(question?.avoidIf || ''),
+      'Game Suitability': joinQuestionBankExportList(question?.gameSuitability || ''),
+      'AI Use Case': joinQuestionBankExportList(question?.aiUseCase || ''),
+      'Repeat Group': normalizeText(question?.repeatGroup || ''),
+      'Default Answer Type': defaultAnswerType,
+      'Answer Type': answerType,
+      'Unit Label': normalizeText(question?.unitLabel || ''),
+      'Scoring Divisor': question?.scoringDivisor ? String(question.scoringDivisor) : '',
+      'Rounding Mode': normalizeText(question?.roundingMode || ''),
+      'Round Penalty Value': question?.roundPenaltyValue ? String(question.roundPenaltyValue) : '',
+      'Fixed Penalty': question?.fixedPenalty ? String(question.fixedPenalty) : '',
+      'Scoring Mode': normalizeText(question?.scoringMode || ''),
+      'Scoring Outcome Type': normalizeText(question?.scoringOutcomeType || ''),
+      'Source Label': normalizeText(question?.sourceLabel || `firestoreExport:${target.sheetName || target.gameName || 'question-bank'}`),
+      'Added By': normalizeText(question?.addedBy || ''),
+      'Original Sheet': normalizeText(question?.originalSheet || target.sheetName || ''),
+      'Original Question Type': normalizeText(question?.originalQuestionType || formatQuestionBankQuestionTypeForExport(roundType)),
+    };
+    return QUESTION_BANK_UPLOAD_COLUMNS.map((column) => escapeCsvCell(row[column] ?? '')).join(',');
+  });
+  return `${QUESTION_BANK_UPLOAD_COLUMNS.map(escapeCsvCell).join(',')}\n${rows.join('\n')}${rows.length ? '\n' : ''}`;
+};
 const QUESTION_BANK_GENERATION_PROFILES = {
   game: {
     howItWorks: 'Both players answer the same prompt with their own answer and a guess for the other player. The app compares the pair and adds penalty points when answers miss.',
@@ -6569,6 +6638,7 @@ function LobbyScreen({
   currentPlayerLifetimeLabel,
   pendingActivityCount,
   bankQuestions,
+  questionBankExportQuestionsByType = {},
   questionCategories,
   createCode,
   joinCode,
@@ -7892,10 +7962,22 @@ function LobbyScreen({
       : onImportQuestions;
   const questionBankActionLabel = questionBankTarget.label;
   const questionBankImportLabel = questionBankTarget.importLabel;
+  const questionBankRemainingExportQuestions = questionBankExportQuestionsByType[normalizeQuestionBankType(questionUploadTarget.bankType)] || [];
   const handleDownloadQuestionUploadTemplate = () => {
     downloadTextFile(
       makeQuestionBankUploadTemplateFilename(questionUploadTarget),
       buildQuestionBankUploadTemplateCsv(),
+      'text/csv;charset=utf-8',
+    );
+  };
+  const handleDownloadRemainingQuestions = () => {
+    if (!questionBankRemainingExportQuestions.length) {
+      window.alert(`No remaining ${questionUploadTarget.gameName} questions are available to export.`);
+      return;
+    }
+    downloadTextFile(
+      buildQuestionBankRemainingExportFilename(questionUploadTarget),
+      buildQuestionBankExportCsv(questionBankRemainingExportQuestions, questionUploadTarget),
       'text/csv;charset=utf-8',
     );
   };
@@ -9672,6 +9754,9 @@ function LobbyScreen({
                   </label>
                   <Button className="ghost-button compact" onClick={handleDownloadQuestionUploadTemplate} disabled={isBusy}>
                     Download Blank Template
+                  </Button>
+                  <Button className="ghost-button compact" onClick={handleDownloadRemainingQuestions} disabled={isBusy}>
+                    Download Remaining Questions
                   </Button>
                   <Button className="ghost-button compact" onClick={handleCopyQuestionGenerationPrompt} disabled={isBusy}>
                     Copy Master Prompt
@@ -20654,6 +20739,47 @@ function ProductionApp() {
     [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedMostLikelyQuestionIds, playedPutYourPointsQuestionIds, playedTrueFalseQuestionIds, playedRedFlagGreenFlagQuestionIds, playedCompatibilityMeterQuestionIds, playedMemoryLaneQuestionIds],
   );
   const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
+  const questionBankExportQuestionsByType = useMemo(() => {
+    const onlyRemaining = (questions = [], playedIds = new Set()) =>
+      questions.filter((question) =>
+        question?.id
+        && isQuestionActiveInBank(question)
+        && !playedIds.has(question.id)
+        && !reservedQuestionIds.has(question.id),
+      );
+
+    return {
+      game: onlyRemaining(gameBankQuestions, activePlayedStandardQuestionIds),
+      quiz: onlyRemaining(quizBankQuestions, activePlayedQuizQuestionIds),
+      [THIS_OR_THAT_GAME_MODE]: onlyRemaining(thisOrThatBankQuestions, activePlayedThisOrThatQuestionIds),
+      [MOST_LIKELY_GAME_MODE]: onlyRemaining(mostLikelyBankQuestions, activePlayedMostLikelyQuestionIds),
+      [PUT_YOUR_POINTS_GAME_MODE]: onlyRemaining(putYourPointsBankQuestions, activePlayedPutYourPointsQuestionIds),
+      [TRUE_FALSE_GAME_MODE]: onlyRemaining(trueFalseBankQuestions, activePlayedTrueFalseQuestionIds),
+      [RED_FLAG_GREEN_FLAG_GAME_MODE]: onlyRemaining(redFlagGreenFlagBankQuestions, activePlayedRedFlagGreenFlagQuestionIds),
+      [COMPATIBILITY_METER_GAME_MODE]: onlyRemaining(compatibilityMeterBankQuestions, activePlayedCompatibilityMeterQuestionIds),
+      [MEMORY_LANE_GAME_MODE]: onlyRemaining(memoryLaneBankQuestions, activePlayedMemoryLaneQuestionIds),
+    };
+  }, [
+    activePlayedCompatibilityMeterQuestionIds,
+    activePlayedMemoryLaneQuestionIds,
+    activePlayedMostLikelyQuestionIds,
+    activePlayedPutYourPointsQuestionIds,
+    activePlayedQuizQuestionIds,
+    activePlayedRedFlagGreenFlagQuestionIds,
+    activePlayedStandardQuestionIds,
+    activePlayedThisOrThatQuestionIds,
+    activePlayedTrueFalseQuestionIds,
+    compatibilityMeterBankQuestions,
+    gameBankQuestions,
+    memoryLaneBankQuestions,
+    mostLikelyBankQuestions,
+    putYourPointsBankQuestions,
+    quizBankQuestions,
+    redFlagGreenFlagBankQuestions,
+    reservedQuestionIds,
+    thisOrThatBankQuestions,
+    trueFalseBankQuestions,
+  ]);
   const previousCompletedGames = useMemo(
     () =>
       previousGames.filter(
@@ -29505,6 +29631,7 @@ function ProductionApp() {
         currentPlayerLifetimeLabel={currentPlayerLifetimeLabel}
         pendingActivityCount={pendingActivityCount}
         bankQuestions={gameBankQuestions}
+        questionBankExportQuestionsByType={questionBankExportQuestionsByType}
         questionCategories={lobbyCategoryOptions}
         gameName={lobbyGameName}
         gameQuestionCount={lobbyQuestionCount}
