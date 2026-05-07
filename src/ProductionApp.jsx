@@ -111,6 +111,7 @@ import {
   geminiConfig,
   geminiIsConfigured,
   generateGeminiDiaryWriteup,
+  generateGeminiRelationshipReply,
 } from './lib/gemini.js';
 import {
   parseGoogleSheetImport,
@@ -951,6 +952,13 @@ const AI_RECOMMENDATION_QUESTION_PATTERN = /favo[u]?rite|love|enjoy|ideal|dream|
 const AI_RECOMMENDATION_WEAK_ANSWER_PATTERN = /^(yes|no|maybe|true|false|n\/a|na|none|nothing|jay|kim|both|either|neither|idk|i do not know|i don't know|dont know)$/i;
 const DIRECT_AI_EVIDENCE_KINDS = new Set(['game-answer', 'diary-entry', 'private-note']);
 const INDIRECT_AI_EVIDENCE_KINDS = new Set(['question-feedback']);
+const AI_RELATIONSHIP_SYSTEM_PROMPT = [
+  'You are KJK AI, a warm, direct, conversational private assistant for Jay and Kim inside the KJK app.',
+  'Answer the exact question first. If the user asks about wins, momentum, streaks, recent form, scores, or analytics, use the Game facts context instead of unrelated saved-answer clues.',
+  'Use only the supplied context. Do not invent facts. If the context is thin, say what is missing and give the best cautious read.',
+  'Sound like a talking agent: natural, concise, lightly playful, and specific. Do not default to a robotic evidence dump.',
+  'Only include a short "based on" note when it genuinely helps. Keep the answer under 220 words unless the user asks for a long summary.',
+].join('\n');
 const normalizeQuizAnswerText = (value = '') =>
   normalizeText(value)
     .toLowerCase()
@@ -3188,6 +3196,8 @@ const buildAiItemDirectSentence = (item = {}, seat = 'jay') => {
       return item.answer
         ? `${playerLabel} answered "${truncateAiText(item.answer, 96)}" for "${truncateAiText(item.question || 'that quiz question', 92)}" and was ${item.wasCorrect ? 'correct' : 'incorrect'}.`
         : `${playerLabel} has a saved quiz result for "${truncateAiText(item.question || 'that quiz question', 92)}".`;
+    case 'game-result':
+      return `${item.summary || item.title || 'Saved game result'}.`;
     default:
       return `${playerLabel} has saved evidence related to "${truncateAiText(item.question || item.summary || 'that topic', 108)}".`;
   }
@@ -3510,12 +3520,191 @@ const buildAiComparisonNarrative = ({
   return `${opener} ${leadReason} ${contrast}${directness}`.trim();
 };
 
+const isAiGameMomentumPrompt = (prompt = '') => {
+  const text = normalizeText(prompt).toLowerCase();
+  return (
+    /\b(momentum|recent(?:ly)?|lately|form|streak|run|last few|last games)\b/.test(text)
+    && /\b(win|wins|won|winner|winning|game|games|score|scores)\b/.test(text)
+  )
+    || /\bwho\b.*\b(winning|won more|has more wins|ahead)\b/.test(text)
+    || /\bgame wins\b/.test(text);
+};
+
+const getAiGameModeLabel = (gameMode = 'standard') => {
+  const modeId = getAnalyticsGameScoreModeId(gameMode);
+  return ANALYTICS_GAME_SCORE_MODES.find((mode) => mode.id === modeId)?.label || 'Game';
+};
+
+const buildAiCompletedGameRows = (previousGames = [], limit = 10) =>
+  [...(previousGames || [])]
+    .filter((entry) => COMPLETED_GAME_STATUSES.includes(normalizeText(entry?.status || '')))
+    .sort((left, right) => getRecordTime(right?.endedAt || right?.createdAt || 0) - getRecordTime(left?.endedAt || left?.createdAt || 0))
+    .slice(0, limit)
+    .map((entry) => {
+      const winner = entry?.winner === 'jay' || entry?.winner === 'kim' ? entry.winner : 'tie';
+      const scores = getAnalyticsSessionScorePair(entry);
+      const gameName = normalizeText(entry?.gameName || entry?.name || entry?.joinCode || getAiGameModeLabel(entry?.gameMode || 'standard'));
+      const gameModeLabel = getAiGameModeLabel(entry?.gameMode || 'standard');
+      const endedAtMs = getRecordTime(entry?.endedAt || entry?.createdAt || 0);
+      return {
+        id: entry?.id || `${gameName}-${endedAtMs}`,
+        gameName,
+        gameModeLabel,
+        winner,
+        winnerLabel: winner === 'tie' ? 'Tie' : PLAYER_LABEL[winner] || winner,
+        scores,
+        endedAtMs,
+        roundsPlayed: Number(entry?.roundsPlayed || entry?.rounds?.length || 0),
+      };
+    });
+
+const summarizeAiGameMomentum = (recentRows = []) => {
+  const wins = recentRows.reduce(
+    (acc, row) => {
+      if (row.winner === 'jay') acc.jay += 1;
+      else if (row.winner === 'kim') acc.kim += 1;
+      else acc.tie += 1;
+      return acc;
+    },
+    { jay: 0, kim: 0, tie: 0 },
+  );
+  let streakWinner = recentRows[0]?.winner || 'tie';
+  let streakCount = recentRows.length ? 1 : 0;
+  if (streakWinner === 'tie') {
+    streakCount = 0;
+  } else {
+    for (let index = 1; index < recentRows.length; index += 1) {
+      if (recentRows[index]?.winner !== streakWinner) break;
+      streakCount += 1;
+    }
+  }
+  const leader = wins.jay === wins.kim ? 'tie' : wins.jay > wins.kim ? 'jay' : 'kim';
+  return {
+    wins,
+    leader,
+    leaderLabel: leader === 'tie' ? 'No clear leader' : PLAYER_LABEL[leader] || leader,
+    streakWinner,
+    streakWinnerLabel: streakWinner === 'tie' ? 'Tie' : PLAYER_LABEL[streakWinner] || streakWinner,
+    streakCount,
+  };
+};
+
+const formatAiGameResultLine = (row = {}) => {
+  const scoreText = `Jay ${formatScore(row?.scores?.jay || 0)} - Kim ${formatScore(row?.scores?.kim || 0)}`;
+  return `${row.gameName || row.gameModeLabel || 'Game'} (${row.gameModeLabel || 'Game'}): ${row.winnerLabel || 'Tie'}${row.winner === 'tie' ? '' : ' won'}; ${scoreText}`;
+};
+
+const buildAiGameMomentumReply = ({ prompt = '', previousGames = [] } = {}) => {
+  if (!isAiGameMomentumPrompt(prompt)) return null;
+  const recentRows = buildAiCompletedGameRows(previousGames, 8);
+  if (!recentRows.length) {
+    return {
+      confidence: 'Low',
+      selectedEvidence: [],
+      text: "I can't call recent game momentum yet because I do not have any completed games in the saved history.",
+    };
+  }
+  const summary = summarizeAiGameMomentum(recentRows);
+  const recentCount = recentRows.length;
+  const opener = summary.leader === 'tie'
+    ? `Recently it is pretty even: Jay and Kim are level on wins across the last ${recentCount} completed games I can see.`
+    : `${summary.leaderLabel} has the recent momentum: ${summary.wins[summary.leader]} win${summary.wins[summary.leader] === 1 ? '' : 's'} from the last ${recentCount} completed games.`;
+  const scoreLine = `Recent split: Jay ${summary.wins.jay}, Kim ${summary.wins.kim}, ties ${summary.wins.tie}.`;
+  const streakLine = summary.streakCount > 1
+    ? `Current streak is ${summary.streakWinnerLabel} x${summary.streakCount}.`
+    : summary.streakCount === 1
+      ? `The latest completed game went to ${summary.streakWinnerLabel}.`
+      : 'The latest completed game was a tie.';
+  const recentLine = `Most recent results: ${recentRows.slice(0, 5).map(formatAiGameResultLine).join(' | ')}.`;
+  return {
+    confidence: recentRows.length >= 3 ? 'High' : 'Medium',
+    selectedEvidence: recentRows.slice(0, AI_EVIDENCE_PREVIEW_LIMIT).map((row) => ({
+      id: `game-result-${row.id}`,
+      kind: 'game-result',
+      seat: row.winner === 'jay' || row.winner === 'kim' ? row.winner : '',
+      title: row.gameName,
+      summary: formatAiGameResultLine(row),
+      sourceLabel: row.gameModeLabel,
+      createdAtMs: row.endedAtMs,
+      searchText: `${row.gameName} ${row.gameModeLabel} ${row.winnerLabel}`,
+    })),
+    text: [opener, scoreLine, streakLine, recentLine].join('\n'),
+  };
+};
+
+const buildAiGameFactsContext = ({ previousGames = [], lobbyAnalytics = null } = {}) => {
+  const recentRows = buildAiCompletedGameRows(previousGames, 10);
+  const momentum = summarizeAiGameMomentum(recentRows);
+  const lines = ['Game facts and recent momentum:'];
+  if (lobbyAnalytics) {
+    lines.push(
+      `Overall completed games: ${Number(lobbyAnalytics.totalGamesPlayed || 0)}. Overall wins: Jay ${Number(lobbyAnalytics.jayGameWins || 0)}, Kim ${Number(lobbyAnalytics.kimGameWins || 0)}, ties ${Number(lobbyAnalytics.draws || 0)}.`,
+    );
+    lines.push(`Overall current streak label: ${lobbyAnalytics.currentStreakLabel || 'N/A'}. Longest streak: ${lobbyAnalytics.longestStreakLabel || 'N/A'}.`);
+  }
+  if (recentRows.length) {
+    lines.push(`Recent ${recentRows.length} completed games: Jay ${momentum.wins.jay}, Kim ${momentum.wins.kim}, ties ${momentum.wins.tie}. Recent leader: ${momentum.leaderLabel}. Current recent streak: ${momentum.streakCount ? `${momentum.streakWinnerLabel} x${momentum.streakCount}` : 'none/tie'}.`);
+    lines.push('Recent results, newest first:');
+    recentRows.forEach((row, index) => {
+      lines.push(`${index + 1}. ${formatAiGameResultLine(row)}`);
+    });
+  } else {
+    lines.push('No completed game results are currently available.');
+  }
+  if (Array.isArray(lobbyAnalytics?.gameModeScoreRows) && lobbyAnalytics.gameModeScoreRows.length) {
+    lines.push('Wins by game type:');
+    lobbyAnalytics.gameModeScoreRows.forEach((row) => {
+      if (!row) return;
+      lines.push(`- ${row.label}: Jay ${Number(row.jayWins || 0)}, Kim ${Number(row.kimWins || 0)}, ties ${Number(row.ties || 0)}`);
+    });
+  }
+  return lines.join('\n');
+};
+
+const buildAiGeminiMemoryContext = ({
+  evidenceSnapshot = {},
+  localReply = {},
+  previousGames = [],
+  lobbyAnalytics = null,
+} = {}) => {
+  const sourceCounts = evidenceSnapshot.sourceCounts || {};
+  const jayStats = evidenceSnapshot.bySeat?.jay || {};
+  const kimStats = evidenceSnapshot.bySeat?.kim || {};
+  const pairStats = evidenceSnapshot.pair || {};
+  const selectedEvidence = localReply.selectedEvidence?.length
+    ? localReply.selectedEvidence
+    : (evidenceSnapshot.items || []).slice(0, 12);
+  const lines = [
+    buildAiGameFactsContext({ previousGames, lobbyAnalytics }),
+    '',
+    'Saved relationship evidence summary:',
+    `Total evidence items: ${Number(evidenceSnapshot.totalEvidence || 0)}. Sources: game answers ${Number(sourceCounts.gameAnswers || 0)}, question feedback ${Number(sourceCounts.feedback || 0)}, quiz answers ${Number(sourceCounts.quizAnswers || 0)}, diary entries ${Number(sourceCounts.diaryEntries || 0)}, private notes ${Number(sourceCounts.privateNotes || 0)}.`,
+    `Jay: ${Number(jayStats.standardAnswers || 0)} saved game answers, ${Number(jayStats.liked || 0)} liked prompts, ${Number(jayStats.disliked || 0)} disliked prompts, quiz accuracy ${Number(jayStats.quizAccuracy || 0)}%.`,
+    `Kim: ${Number(kimStats.standardAnswers || 0)} saved game answers, ${Number(kimStats.liked || 0)} liked prompts, ${Number(kimStats.disliked || 0)} disliked prompts, quiz accuracy ${Number(kimStats.quizAccuracy || 0)}%.`,
+    `Pair signals: ${Number(pairStats.bothLiked || 0)} shared liked prompts and ${Number(pairStats.splitOpinions || 0)} split-opinion prompts.`,
+  ];
+  if (localReply.text) {
+    lines.push('', `Local deterministic read to use as factual guardrail:\n${truncateAiText(localReply.text, 1400)}`);
+  }
+  if (selectedEvidence.length) {
+    lines.push('', 'Relevant saved evidence:');
+    selectedEvidence.slice(0, 16).forEach((item, index) => {
+      lines.push(`${index + 1}. ${formatAiEvidenceBullet(item)}`);
+    });
+  }
+  return lines.join('\n');
+};
+
 const buildEvidenceBasedAiReply = ({
   prompt = '',
   viewerSeat = 'jay',
   evidenceSnapshot = {},
+  previousGames = [],
+  lobbyAnalytics = null,
 } = {}) => {
   const cleanPrompt = normalizeText(prompt);
+  const momentumReply = buildAiGameMomentumReply({ prompt: cleanPrompt, previousGames });
+  if (momentumReply) return momentumReply;
   const intent = buildAiIntentProfile(cleanPrompt, viewerSeat);
   const focusSeats = intent.focusSeats?.length ? intent.focusSeats : [viewerSeat];
   const scoredEvidence = (evidenceSnapshot.items || [])
@@ -27873,11 +28062,43 @@ function ProductionApp() {
 
     const viewerSeat = dashboardSeat || inferSeatFromUser(user, profile) || 'jay';
     const displayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || PLAYER_LABEL[viewerSeat] || 'Player';
-    const reply = buildEvidenceBasedAiReply({
+    let reply = buildEvidenceBasedAiReply({
       prompt: text,
       viewerSeat,
       evidenceSnapshot: aiEvidenceSnapshot,
+      previousGames: previousCompletedGames,
+      lobbyAnalytics,
     });
+
+    setIsAiChatSending(true);
+    setAiChatDraft('');
+
+    if (geminiIsConfigured) {
+      try {
+        const geminiReply = await generateGeminiRelationshipReply({
+          prompt: text,
+          systemInstruction: AI_RELATIONSHIP_SYSTEM_PROMPT,
+          memoryContext: buildAiGeminiMemoryContext({
+            evidenceSnapshot: aiEvidenceSnapshot,
+            localReply: reply,
+            previousGames: previousCompletedGames,
+            lobbyAnalytics,
+          }),
+          conversationTurns: visibleAiChatMessages.slice(-10).map((entry) => ({
+            role: entry?.role === 'assistant' ? 'assistant' : 'user',
+            text: entry?.text || '',
+          })),
+        });
+        reply = {
+          ...reply,
+          text: String(geminiReply?.text || '').trim() || reply.text,
+          model: geminiReply?.model || geminiConfig.model || 'gemini',
+        };
+      } catch (error) {
+        console.warn('Gemini AI chat failed; using local evidence reply.', error);
+      }
+    }
+
     const userMessageRef = doc(collection(firestore, 'users', user.uid, 'aiChatMessages'));
     const assistantMessageRef = doc(collection(firestore, 'users', user.uid, 'aiChatMessages'));
     const startedAtMs = Date.now();
@@ -27899,6 +28120,7 @@ function ProductionApp() {
       displayName: 'KJK AI',
       text: reply.text,
       confidence: String(reply.confidence || '').toLowerCase(),
+      model: reply.model || 'local-evidence',
       prompt: text,
       evidence: (reply.selectedEvidence || []).map((item) => ({
         id: item.id || '',
@@ -27920,8 +28142,6 @@ function ProductionApp() {
       updatedAt: serverTimestamp(),
     });
 
-    setIsAiChatSending(true);
-    setAiChatDraft('');
     setOptimisticAiChatMessages((current) => {
       const merged = new Map(current.map((entry) => [entry.id, entry]));
       merged.set(optimisticUserMessage.id, optimisticUserMessage);
