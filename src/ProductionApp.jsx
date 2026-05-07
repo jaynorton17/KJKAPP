@@ -306,6 +306,50 @@ const validateQuestionBankUploadHeaders = (rawText = '') => {
     );
   }
 };
+const parseQuestionBankUploadCsvRows = (rawText = '') => {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  const text = String(rawText || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      field += '"';
+      index += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      row.push(field.trim());
+      field = '';
+    } else if (char === '\n' && !inQuotes) {
+      row.push(field.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+
+  row.push(field.trim());
+  if (row.some(Boolean)) rows.push(row);
+  if (!rows.length) return { headers: [], rows: [], objects: [] };
+
+  const headers = rows[0];
+  const dataRows = rows.slice(1).filter((cells) => cells.some(Boolean));
+  return {
+    headers,
+    rows: dataRows,
+    objects: dataRows.map((cells, index) => ({
+      rowNumber: index + 2,
+      cells,
+      values: Object.fromEntries(headers.map((header, cellIndex) => [header, cells[cellIndex] || ''])),
+    })),
+  };
+};
 const escapeCsvCell = (value = '') => {
   const text = String(value ?? '');
   if (!/[",\n\r]/.test(text)) return text;
@@ -1099,6 +1143,200 @@ const validateQuestionBankUploadResult = (result, targetBankType = 'game') => {
       `${target.gameName} upload has ${missingOptionRows.length} choice/order row${missingOptionRows.length === 1 ? '' : 's'} without at least two options. First rows: ${missingOptionRows.slice(0, 8).join(', ')}.`,
     );
   }
+};
+const QUESTION_BANK_FIXED_OPTION_TARGETS = new Set([
+  TRUE_FALSE_GAME_MODE,
+  MOST_LIKELY_GAME_MODE,
+  RED_FLAG_GREEN_FLAG_GAME_MODE,
+]);
+const QUESTION_BANK_BLANK_CORRECT_ANSWER_TARGETS = new Set([
+  TRUE_FALSE_GAME_MODE,
+  MOST_LIKELY_GAME_MODE,
+  RED_FLAG_GREEN_FLAG_GAME_MODE,
+  THIS_OR_THAT_GAME_MODE,
+]);
+const QUESTION_BANK_UPLOAD_PLACEHOLDER_VALUE = /^(?:n\/?a|none|null|tbc|unknown|placeholder)$/i;
+const QUESTION_BANK_UPLOAD_OPTIONAL_COLUMNS = [
+  'Correct Answer',
+  'Options',
+  'Notes',
+  'Memory Lane Mode',
+  'Avoid If',
+  'Unit Label',
+  'Scoring Divisor',
+  'Rounding Mode',
+  'Round Penalty Value',
+  'Fixed Penalty',
+  'Scoring Mode',
+  'Scoring Outcome Type',
+];
+const makeQuestionBankPreflightKey = (value = '') =>
+  normalizeText(value)
+    .toLowerCase()
+    .replace(/[’']/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+const makeQuestionBankOptionPairKey = (value = '') =>
+  String(value || '')
+    .split('|')
+    .map(makeQuestionBankPreflightKey)
+    .filter(Boolean)
+    .sort()
+    .join(' | ');
+const buildQuestionBankUploadPreflightReport = ({
+  rawText = '',
+  fileName = 'CSV upload',
+  target = QUESTION_BANK_SYNC_TARGETS[0],
+  mode = 'add',
+  existingQuestions = [],
+} = {}) => {
+  const selectedTarget = getQuestionBankSyncTarget(target?.bankType || 'game');
+  const normalizedBankType = normalizeQuestionBankType(selectedTarget.bankType);
+  const shouldReplace = mode === 'replace';
+  const shouldUpdateMatches = mode === 'upsert';
+  const errors = [];
+  const warnings = [];
+  let result = null;
+  let rowCount = 0;
+
+  try {
+    validateQuestionBankUploadHeaders(rawText);
+  } catch (error) {
+    errors.push(error?.message || 'CSV header is invalid.');
+  }
+
+  const parsedRows = parseQuestionBankUploadCsvRows(rawText);
+  rowCount = parsedRows.objects.length;
+  if (!rowCount) errors.push('CSV does not contain any data rows.');
+  const headerMismatchIndexes = QUESTION_BANK_UPLOAD_COLUMNS
+    .map((column, index) => (parsedRows.headers[index] === column ? null : index + 1))
+    .filter(Boolean);
+  if (parsedRows.headers.length !== QUESTION_BANK_UPLOAD_COLUMNS.length || headerMismatchIndexes.length) {
+    errors.push('CSV header must exactly match the downloadable template header, in the same column order.');
+  }
+
+  const headerMismatchRows = parsedRows.objects
+    .filter((row) => row.cells.length !== parsedRows.headers.length)
+    .slice(0, 8)
+    .map((row) => row.rowNumber);
+  if (headerMismatchRows.length) {
+    errors.push(`Rows with the wrong number of columns: ${headerMismatchRows.join(', ')}.`);
+  }
+
+  const profile = QUESTION_BANK_GENERATION_PROFILES[normalizedBankType] || QUESTION_BANK_GENERATION_PROFILES.game;
+  const allowedTypeIds = new Set((profile.questionTypes || []).map((type) => normalizeQuestionType(type, 'text')));
+  const questionRows = new Map();
+  const optionRows = new Map();
+
+  parsedRows.objects.forEach((row) => {
+    const values = row.values || {};
+    const rowNumber = row.rowNumber;
+    const question = normalizeText(values.Question);
+    const options = normalizeText(values.Options);
+    const questionType = normalizeText(values['Question Type']);
+    const normalizedType = normalizeQuestionType(questionType, 'text');
+
+    if (normalizeText(values.Sheet) !== selectedTarget.sheetName) {
+      errors.push(`Row ${rowNumber}: Sheet must be "${selectedTarget.sheetName}".`);
+    }
+    if (normalizeText(values.Game) !== selectedTarget.gameName) {
+      errors.push(`Row ${rowNumber}: Game must be "${selectedTarget.gameName}".`);
+    }
+    if (!question) errors.push(`Row ${rowNumber}: Question is missing.`);
+    if (!questionType) {
+      errors.push(`Row ${rowNumber}: Question Type is missing.`);
+    } else if (!allowedTypeIds.has(normalizedType)) {
+      errors.push(`Row ${rowNumber}: Question Type "${questionType}" is not allowed for ${selectedTarget.gameName}.`);
+    }
+    if (normalizeText(values.Active).toLowerCase() !== 'yes') {
+      errors.push(`Row ${rowNumber}: Active must be Yes.`);
+    }
+    if (values.Intensity && !/^[1-5]$/.test(String(values.Intensity).trim())) {
+      errors.push(`Row ${rowNumber}: Intensity must be blank or a number from 1 to 5.`);
+    }
+    QUESTION_BANK_UPLOAD_OPTIONAL_COLUMNS.forEach((column) => {
+      const value = String(values[column] || '').trim();
+      if (value && QUESTION_BANK_UPLOAD_PLACEHOLDER_VALUE.test(value)) {
+        errors.push(`Row ${rowNumber}: ${column} should be blank, not "${value}".`);
+      }
+    });
+
+    if (QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType) && options) {
+      errors.push(`Row ${rowNumber}: Options should be blank because the app supplies this game's choices.`);
+    }
+    if (QUESTION_BANK_BLANK_CORRECT_ANSWER_TARGETS.has(normalizedBankType) && normalizeText(values['Correct Answer'])) {
+      errors.push(`Row ${rowNumber}: Correct Answer should be blank for ${selectedTarget.gameName}.`);
+    }
+    if (normalizedBankType === 'quiz' && !normalizeText(values['Correct Answer'])) {
+      errors.push(`Row ${rowNumber}: Correct Answer is required for Quick Fire Quiz.`);
+    }
+    if (normalizedBankType === THIS_OR_THAT_GAME_MODE) {
+      const optionCount = options ? options.split('|').map((entry) => normalizeText(entry)).filter(Boolean).length : 0;
+      if (optionCount !== 2) errors.push(`Row ${rowNumber}: This or That needs exactly two pipe-separated options.`);
+    }
+    if (!QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType) && QUESTION_BANK_UPLOAD_OPTION_TYPES.has(normalizedType)) {
+      const optionCount = options ? options.split('|').map((entry) => normalizeText(entry)).filter(Boolean).length : 0;
+      if (optionCount < 2) errors.push(`Row ${rowNumber}: ${questionType} needs at least two pipe-separated options.`);
+    }
+
+    const questionKey = makeQuestionBankPreflightKey(question);
+    if (questionKey) {
+      if (questionRows.has(questionKey)) {
+        errors.push(`Rows ${questionRows.get(questionKey)} and ${rowNumber}: duplicate question text.`);
+      } else {
+        questionRows.set(questionKey, rowNumber);
+      }
+    }
+    const optionPairKey = makeQuestionBankOptionPairKey(options);
+    if (optionPairKey && !QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType)) {
+      if (optionRows.has(optionPairKey)) {
+        errors.push(`Rows ${optionRows.get(optionPairKey)} and ${rowNumber}: duplicate option set.`);
+      } else {
+        optionRows.set(optionPairKey, rowNumber);
+      }
+    }
+  });
+
+  try {
+    result = parseQuestionBankCsvForTarget({
+      rawText,
+      existingQuestions,
+      overwriteExisting: shouldReplace || shouldUpdateMatches,
+      targetBankType: selectedTarget.bankType,
+      importedAt: new Date().toISOString(),
+      sourceLabel: makeQuestionBankUploadSourceLabel(selectedTarget, fileName, rawText),
+      allowIdMatch: shouldReplace,
+      allowTemplateMatch: !shouldReplace,
+    });
+    validateQuestionBankUploadResult(result, selectedTarget.bankType);
+  } catch (error) {
+    errors.push(error?.message || 'The CSV could not be parsed by the app importer.');
+  }
+
+  const summary = result?.summary || {};
+  if (!errors.length && Number(summary.duplicates || 0) > 0) {
+    warnings.push(`${Number(summary.duplicates || 0)} existing duplicate row${Number(summary.duplicates || 0) === 1 ? '' : 's'} will be skipped.`);
+  }
+  if (!errors.length && Number(summary.updated || 0) > 0) {
+    warnings.push(`${Number(summary.updated || 0)} existing question${Number(summary.updated || 0) === 1 ? '' : 's'} will be updated.`);
+  }
+  if (!errors.length && !Number(summary.imported || 0) && !Number(summary.updated || 0)) {
+    warnings.push('This file is valid, but it will not add or update any questions in the selected mode.');
+  }
+
+  return {
+    fileName,
+    target: selectedTarget,
+    mode,
+    rowCount,
+    result,
+    summary,
+    errors: errors.slice(0, 60),
+    errorCount: errors.length,
+    warnings: warnings.slice(0, 20),
+    warningCount: warnings.length,
+    canUpload: !errors.length,
+  };
 };
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const MOST_LIKELY_STARTER_QUESTIONS = [
@@ -6875,9 +7113,9 @@ function LobbyScreen({
   const [lobbyTileImagesEnabled, setLobbyTileImagesEnabled] = useState(false);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
-  const [questionUploadBankType, setQuestionUploadBankType] = useState('game');
   const [questionUploadMode, setQuestionUploadMode] = useState('add');
   const [questionUploadDraft, setQuestionUploadDraft] = useState(null);
+  const [questionUploadReport, setQuestionUploadReport] = useState(null);
   const [questionUploadProgress, setQuestionUploadProgress] = useState({ status: 'idle', percent: 0, message: '' });
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
   const [selectedRoundTypes, setSelectedRoundTypes] = useState([]);
@@ -8001,44 +8239,55 @@ function LobbyScreen({
       ? MEMORY_LANE_GAME_MODE
       : 'game';
   const questionBankTarget = getQuestionBankSyncTarget(questionBankSegmentBankType);
-  const questionUploadTarget = getQuestionBankSyncTarget(questionUploadBankType);
-  const questionBankSyncAction = questionBankSegment === 'quiz'
-    ? onSyncQuizBank
-    : questionBankSegment === 'thisOrThat'
-      ? onSyncThisOrThatBank
-    : questionBankSegment === 'mostLikely'
-      ? onSyncMostLikelyBank
-    : questionBankSegment === 'putYourPoints'
-      ? onSyncPutYourPointsBank
-    : questionBankSegment === 'trueFalse'
-      ? onSyncTrueFalseBank
-    : questionBankSegment === 'redFlagGreenFlag'
-      ? onSyncRedFlagGreenFlagBank
-    : questionBankSegment === 'compatibilityMeter'
-      ? onSyncCompatibilityMeterBank
-    : questionBankSegment === 'memoryLane'
-      ? onSyncMemoryLaneBank
-      : onSyncQuestionBank;
-  const questionBankImportAction = questionBankSegment === 'quiz'
-    ? onImportQuizQuestions
-    : questionBankSegment === 'thisOrThat'
-      ? onImportThisOrThatQuestions
-    : questionBankSegment === 'mostLikely'
-      ? onImportMostLikelyQuestions
-    : questionBankSegment === 'putYourPoints'
-      ? onImportPutYourPointsQuestions
-    : questionBankSegment === 'trueFalse'
-      ? onImportTrueFalseQuestions
-    : questionBankSegment === 'redFlagGreenFlag'
-      ? onImportRedFlagGreenFlagQuestions
-    : questionBankSegment === 'compatibilityMeter'
-      ? onImportCompatibilityMeterQuestions
-    : questionBankSegment === 'memoryLane'
-      ? onImportMemoryLaneQuestions
-      : onImportQuestions;
-  const questionBankActionLabel = questionBankTarget.label;
-  const questionBankImportLabel = questionBankTarget.importLabel;
+  const questionUploadTarget = questionBankTarget;
   const questionBankRemainingExportQuestions = questionBankExportQuestionsByType[normalizeQuestionBankType(questionUploadTarget.bankType)] || [];
+  const clearQuestionUploadSelection = () => {
+    setQuestionUploadDraft(null);
+    setQuestionUploadReport(null);
+    setQuestionUploadProgress({ status: 'idle', percent: 0, message: '' });
+  };
+  const handleQuestionBankSegmentChange = (segment) => {
+    setQuestionBankSegment(segment);
+    clearQuestionUploadSelection();
+  };
+  const buildQuestionUploadReport = ({ rawText, fileName, mode = questionUploadMode, target = questionUploadTarget }) =>
+    buildQuestionBankUploadPreflightReport({
+      rawText,
+      fileName,
+      mode,
+      target,
+      existingQuestions: bankQuestions,
+    });
+  const applyQuestionUploadReport = (report) => {
+    setQuestionUploadReport(report);
+    const imported = Number(report?.summary?.imported || 0);
+    const updated = Number(report?.summary?.updated || 0);
+    const duplicates = Number(report?.summary?.duplicates || 0);
+    const skipped = Number(report?.summary?.skipped || 0);
+    if (report?.canUpload) {
+      setQuestionUploadProgress({
+        status: 'ready',
+        percent: 35,
+        message: `${report.fileName} checked: ${imported} new, ${updated} update${updated === 1 ? '' : 's'}, ${duplicates} duplicate${duplicates === 1 ? '' : 's'}, ${skipped} unchanged.`,
+      });
+      return;
+    }
+    setQuestionUploadProgress({
+      status: 'error',
+      percent: 0,
+      message: `${report?.fileName || 'CSV'} needs review: ${Number(report?.errorCount || 0)} issue${Number(report?.errorCount || 0) === 1 ? '' : 's'} found.`,
+    });
+  };
+  const handleQuestionUploadModeChange = (event) => {
+    const nextMode = event.target.value;
+    setQuestionUploadMode(nextMode);
+    if (!questionUploadDraft?.rawText) return;
+    applyQuestionUploadReport(buildQuestionUploadReport({
+      rawText: questionUploadDraft.rawText,
+      fileName: questionUploadDraft.fileName,
+      mode: nextMode,
+    }));
+  };
   const handleDownloadQuestionUploadTemplate = () => {
     downloadTextFile(
       makeQuestionBankUploadTemplateFilename(questionUploadTarget),
@@ -8072,21 +8321,18 @@ function LobbyScreen({
     setQuestionUploadProgress({ status: 'reading', percent: 18, message: `Reading ${file.name}...` });
     try {
       const rawText = await file.text();
-      validateQuestionBankUploadHeaders(rawText);
-      const rowCount = countQuestionBankUploadDataRows(rawText);
+      const report = buildQuestionUploadReport({ rawText, fileName: file.name });
+      const rowCount = report.rowCount || countQuestionBankUploadDataRows(rawText);
       setQuestionUploadDraft({
         fileName: file.name,
         fileSize: file.size,
         rawText,
         rowCount,
       });
-      setQuestionUploadProgress({
-        status: 'ready',
-        percent: 35,
-        message: `${file.name} selected. ${rowCount} data row${rowCount === 1 ? '' : 's'} ready to upload to ${questionUploadTarget.gameName}.`,
-      });
+      applyQuestionUploadReport(report);
     } catch (error) {
       setQuestionUploadDraft(null);
+      setQuestionUploadReport(null);
       setQuestionUploadProgress({
         status: 'error',
         percent: 0,
@@ -8095,12 +8341,17 @@ function LobbyScreen({
     }
   };
   const handleClearQuestionUploadDraft = () => {
-    setQuestionUploadDraft(null);
-    setQuestionUploadProgress({ status: 'idle', percent: 0, message: '' });
+    clearQuestionUploadSelection();
   };
   const handleSubmitQuestionUpload = async () => {
     if (!questionUploadDraft?.rawText) {
       setQuestionUploadProgress({ status: 'error', percent: 0, message: 'Choose a CSV file first.' });
+      return;
+    }
+    if (questionUploadReport && !questionUploadReport.canUpload) {
+      const message = `Fix the CSV preflight issues before uploading. ${questionUploadReport.errorCount} issue${questionUploadReport.errorCount === 1 ? '' : 's'} found.`;
+      setQuestionUploadProgress({ status: 'error', percent: 0, message });
+      window.alert(message);
       return;
     }
     if (!onUploadQuestionBankCsv) {
@@ -8151,6 +8402,7 @@ function LobbyScreen({
       : `Upload complete: ${Number(summary.imported || 0)} new, ${Number(summary.updated || 0)} updated, ${Number(summary.duplicates || 0)} duplicates skipped, ${Number(summary.skipped || 0)} unchanged.`;
     setQuestionUploadProgress({ status: 'done', percent: 100, message });
     setQuestionUploadDraft(null);
+    setQuestionUploadReport(null);
   };
 
   useEffect(() => {
@@ -9792,51 +10044,32 @@ function LobbyScreen({
                 <span className="status-pill">{questionBankLoadedCount} loaded</span>
               </div>
 
-              <div className="question-bank-master-control">
-                <div>
-                  <p className="eyebrow">Master Bank</p>
-                  <h3>Sync All Games</h3>
-                </div>
-                <Button className="primary-button compact" onClick={onSyncAllQuestionBanks} disabled={isBusy}>
-                  Sync All Games
-                </Button>
-              </div>
-
-              <div className="question-bank-sheet-grid" aria-label="Question bank sheet routing">
-                {QUESTION_BANK_SYNC_TARGETS.map((target) => (
-                  <article className="question-bank-sheet-row" key={target.bankType}>
-                    <strong>{target.gameName}</strong>
-                    <span>{target.sheetName}</span>
-                  </article>
-                ))}
-              </div>
-
               <div className="dashboard-subnav" role="tablist" aria-label="Question bank tabs">
-                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'game' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('game')}>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'game' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('game')}>
                   Game Questions
                 </button>
-                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('quiz')}>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'quiz' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('quiz')}>
                   Quiz Questions
                 </button>
-                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'thisOrThat' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('thisOrThat')}>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'thisOrThat' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('thisOrThat')}>
                   This or That
                 </button>
-                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'mostLikely' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('mostLikely')}>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'mostLikely' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('mostLikely')}>
                   Most Likely To
                 </button>
-                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'putYourPoints' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('putYourPoints')}>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'putYourPoints' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('putYourPoints')}>
                   Put Your Points
                 </button>
-                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('trueFalse')}>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('trueFalse')}>
                   True or False
                 </button>
-                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'redFlagGreenFlag' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('redFlagGreenFlag')}>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'redFlagGreenFlag' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('redFlagGreenFlag')}>
                   Red Flag Green Flag
                 </button>
-                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'compatibilityMeter' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('compatibilityMeter')}>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'compatibilityMeter' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('compatibilityMeter')}>
                   Compatibility
                 </button>
-                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'memoryLane' ? 'is-active' : ''}`} onClick={() => setQuestionBankSegment('memoryLane')}>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'memoryLane' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('memoryLane')}>
                   Memory Lane
                 </button>
               </div>
@@ -9858,43 +10091,22 @@ function LobbyScreen({
                   <span>unused questions left</span>
                 </article>
                 <article className="stat-tile">
-                  <small>Connection</small>
-                  <strong>{syncNotice ? 'Needs review' : 'Connected'}</strong>
-                  <span>{syncNotice || 'Google Sheet connected'}</span>
+                  <small>Selected Bank</small>
+                  <strong>{questionBankTarget.gameName}</strong>
+                  <span>{syncNotice || 'Firebase database ready'}</span>
                 </article>
               </div>
 
               <div className="question-bank-upload-panel" aria-label="Firestore CSV question upload">
                 <div className="question-bank-upload-copy">
                   <p className="eyebrow">Firestore Upload</p>
-                  <h3>Strict CSV Import</h3>
-                  <span>Upload a cleaned CSV directly into the selected game bank. Replace keeps used questions retired instead of deleting them.</span>
+                  <h3>{questionUploadTarget.gameName}</h3>
+                  <span>Choose a CSV and the app checks it before upload. Replace keeps used questions retired instead of deleting them.</span>
                 </div>
                 <div className="question-bank-upload-controls">
-                  <div className="question-bank-upload-game-picker" role="group" aria-label="Game for CSV template and prompt">
-                    <span className="question-bank-upload-control-label">Game</span>
-                    <div className="question-bank-upload-game-grid">
-                      {QUESTION_BANK_SYNC_TARGETS.map((target) => {
-                        const isSelected = normalizeQuestionBankType(questionUploadTarget.bankType) === normalizeQuestionBankType(target.bankType);
-                        return (
-                          <button
-                            key={target.bankType}
-                            type="button"
-                            className={`question-bank-upload-game-option ${isSelected ? 'is-selected' : ''}`}
-                            onClick={() => setQuestionUploadBankType(target.bankType)}
-                            disabled={isBusy}
-                            aria-pressed={isSelected}
-                          >
-                            <strong>{target.gameName}</strong>
-                            <small>{target.sheetName}</small>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
                   <label className="field">
                     <span>Mode</span>
-                    <select value={questionUploadMode} onChange={(event) => setQuestionUploadMode(event.target.value)} disabled={isBusy}>
+                    <select value={questionUploadMode} onChange={handleQuestionUploadModeChange} disabled={isBusy}>
                       <option value="add">Add new questions only</option>
                       <option value="upsert">Add new and update matches</option>
                       <option value="replace">Replace this game bank</option>
@@ -9912,7 +10124,7 @@ function LobbyScreen({
                   <Button className="primary-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={isBusy}>
                     Choose CSV
                   </Button>
-                  <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={isBusy || !questionUploadDraft}>
+                  <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={isBusy || !questionUploadDraft || (questionUploadReport && !questionUploadReport.canUpload)}>
                     Submit Upload
                   </Button>
                   <input
@@ -9950,18 +10162,37 @@ function LobbyScreen({
                     ) : null}
                   </div>
                 ) : null}
-              </div>
-
-              <div className="button-row question-bank-actions">
-                <Button className="ghost-button compact" onClick={questionBankSyncAction} disabled={isBusy}>
-                  {`Sync ${questionBankActionLabel}`}
-                </Button>
-                <Button className="primary-button compact" onClick={questionBankImportAction} disabled={isBusy}>
-                  {`Import ${questionBankImportLabel}`}
-                </Button>
-                <Button className="ghost-button compact" onClick={onResetQuestionBank} disabled={isBusy}>
-                  Re-enter All Questions
-                </Button>
+                {questionUploadReport ? (
+                  <div className={`question-bank-preflight ${questionUploadReport.canUpload ? 'is-ready' : 'is-error'}`}>
+                    <div className="question-bank-preflight-head">
+                      <div>
+                        <p className="eyebrow">CSV Check</p>
+                        <h4>{questionUploadReport.canUpload ? 'Ready to upload' : 'Needs review'}</h4>
+                      </div>
+                      <span className="status-pill">{questionUploadReport.rowCount} rows</span>
+                    </div>
+                    <div className="question-bank-preflight-grid">
+                      <span><strong>{Number(questionUploadReport.summary?.imported || 0)}</strong> new</span>
+                      <span><strong>{Number(questionUploadReport.summary?.updated || 0)}</strong> updates</span>
+                      <span><strong>{Number(questionUploadReport.summary?.duplicates || 0)}</strong> duplicates</span>
+                      <span><strong>{Number(questionUploadReport.errorCount || 0)}</strong> issues</span>
+                    </div>
+                    {questionUploadReport.errors.length ? (
+                      <ul className="question-bank-preflight-list">
+                        {questionUploadReport.errors.slice(0, 10).map((issue, index) => (
+                          <li key={`${issue}-${index}`}>{issue}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {!questionUploadReport.errors.length && questionUploadReport.warnings.length ? (
+                      <ul className="question-bank-preflight-list">
+                        {questionUploadReport.warnings.slice(0, 6).map((warning, index) => (
+                          <li key={`${warning}-${index}`}>{warning}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </section>
           </section>
@@ -29839,7 +30070,7 @@ function ProductionApp() {
         currentPlayerSeat={dashboardSeat}
         currentPlayerLifetimeLabel={currentPlayerLifetimeLabel}
         pendingActivityCount={pendingActivityCount}
-        bankQuestions={gameBankQuestions}
+        bankQuestions={bankQuestions}
         questionBankExportQuestionsByType={questionBankExportQuestionsByType}
         questionCategories={lobbyCategoryOptions}
         gameName={lobbyGameName}

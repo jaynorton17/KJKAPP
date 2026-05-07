@@ -1713,6 +1713,83 @@ button:disabled {
   background: linear-gradient(90deg, #70ffc7, #d8ff9c);
 }
 
+.question-bank-preflight {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.question-bank-preflight.is-ready {
+  border-color: rgba(112, 255, 199, 0.36);
+  background:
+    linear-gradient(135deg, rgba(112, 255, 199, 0.1), transparent 58%),
+    rgba(0, 0, 0, 0.18);
+}
+
+.question-bank-preflight.is-error {
+  border-color: rgba(255, 112, 112, 0.44);
+  background:
+    linear-gradient(135deg, rgba(255, 112, 112, 0.12), transparent 58%),
+    rgba(0, 0, 0, 0.18);
+}
+
+.question-bank-preflight-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.question-bank-preflight-head h4 {
+  margin: 2px 0 0;
+  color: #fff;
+  font-size: 0.95rem;
+}
+
+.question-bank-preflight-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.question-bank-preflight-grid span {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.question-bank-preflight-grid strong {
+  display: block;
+  color: #fff;
+  font-size: 1.1rem;
+}
+
+.question-bank-preflight-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.question-bank-preflight-list li {
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .filter-card {
   display: grid;
   gap: 10px;
@@ -13412,6 +13489,7 @@ select:focus-visible {
   .game-lobby-grid,
   .question-bank-status-grid,
   .question-bank-sheet-grid,
+  .question-bank-preflight-grid,
   .question-bank-upload-controls,
   .create-filters-grid {
     grid-template-columns: 1fr;
@@ -13677,6 +13755,7 @@ select:focus-visible {
   .live-round-grid,
   .question-bank-status-grid,
   .question-bank-sheet-grid,
+  .question-bank-preflight-grid,
   .question-bank-upload-controls {
     grid-template-columns: 1fr;
   }
