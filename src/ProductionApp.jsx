@@ -18820,10 +18820,14 @@ function ProductionApp() {
   const selectedLocalGameSummary = enrichedLocalArchivedGames.find((entry) => entry.id === selectedGameId) || null;
   const activeSummaryModal = selectedGameSummary || selectedLocalGameSummary || enrichedLocalEndedGameSummary;
   const lobbyRounds = useMemo(
-    () =>
-      enrichedGameLibrary
-        .flatMap((entry) => entry.rounds || []),
-    [enrichedGameLibrary],
+    () => {
+      const mergedById = new Map();
+      [...trackedGameEntries, ...previousGames].forEach((entry) => {
+        if (entry?.id && !mergedById.has(entry.id)) mergedById.set(entry.id, entry);
+      });
+      return [...mergedById.values()].flatMap((entry) => entry.rounds || []);
+    },
+    [previousGames, trackedGameEntries],
   );
   const gameBankRecords = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'game'),
@@ -19288,11 +19292,11 @@ function ProductionApp() {
   const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const previousCompletedGames = useMemo(
     () =>
-      persistedPreviousGames.filter(
+      previousGames.filter(
         (entry) =>
           entry.status === 'completed' || entry.status === 'ended',
       ),
-    [persistedPreviousGames],
+    [previousGames],
   );
   const analyticsActiveGames = useMemo(
     () => activeGames,
