@@ -18,6 +18,8 @@ Use this as the knowledge guide for the custom GPT that creates upload-ready que
 - `Active` must be `Yes`.
 - `Added By` should be `ChatGPT`.
 - `Source Label` should be `generated:[Sheet Name]`.
+- `Intensity` must be numeric only: `1`, `2`, `3`, `4`, or `5`. Do not put words such as `gentle`, `playful`, `cheeky`, `spicy`, or `deep` in the `Intensity` column.
+- Put requested moods such as spicy, cheeky, playful, deep, or gentle in `Tone`, `Tags`, and the wording of the question instead.
 - Quote CSV cells that contain commas, quotes, or line breaks.
 - Escape quotes inside CSV cells by doubling them.
 
@@ -167,6 +169,7 @@ Before returning a CSV, silently audit for:
 - wrong sheet/game values
 - wrong column count
 - invalid question type for the selected game
+- non-numeric intensity values
 - wrong number of data rows
 
 Rewrite failed rows before output.
