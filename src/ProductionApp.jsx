@@ -313,6 +313,34 @@ const escapeCsvCell = (value = '') => {
 };
 const buildQuestionBankUploadTemplateCsv = () =>
   `${QUESTION_BANK_UPLOAD_COLUMNS.map(escapeCsvCell).join(',')}\n`;
+const countQuestionBankUploadDataRows = (rawText = '') => {
+  const text = String(rawText || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  let rows = 0;
+  let field = '';
+  let rowHasContent = false;
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      field += '"';
+      index += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === '\n' && !inQuotes) {
+      if (rowHasContent || field.trim()) rows += 1;
+      field = '';
+      rowHasContent = false;
+    } else {
+      field += char;
+      if (!/\s/.test(char)) rowHasContent = true;
+    }
+  }
+
+  if (rowHasContent || field.trim()) rows += 1;
+  return Math.max(0, rows - 1);
+};
 const makeQuestionBankUploadTemplateFilename = (target = QUESTION_BANK_SYNC_TARGETS[0]) =>
   `${String(target.sheetName || target.gameName || 'question-bank')
     .trim()
@@ -6807,6 +6835,8 @@ function LobbyScreen({
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [questionUploadBankType, setQuestionUploadBankType] = useState('game');
   const [questionUploadMode, setQuestionUploadMode] = useState('replace');
+  const [questionUploadDraft, setQuestionUploadDraft] = useState(null);
+  const [questionUploadProgress, setQuestionUploadProgress] = useState({ status: 'idle', percent: 0, message: '' });
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
   const [selectedRoundTypes, setSelectedRoundTypes] = useState([]);
   const [selectedCategories, setSelectedCategories] = useState([]);
@@ -7997,17 +8027,69 @@ function LobbyScreen({
     const file = event.target.files?.[0] || null;
     event.target.value = '';
     if (!file) return;
-    if (!onUploadQuestionBankCsv) {
-      window.alert('Question bank upload is not available.');
+    setQuestionUploadProgress({ status: 'reading', percent: 18, message: `Reading ${file.name}...` });
+    try {
+      const rawText = await file.text();
+      validateQuestionBankUploadHeaders(rawText);
+      const rowCount = countQuestionBankUploadDataRows(rawText);
+      setQuestionUploadDraft({
+        fileName: file.name,
+        fileSize: file.size,
+        rawText,
+        rowCount,
+      });
+      setQuestionUploadProgress({
+        status: 'ready',
+        percent: 35,
+        message: `${file.name} selected. ${rowCount} data row${rowCount === 1 ? '' : 's'} ready to upload to ${questionUploadTarget.gameName}.`,
+      });
+    } catch (error) {
+      setQuestionUploadDraft(null);
+      setQuestionUploadProgress({
+        status: 'error',
+        percent: 0,
+        message: error?.message || 'Could not read that CSV file.',
+      });
+    }
+  };
+  const handleClearQuestionUploadDraft = () => {
+    setQuestionUploadDraft(null);
+    setQuestionUploadProgress({ status: 'idle', percent: 0, message: '' });
+  };
+  const handleSubmitQuestionUpload = async () => {
+    if (!questionUploadDraft?.rawText) {
+      setQuestionUploadProgress({ status: 'error', percent: 0, message: 'Choose a CSV file first.' });
       return;
     }
-    const rawText = await file.text();
-    await onUploadQuestionBankCsv({
+    if (!onUploadQuestionBankCsv) {
+      setQuestionUploadProgress({ status: 'error', percent: 0, message: 'Question bank upload is not available.' });
+      return;
+    }
+    setQuestionUploadProgress({
+      status: 'uploading',
+      percent: 62,
+      message: `Uploading ${questionUploadDraft.fileName} to ${questionUploadTarget.gameName}...`,
+    });
+    const uploadResult = await onUploadQuestionBankCsv({
       targetBankType: questionUploadTarget.bankType,
       mode: questionUploadMode,
-      rawText,
-      fileName: file.name,
+      rawText: questionUploadDraft.rawText,
+      fileName: questionUploadDraft.fileName,
     });
+    if (!uploadResult) {
+      setQuestionUploadProgress({
+        status: 'error',
+        percent: 0,
+        message: 'Upload did not complete. Check the app notice above for the reason.',
+      });
+      return;
+    }
+    const summary = uploadResult.result?.summary || {};
+    const message = questionUploadMode === 'add'
+      ? `Upload complete: ${Number(summary.imported || 0)} new, ${Number(summary.updated || 0)} updated, ${Number(summary.duplicates || 0)} duplicates skipped.`
+      : `Upload complete: ${Number(uploadResult.replaceResult?.replaced || 0)} active, ${Number(uploadResult.replaceResult?.retired || 0)} used kept retired, ${Number(uploadResult.replaceResult?.removed || 0)} unused removed.`;
+    setQuestionUploadProgress({ status: 'done', percent: 100, message });
+    setQuestionUploadDraft(null);
   };
 
   useEffect(() => {
@@ -9766,7 +9848,10 @@ function LobbyScreen({
                     Copy Master Prompt
                   </Button>
                   <Button className="primary-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={isBusy}>
-                    Upload CSV
+                    Choose CSV
+                  </Button>
+                  <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={isBusy || !questionUploadDraft}>
+                    Submit Upload
                   </Button>
                   <input
                     ref={questionUploadInputRef}
@@ -9776,6 +9861,27 @@ function LobbyScreen({
                     onChange={handleQuestionUploadFileChange}
                   />
                 </div>
+                {questionUploadProgress.status !== 'idle' ? (
+                  <div className={`question-bank-upload-progress is-${questionUploadProgress.status}`}>
+                    <div className="question-bank-upload-progress-head">
+                      <strong>
+                        {questionUploadDraft?.fileName || (questionUploadProgress.status === 'done' ? 'Upload complete' : 'CSV upload')}
+                      </strong>
+                      {questionUploadDraft ? (
+                        <button type="button" onClick={handleClearQuestionUploadDraft} disabled={isBusy}>
+                          Clear
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="question-bank-upload-progress-track" aria-hidden="true">
+                      <span style={{ width: `${Math.max(0, Math.min(100, Number(questionUploadProgress.percent || 0)))}%` }} />
+                    </div>
+                    <p>{questionUploadProgress.message}</p>
+                    {questionUploadDraft ? (
+                      <small>{`${questionUploadDraft.rowCount} rows selected for ${questionUploadTarget.gameName} in ${questionUploadMode === 'add' ? 'add new only' : 'replace'} mode.`}</small>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               <div className="button-row question-bank-actions">

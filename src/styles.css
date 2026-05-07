@@ -1512,7 +1512,7 @@ button:disabled {
 
 .question-bank-upload-controls {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) repeat(4, minmax(150px, auto));
+  grid-template-columns: minmax(170px, 1fr) repeat(5, minmax(150px, auto));
   gap: 10px;
   align-items: end;
 }
@@ -1631,6 +1631,86 @@ button:disabled {
 
 .question-bank-upload-input {
   display: none;
+}
+
+.question-bank-upload-progress {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.question-bank-upload-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.question-bank-upload-progress-head strong {
+  min-width: 0;
+  color: #fff;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.question-bank-upload-progress-head button {
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.question-bank-upload-progress-track {
+  overflow: hidden;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.question-bank-upload-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 220ms ease;
+}
+
+.question-bank-upload-progress p,
+.question-bank-upload-progress small {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.question-bank-upload-progress small {
+  color: rgba(255, 255, 255, 0.56);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.question-bank-upload-progress.is-error {
+  border-color: rgba(255, 112, 112, 0.42);
+  background: rgba(95, 20, 32, 0.24);
+}
+
+.question-bank-upload-progress.is-error .question-bank-upload-progress-track span {
+  background: linear-gradient(90deg, #ff7070, #ffb199);
+}
+
+.question-bank-upload-progress.is-done {
+  border-color: rgba(112, 255, 199, 0.42);
+  background: rgba(12, 82, 66, 0.18);
+}
+
+.question-bank-upload-progress.is-done .question-bank-upload-progress-track span {
+  background: linear-gradient(90deg, #70ffc7, #d8ff9c);
 }
 
 .filter-card {
