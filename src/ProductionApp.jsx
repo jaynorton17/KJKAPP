@@ -642,12 +642,17 @@ const pendingDeletedGamesKey = 'kjk-pending-deleted-game-ids';
 const editingModeKey = 'kjk-editing-mode';
 const questionBankMetaId = 'question-bank-source';
 const EDITING_MODE_PIN = '0000';
+const QUESTION_BANK_PIN = '0000';
 const TEST_GAME_PREFIX = 'test-game-';
 const TEST_MODE_PLAYER_UID = 'editing-mode-kim';
 const TEST_MODE_PLAYER_NAME = 'Kim (Test)';
 const fixedPlayerUids = {
   jay: 'jaynorton17',
   kim: 'stonekim93',
+};
+const getSafeInitialDashboardTab = (value) => {
+  const nextTab = normalizeText(value) || 'gameLobby';
+  return nextTab === 'questionBank' ? 'gameLobby' : nextTab;
 };
 const normalizeIdentity = (value) => normalizeText(value).toLowerCase();
 const seatFromPlayerRef = (value) => {
@@ -5960,7 +5965,7 @@ function LobbyScreen({
   onResetQuestionBank,
   onActiveTabChange,
 }) {
-  const [activeTab, setActiveTab] = useState(() => localStorage.getItem('kjk-dashboard-tab') || 'gameLobby');
+  const [activeTab, setActiveTab] = useState(() => getSafeInitialDashboardTab(localStorage.getItem('kjk-dashboard-tab')));
   const [activityTab, setActivityTab] = useState(() => localStorage.getItem('kjk-activity-tab') || 'activeGames');
   const [createMode, setCreateMode] = useState('random');
   const [quizCreateCodeDraft, setQuizCreateCodeDraft] = useState('');
@@ -6380,8 +6385,25 @@ function LobbyScreen({
     onSignOut();
   };
 
+  const requestQuestionBankAccess = () => {
+    const pin = window.prompt('Enter PIN for Question Bank.');
+    if (pin === null) return false;
+    if (String(pin).trim() !== QUESTION_BANK_PIN) {
+      window.alert('Incorrect PIN.');
+      return false;
+    }
+    return true;
+  };
+
+  const handleQuestionBankTabSelect = () => {
+    closeDashboardMenu();
+    if (!requestQuestionBankAccess()) return;
+    setActiveTab('questionBank');
+  };
+
   const handleDashboardTabSelect = (tabId) => {
     closeDashboardMenu();
+    if (tabId === 'questionBank' && !requestQuestionBankAccess()) return;
     setActiveTab(tabId);
     if (tabId === 'activity') setActivityTab((current) => current || 'activeGames');
   };
@@ -7883,7 +7905,7 @@ function LobbyScreen({
               ) : null}
               <section className="settings-menu-section">
                 <span className="settings-section-label">Account</span>
-                <Button className="ghost-button compact" onClick={() => { closeDashboardMenu(); setActiveTab('questionBank'); }} disabled={isBusy}>
+                <Button className="ghost-button compact" onClick={handleQuestionBankTabSelect} disabled={isBusy}>
                   Question Bank
                 </Button>
                 <Button className="ghost-button compact" onClick={() => { closeDashboardMenu(); setIsProfileOpen(true); }} disabled={isBusy}>
@@ -17933,7 +17955,7 @@ function ProductionApp() {
   const [deferredLobbyDataReady, setDeferredLobbyDataReady] = useState(false);
   const [dashboardTabState, setDashboardTabState] = useState(() => {
     try {
-      return window.localStorage.getItem('kjk-dashboard-tab') || 'gameLobby';
+      return getSafeInitialDashboardTab(window.localStorage.getItem('kjk-dashboard-tab'));
     } catch {
       return 'gameLobby';
     }
