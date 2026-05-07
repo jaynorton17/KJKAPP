@@ -9642,14 +9642,27 @@ function LobbyScreen({
                   <span>Upload a cleaned CSV directly into the selected game bank. Replace keeps used questions retired instead of deleting them.</span>
                 </div>
                 <div className="question-bank-upload-controls">
-                  <label className="field">
-                    <span>Game</span>
-                    <select value={questionUploadTarget.bankType} onChange={(event) => setQuestionUploadBankType(event.target.value)} disabled={isBusy}>
-                      {QUESTION_BANK_SYNC_TARGETS.map((target) => (
-                        <option key={target.bankType} value={target.bankType}>{target.gameName}</option>
-                      ))}
-                    </select>
-                  </label>
+                  <div className="question-bank-upload-game-picker" role="group" aria-label="Game for CSV template and prompt">
+                    <span className="question-bank-upload-control-label">Game</span>
+                    <div className="question-bank-upload-game-grid">
+                      {QUESTION_BANK_SYNC_TARGETS.map((target) => {
+                        const isSelected = normalizeQuestionBankType(questionUploadTarget.bankType) === normalizeQuestionBankType(target.bankType);
+                        return (
+                          <button
+                            key={target.bankType}
+                            type="button"
+                            className={`question-bank-upload-game-option ${isSelected ? 'is-selected' : ''}`}
+                            onClick={() => setQuestionUploadBankType(target.bankType)}
+                            disabled={isBusy}
+                            aria-pressed={isSelected}
+                          >
+                            <strong>{target.gameName}</strong>
+                            <small>{target.sheetName}</small>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                   <label className="field">
                     <span>Mode</span>
                     <select value={questionUploadMode} onChange={(event) => setQuestionUploadMode(event.target.value)} disabled={isBusy}>
