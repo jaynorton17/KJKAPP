@@ -574,6 +574,7 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'Write clean standalone statements, not questions.',
       'Do not append numeric codes or IDs to the statement.',
       'Leave Options and Correct Answer blank; the app supplies True and False.',
+      'Avoid commas inside statements where possible. If a statement needs a comma, the Question CSV cell must be wrapped in double quotes.',
       'Mix statements about Jay, Kim, and both of them. Do not let every row follow the same sentence shape.',
     ],
     examples: [
@@ -985,6 +986,8 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
     '- Default Answer Type and Answer Type should match the Question Type: text for text/favourite/pet peeve, multipleChoice for choice/preference/true false, number for numeric/rating, ranked for ranked/sort rows.',
     '- Leave Unit Label, Scoring Divisor, Rounding Mode, Round Penalty Value, Fixed Penalty, and Scoring columns blank unless the question clearly needs them.',
     '- Quote CSV cells that contain commas, quotes, or line breaks. Escape quotes by doubling them.',
+    '- For True or False, Most Likely To, and Red Flag Green Flag, Options and Correct Answer must stay blank because the app supplies the answer choices.',
+    '- For True or False rows, Question Type must be exactly "True or False", Active must be exactly "Yes", and Intensity must be blank or a digit from 1 to 5.',
     '',
     'Strict anti-repetition rules:',
     ...STRICT_QUESTION_BANK_GENERATION_RULES.map((rule) => `- ${rule}`),
@@ -1077,6 +1080,65 @@ const normalizeGeneratedIntensityValue = (value = '', tone = '') => {
   if (/\b(gentle|soft|easy)\b/.test(key)) return '1';
   return '';
 };
+const findGeneratedQuestionBankQuestionBoundary = ({
+  cells = [],
+  normalizedBankType = 'game',
+  categoryKeys = new Set(),
+  allowedTypeIds = new Set(),
+} = {}) => {
+  const fixedChoiceGeneratedGame = QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType);
+  const searchLimit = Math.min(cells.length, 14);
+  for (let index = 3; index < searchLimit; index += 1) {
+    const value = normalizeText(cells[index]);
+    if (!value) continue;
+    if (categoryKeys.has(value.toLowerCase())) return { index, kind: 'category' };
+    if (
+      fixedChoiceGeneratedGame
+      && allowedTypeIds.has(normalizeQuestionType(value, 'manual'))
+      && (index > 4 || !normalizeText(cells[3]))
+    ) {
+      return { index, kind: 'type' };
+    }
+  }
+  return null;
+};
+const normalizeGeneratedQuestionTextFragments = (fragments = []) =>
+  normalizeText(fragments.filter((fragment) => normalizeText(fragment)).join(', '))
+    .replace(/\s+([?.!;:])/g, '$1')
+    .replace(/,\s+([?.!])/g, '$1');
+const normalizeGeneratedQuestionBankRowShape = ({
+  cells = [],
+  selectedTarget = QUESTION_BANK_SYNC_TARGETS[0],
+  normalizedBankType = 'game',
+  profile = {},
+  categoryKeys = new Set(),
+  allowedTypeIds = new Set(),
+} = {}) => {
+  const expectedColumnCount = QUESTION_BANK_UPLOAD_COLUMNS.length;
+  const boundary = findGeneratedQuestionBankQuestionBoundary({
+    cells,
+    normalizedBankType,
+    categoryKeys,
+    allowedTypeIds,
+  });
+  const shouldRebuildFromQuestionBoundary =
+    boundary
+    && boundary.index > 3
+    && (
+      cells.length !== expectedColumnCount
+      || QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType)
+    );
+
+  if (!shouldRebuildFromQuestionBoundary) return [...cells];
+
+  const question = normalizeGeneratedQuestionTextFragments(cells.slice(2, boundary.index));
+  const fallbackCategory = profile.categories?.[0] || selectedTarget.gameName || '';
+  const tailCells = cells.slice(boundary.index);
+  if (boundary.kind === 'category') {
+    return [selectedTarget.sheetName, selectedTarget.gameName, question, ...tailCells];
+  }
+  return [selectedTarget.sheetName, selectedTarget.gameName, question, fallbackCategory, ...tailCells];
+};
 const normalizeGeneratedQuestionBankCsvColumns = (rawText = '', target = QUESTION_BANK_SYNC_TARGETS[0]) => {
   const parsedRows = parseQuestionBankUploadCsvRows(rawText);
   const header = QUESTION_BANK_UPLOAD_COLUMNS.join(',');
@@ -1084,7 +1146,6 @@ const normalizeGeneratedQuestionBankCsvColumns = (rawText = '', target = QUESTIO
     parsedRows.headers.length === QUESTION_BANK_UPLOAD_COLUMNS.length
     && QUESTION_BANK_UPLOAD_COLUMNS.every((column, index) => parsedRows.headers[index] === column);
   if (!hasExactHeader || !parsedRows.rows.length) return rawText;
-  if (parsedRows.rows.some((cells) => cells.length > QUESTION_BANK_UPLOAD_COLUMNS.length)) return rawText;
 
   const selectedTarget = getQuestionBankSyncTarget(target?.bankType || 'game');
   const normalizedBankType = normalizeQuestionBankType(selectedTarget.bankType);
@@ -1095,7 +1156,14 @@ const normalizeGeneratedQuestionBankCsvColumns = (rawText = '', target = QUESTIO
   const defaultTypeLabel = getGeneratedQuestionBankDefaultTypeLabel(selectedTarget);
 
   const rows = parsedRows.rows.map((cells) => {
-    const workingCells = [...cells];
+    const workingCells = normalizeGeneratedQuestionBankRowShape({
+      cells,
+      selectedTarget,
+      normalizedBankType,
+      profile,
+      categoryKeys,
+      allowedTypeIds,
+    });
     const correctAnswerIndex = columnIndex['Correct Answer'];
     const activeIndex = columnIndex.Active;
     if (
@@ -1111,6 +1179,9 @@ const normalizeGeneratedQuestionBankCsvColumns = (rawText = '', target = QUESTIO
       { length: QUESTION_BANK_UPLOAD_COLUMNS.length },
       (_, index) => workingCells[index] || '',
     );
+
+    paddedCells[columnIndex.Sheet] = selectedTarget.sheetName;
+    paddedCells[columnIndex.Game] = selectedTarget.gameName;
 
     const category = normalizeText(paddedCells[columnIndex.Category]);
     const questionType = normalizeText(paddedCells[columnIndex['Question Type']]);
@@ -1182,6 +1253,8 @@ const buildQuestionBankGenerationRepairReport = (report) => {
     ...errors.map((issue) => `- ${issue}`),
     warnings.length ? 'Warnings:' : '',
     ...warnings.map((warning) => `- ${warning}`),
+    'Wrong column counts usually mean a cell contains an unquoted comma. Quote every CSV cell that contains a comma, quote, or line break.',
+    'Do not move values into neighbouring columns to fix this. Keep the exact header order and exactly one cell per header column.',
     'Fix every issue and return the full CSV again with the exact same header and requested row count.',
   ].filter(Boolean).join('\n');
 };
@@ -1737,6 +1810,22 @@ const buildQuestionBankUploadPreflightReport = ({
     warningCount: warnings.length,
     canUpload: !errors.length,
   };
+};
+const buildQuestionBankUploadOutcomeQuestions = (result = {}) => {
+  const makeRows = (questions = [], action = 'Added') =>
+    (questions || [])
+      .map((question, index) => ({
+        key: `${action}-${question?.id || index}-${makeQuestionBankPreflightKey(question?.question || '')}`,
+        action,
+        question: normalizeText(question?.question),
+        category: normalizeText(question?.category),
+        type: formatQuestionBankQuestionTypeForExport(question?.roundType || question?.originalQuestionType || 'text'),
+      }))
+      .filter((item) => item.question);
+  return [
+    ...makeRows(result?.imports || [], 'Added'),
+    ...makeRows(result?.updates || [], 'Updated'),
+  ];
 };
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const MOST_LIKELY_STARTER_QUESTIONS = [
@@ -7561,6 +7650,7 @@ function LobbyScreen({
   const [questionUploadDraft, setQuestionUploadDraft] = useState(null);
   const [questionUploadReport, setQuestionUploadReport] = useState(null);
   const [questionUploadProgress, setQuestionUploadProgress] = useState({ status: 'idle', percent: 0, message: '' });
+  const [questionUploadOutcomeQuestions, setQuestionUploadOutcomeQuestions] = useState([]);
   const [questionGenerationCountDraft, setQuestionGenerationCountDraft] = useState('50');
   const [questionGenerationType, setQuestionGenerationType] = useState('surprise');
   const [questionGenerationCategory, setQuestionGenerationCategory] = useState('surprise');
@@ -8705,6 +8795,7 @@ function LobbyScreen({
     setQuestionUploadDraft(null);
     setQuestionUploadReport(null);
     setQuestionUploadProgress({ status: 'idle', percent: 0, message: '' });
+    setQuestionUploadOutcomeQuestions([]);
   };
   const handleQuestionBankSegmentChange = (segment) => {
     setQuestionBankSegment(segment);
@@ -8827,6 +8918,7 @@ function LobbyScreen({
     setQuestionUploadMode('add');
     setQuestionUploadDraft(null);
     setQuestionUploadReport(null);
+    setQuestionUploadOutcomeQuestions([]);
     setIsGeneratingQuestionBankCsv(true);
     setQuestionUploadProgress({
       status: 'generating',
@@ -8932,6 +9024,7 @@ function LobbyScreen({
       }
 
       const uploadSummary = uploadResult.result?.summary || {};
+      setQuestionUploadOutcomeQuestions(buildQuestionBankUploadOutcomeQuestions(uploadResult.result));
       setQuestionUploadProgress({
         status: 'done',
         percent: 100,
@@ -8941,6 +9034,7 @@ function LobbyScreen({
     } catch (error) {
       setQuestionUploadDraft(null);
       setQuestionUploadReport(null);
+      setQuestionUploadOutcomeQuestions([]);
       setQuestionUploadProgress({
         status: 'error',
         percent: 0,
@@ -8977,6 +9071,7 @@ function LobbyScreen({
       .replace(/(?:-repaired-\d+|-repaired)?\.csv$/i, `-repaired-${nextRepairAttempts}.csv`);
 
     setIsGeneratingQuestionBankCsv(true);
+    setQuestionUploadOutcomeQuestions([]);
     setQuestionUploadProgress({
       status: 'repairing',
       percent: 38,
@@ -9049,6 +9144,7 @@ function LobbyScreen({
         return;
       }
       const uploadSummary = uploadResult.result?.summary || {};
+      setQuestionUploadOutcomeQuestions(buildQuestionBankUploadOutcomeQuestions(uploadResult.result));
       setQuestionUploadProgress({
         status: 'done',
         percent: 100,
@@ -9056,6 +9152,7 @@ function LobbyScreen({
       });
       setQuestionUploadDraft(null);
     } catch (error) {
+      setQuestionUploadOutcomeQuestions([]);
       setQuestionUploadProgress({
         status: 'error',
         percent: 0,
@@ -9069,6 +9166,7 @@ function LobbyScreen({
     const file = event.target.files?.[0] || null;
     event.target.value = '';
     if (!file) return;
+    setQuestionUploadOutcomeQuestions([]);
     setQuestionUploadProgress({ status: 'reading', percent: 18, message: `Reading ${file.name}...` });
     try {
       const rawText = await file.text();
@@ -9114,6 +9212,7 @@ function LobbyScreen({
       percent: 62,
       message: `Uploading ${questionUploadDraft.fileName} to ${questionUploadTarget.gameName}...`,
     });
+    setQuestionUploadOutcomeQuestions([]);
     const uploadResult = await onUploadQuestionBankCsv({
       targetBankType: questionUploadTarget.bankType,
       mode: questionUploadMode,
@@ -9151,6 +9250,7 @@ function LobbyScreen({
     const message = questionUploadMode === 'replace'
       ? `Upload complete: ${Number(uploadResult.replaceResult?.replaced || 0)} active, ${Number(uploadResult.replaceResult?.retired || 0)} used kept retired, ${Number(uploadResult.replaceResult?.removed || 0)} unused removed.`
       : `Upload complete: ${Number(summary.imported || 0)} new, ${Number(summary.updated || 0)} updated, ${Number(summary.duplicates || 0)} duplicates skipped, ${Number(summary.skipped || 0)} unchanged.`;
+    setQuestionUploadOutcomeQuestions(buildQuestionBankUploadOutcomeQuestions(uploadResult.result));
     setQuestionUploadProgress({ status: 'done', percent: 100, message });
     setQuestionUploadDraft(null);
     setQuestionUploadReport(null);
@@ -10946,6 +11046,23 @@ function LobbyScreen({
                     <p>{questionUploadProgress.message}</p>
                     {questionUploadDraft ? (
                       <small>{`${questionUploadDraft.rowCount} generated row${questionUploadDraft.rowCount === 1 ? '' : 's'} checked for ${questionUploadTarget.gameName}.`}</small>
+                    ) : null}
+                    {questionUploadOutcomeQuestions.length ? (
+                      <div className="question-bank-upload-outcome" aria-label="Questions added in this upload">
+                        <div className="question-bank-upload-outcome-head">
+                          <strong>{questionUploadOutcomeQuestions.length} added or updated</strong>
+                          <span>{questionUploadTarget.gameName}</span>
+                        </div>
+                        <ol>
+                          {questionUploadOutcomeQuestions.map((item) => (
+                            <li key={item.key}>
+                              <span>{item.action}</span>
+                              <p>{item.question}</p>
+                              <small>{[item.category, item.type].filter(Boolean).join(' · ')}</small>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
                     ) : null}
                   </div>
                 ) : null}
