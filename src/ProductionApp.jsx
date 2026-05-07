@@ -9779,6 +9779,42 @@ function QuestionAnswerEntryBase({
   const isListRound = usesListInputForQuestionType(roundType);
   const isRatingRound = usesRatingInputForQuestionType(roundType);
   const listCount = getQuestionTypeListCount(roundType, inputRound?.multipleChoiceOptions || []);
+  const listOptionValues = parseAnswerList(inputRound?.multipleChoiceOptions || [])
+    .map((option) => normalizeText(option))
+    .filter(Boolean);
+  const usesOrderingCards = roundType === 'sortIntoOrder' && listOptionValues.length > 1;
+  const effectiveListCount = usesOrderingCards ? listOptionValues.length : listCount;
+  const getOrderedListValues = (rawValue = '') => {
+    if (!usesOrderingCards) return decodeRankedAnswer(rawValue, effectiveListCount);
+    const optionByKey = new Map(listOptionValues.map((option) => [normalizeIdentity(option), option]));
+    const seenOptionKeys = new Set();
+    const orderedValues = [];
+    decodeRankedAnswer(rawValue, effectiveListCount).forEach((entry) => {
+      const key = normalizeIdentity(entry);
+      const option = optionByKey.get(key);
+      if (!option || seenOptionKeys.has(key)) return;
+      seenOptionKeys.add(key);
+      orderedValues.push(option);
+    });
+    listOptionValues.forEach((option) => {
+      const key = normalizeIdentity(option);
+      if (seenOptionKeys.has(key)) return;
+      seenOptionKeys.add(key);
+      orderedValues.push(option);
+    });
+    return orderedValues.slice(0, effectiveListCount);
+  };
+  const applyDefaultOrderingDraft = (draft = defaultDraft) => {
+    if (!usesOrderingCards) return draft;
+    const nextDraft = { ...draft };
+    if (!normalizeText(nextDraft.ownAnswer)) {
+      nextDraft.ownAnswer = encodeRankedAnswer(getOrderedListValues(nextDraft.ownAnswer));
+    }
+    if (!isQuizRound && !singleAnswerOnly && !normalizeText(nextDraft.guessedOther)) {
+      nextDraft.guessedOther = encodeRankedAnswer(getOrderedListValues(nextDraft.guessedOther));
+    }
+    return nextDraft;
+  };
   const isRoundOpen = (currentRound?.status || 'open') === 'open';
   const hasServerSubmittedAnswer = submissionState === 'submitted' || Boolean(normalizeText(currentPlayerAnswer?.ownAnswer || ''));
   // IMPORTANT: This must not flip during Firestore snapshots (e.g. when a field
@@ -9921,7 +9957,7 @@ function QuestionAnswerEntryBase({
       draftToSubmit
       && typeof draftToSubmit === 'object'
       && ('ownAnswer' in draftToSubmit || 'guessedOther' in draftToSubmit);
-    const safeDraftToSubmit = isAnswerDraft ? draftToSubmit : localDraftRef.current;
+    const safeDraftToSubmit = applyDefaultOrderingDraft(isAnswerDraft ? draftToSubmit : localDraftRef.current);
     if (canEditSubmittedAnswer && hasSubmittedAnswer && !isEditingSubmittedAnswer) {
       setIsEditingSubmittedAnswer(true);
       const restoredDraft = (draftStorageKey ? readStoredAnswerDraft(draftStorageKey) : null) || buildSavedDraft();
@@ -10022,11 +10058,78 @@ function QuestionAnswerEntryBase({
     }
 
     if (isListRound) {
-      const labels = getQuestionTypeListLabels(roundType, inputRound?.multipleChoiceOptions || []);
-      const values = decodeRankedAnswer(value, listCount);
-      const listHint = Array.isArray(inputRound?.multipleChoiceOptions) && inputRound.multipleChoiceOptions.length
-        ? inputRound.multipleChoiceOptions.join(' • ')
+      const labels = getQuestionTypeListLabels(roundType, usesOrderingCards ? listOptionValues : inputRound?.multipleChoiceOptions || []);
+      const values = getOrderedListValues(value);
+      const listHint = !usesOrderingCards && listOptionValues.length
+        ? listOptionValues.join(' • ')
         : '';
+
+      if (usesOrderingCards) {
+        const nextOrderedValues = values;
+        const commitOrder = (nextItems) => setter(encodeRankedAnswer(nextItems));
+        const moveOption = (fromIndex, toIndex) => {
+          if (isLocked || !isRoundOpen || fromIndex === toIndex) return;
+          const boundedToIndex = Math.max(0, Math.min(nextOrderedValues.length - 1, toIndex));
+          const nextItems = [...nextOrderedValues];
+          const [moved] = nextItems.splice(fromIndex, 1);
+          nextItems.splice(boundedToIndex, 0, moved);
+          commitOrder(nextItems);
+        };
+        const handleDrop = (event, toIndex) => {
+          event.preventDefault();
+          const fromIndex = Number.parseInt(event.dataTransfer.getData('text/plain'), 10);
+          if (!Number.isFinite(fromIndex)) return;
+          moveOption(fromIndex, toIndex);
+        };
+
+        return (
+          <div className={`ranked-order-list ${embedded ? 'ranked-order-list--embedded' : ''}`} role="list" aria-label={`${placeholder} order`}>
+            {nextOrderedValues.map((option, index) => (
+              <div
+                className={`ranked-order-item ${isLocked || !isRoundOpen ? 'is-locked' : ''}`}
+                key={`${fieldName}-order-${normalizeIdentity(option)}-${index}`}
+                role="listitem"
+                draggable={!isLocked && isRoundOpen}
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('text/plain', String(index));
+                }}
+                onDragOver={(event) => {
+                  if (isLocked || !isRoundOpen) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(event) => handleDrop(event, index)}
+              >
+                <span className="ranked-order-position">{index + 1}</span>
+                <span className="ranked-order-grip" aria-hidden="true">≡</span>
+                <strong>{option}</strong>
+                <span className="ranked-order-actions">
+                  <button
+                    type="button"
+                    className="ranked-order-move"
+                    onClick={() => moveOption(index, index - 1)}
+                    disabled={isLocked || !isRoundOpen || index === 0}
+                    aria-label={`Move ${option} up`}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="ranked-order-move"
+                    onClick={() => moveOption(index, index + 1)}
+                    disabled={isLocked || !isRoundOpen || index === nextOrderedValues.length - 1}
+                    aria-label={`Move ${option} down`}
+                  >
+                    ↓
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        );
+      }
+
       return (
         <>
           <div className={`ranked-input-grid ${embedded ? 'ranked-input-grid--embedded' : ''}`}>
