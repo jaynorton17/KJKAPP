@@ -8134,7 +8134,7 @@ button:disabled {
 
 .room-reveal-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(148px, 0.32fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.42fr) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
   min-height: 0;
@@ -8150,6 +8150,11 @@ button:disabled {
 
 .room-active-frame--this-or-that .room-reveal-layout {
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.48fr) minmax(0, 1fr);
+}
+
+.room-active-frame--most-likely .room-reveal-layout,
+.room-active-frame--red-flag-green-flag .room-reveal-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.5fr) minmax(0, 1fr);
 }
 
 .room-reveal-player-card,
@@ -8345,7 +8350,8 @@ button:disabled {
   font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
   font-size: clamp(1.25rem, 2.1vw, 2rem);
   line-height: 0.95;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: normal;
   text-wrap: balance;
   text-transform: uppercase;
 }
@@ -8362,6 +8368,16 @@ button:disabled {
   max-width: 16ch;
   font-family: inherit;
   font-size: clamp(1.2rem, 1.5vw, 1.55rem);
+  line-height: 1.08;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.room-active-frame--most-likely .room-reveal-center-card strong,
+.room-active-frame--red-flag-green-flag .room-reveal-center-card strong {
+  max-width: 16ch;
+  font-family: inherit;
+  font-size: clamp(1.16rem, 1.45vw, 1.55rem);
   line-height: 1.08;
   overflow-wrap: normal;
   word-break: normal;
@@ -8595,8 +8611,7 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
-  .room-active-frame--true-false .room-reveal-layout,
-  .room-reveal-layout--quiz {
+  .room-reveal-layout {
     grid-template-columns: 1fr;
   }
 }

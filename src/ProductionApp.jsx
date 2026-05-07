@@ -11172,9 +11172,9 @@ function RoomActiveFrameBase({
           : 'Low match';
 
   return (
-    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-frame--put-points' : ''}`} aria-label="Active round scoreboard">
+    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-frame--put-points' : ''} ${isRedFlagGreenFlagGame ? 'room-active-frame--red-flag-green-flag' : ''} ${isCompatibilityMeterGame ? 'room-active-frame--compatibility-meter' : ''} ${isMemoryLaneGame ? 'room-active-frame--memory-lane' : ''}`} aria-label="Active round scoreboard">
       <div className="scoreboard-sheen" aria-hidden="true" />
-      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-stage--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-stage--put-points' : ''}`}>
+      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-stage--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-stage--put-points' : ''} ${isRedFlagGreenFlagGame ? 'room-active-stage--red-flag-green-flag' : ''} ${isCompatibilityMeterGame ? 'room-active-stage--compatibility-meter' : ''} ${isMemoryLaneGame ? 'room-active-stage--memory-lane' : ''}`}>
         <header className="room-active-header">
           <div>
             <span className="scoreboard-kicker">{revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
