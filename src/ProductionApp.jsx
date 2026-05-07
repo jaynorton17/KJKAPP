@@ -860,14 +860,15 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
   const exampleLines = profile.examples.map((example, index) => `${index + 1}. ${example}`).join('\n');
   const typeExampleLines = buildQuestionBankTypeExampleLines(profile.questionTypes);
   const allTypeReferenceLines = buildAllQuestionBankTypeReferenceLines();
-  const defaultQuestionCount = normalizedBankType === 'quiz' || normalizedBankType === TRUE_FALSE_GAME_MODE ? 250 : 150;
+  const defaultQuestionCount = 50;
 
   return [
     `Create a KJK app question-bank CSV for the game "${selectedTarget.gameName}".`,
     `Generate ${defaultQuestionCount} fresh rows unless I give you a different number.`,
+    'For quality control, prefer 50-row batches. If I ask for more than 50 rows, split them into separate 50-row CSV files unless I explicitly ask for one large file.',
     '',
     'Create and attach a downloadable .csv file every time. Do not only paste sample rows into chat unless file attachment is unavailable.',
-    `The CSV file must contain exactly the requested number of data rows, or ${defaultQuestionCount} data rows if I do not specify a different number, plus one header row.`,
+    `For a single-file request, the CSV file must contain exactly the requested number of data rows, or ${defaultQuestionCount} data rows if I do not specify a different number, plus one header row. If splitting a larger request into batches, each CSV must contain exactly that batch's row count plus one header row.`,
     'Do not return a partial file, preview file, sample file, or first few rows unless I explicitly ask for a sample.',
     'If file attachment is unavailable, paste the full CSV text only: no markdown fence, no commentary, no leading blank line, no trailing explanation.',
     'The first row must be exactly this header:',

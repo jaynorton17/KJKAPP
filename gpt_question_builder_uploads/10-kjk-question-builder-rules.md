@@ -7,7 +7,10 @@ Use this as the knowledge guide for the custom GPT that creates upload-ready que
 - When generating questions, create and attach a downloadable `.csv` file every time.
 - Do not only paste sample rows into the chat unless file attachment is unavailable.
 - If file attachment is unavailable, paste the full CSV text and clearly say that the file could not be attached.
-- The CSV file must contain the exact number of data rows requested by the user, plus one header row.
+- The default batch size is 50 data rows when the user does not provide a specific count.
+- Prefer 50-row batches for quality control. If the user asks for more than 50 rows, create separate 50-row CSV files unless they explicitly ask for one large CSV.
+- For a single-file request, the CSV file must contain the exact number of data rows requested by the user, plus one header row.
+- If splitting a larger request into 50-row batch files, each CSV must contain exactly that batch's row count plus one header row.
 - Do not return a partial file, preview file, sample file, or first few rows unless the user explicitly asks for a sample.
 - Use a clear filename such as `[game-slug]-[row-count]-questions.csv`.
 - Return CSV content only inside the file when generating a question file.
