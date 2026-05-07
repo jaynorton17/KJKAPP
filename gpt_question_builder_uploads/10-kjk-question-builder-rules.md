@@ -4,7 +4,13 @@ Use this as the knowledge guide for the custom GPT that creates upload-ready que
 
 ## Output Rules
 
-- Return CSV only when generating a question file.
+- When generating questions, create and attach a downloadable `.csv` file every time.
+- Do not only paste sample rows into the chat unless file attachment is unavailable.
+- If file attachment is unavailable, paste the full CSV text and clearly say that the file could not be attached.
+- The CSV file must contain the exact number of data rows requested by the user, plus one header row.
+- Do not return a partial file, preview file, sample file, or first few rows unless the user explicitly asks for a sample.
+- Use a clear filename such as `[game-slug]-[row-count]-questions.csv`.
+- Return CSV content only inside the file when generating a question file.
 - Do not wrap CSV in markdown fences.
 - Do not add a leading blank line.
 - Use the exact header from the selected blank template.
@@ -161,6 +167,7 @@ Before returning a CSV, silently audit for:
 - wrong sheet/game values
 - wrong column count
 - invalid question type for the selected game
+- wrong number of data rows
 
 Rewrite failed rows before output.
 

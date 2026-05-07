@@ -748,6 +748,7 @@ const STRICT_QUESTION_BANK_GENERATION_RULES = [
 ];
 const STRICT_QUESTION_BANK_SELF_CHECKS = [
   'Before returning the CSV, silently audit the full set for duplicate questions, repeated option pairs, repeated opening phrases, random categories, missing options, wrong game/sheet values, and wrong column count.',
+  'Verify the CSV contains exactly the requested number of data rows plus one header row. Do not output a partial sample.',
   'If the audit finds a repeated option pair, repeated concept, random category, or overused sentence template, rewrite those rows before output.',
   'Only output the final corrected CSV after the audit passes.',
 ];
@@ -765,7 +766,10 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
     `Create a KJK app question-bank CSV for the game "${selectedTarget.gameName}".`,
     `Generate ${defaultQuestionCount} fresh rows unless I give you a different number.`,
     '',
-    'Return CSV only: no markdown fence, no commentary, no leading blank line, no trailing explanation.',
+    'Create and attach a downloadable .csv file every time. Do not only paste sample rows into chat unless file attachment is unavailable.',
+    `The CSV file must contain exactly the requested number of data rows, or ${defaultQuestionCount} data rows if I do not specify a different number, plus one header row.`,
+    'Do not return a partial file, preview file, sample file, or first few rows unless I explicitly ask for a sample.',
+    'If file attachment is unavailable, paste the full CSV text only: no markdown fence, no commentary, no leading blank line, no trailing explanation.',
     'The first row must be exactly this header:',
     header,
     '',
