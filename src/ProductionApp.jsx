@@ -836,6 +836,10 @@ const STRICT_QUESTION_BANK_GENERATION_RULES = [
   'Do not put generated labels, suffixes, IDs, or counters in Question text, including Variant 1, Q1, Row 1, Question 1, description 1, scene 1, batch labels, or numeric endings used only to make rows look unique.',
   'Do not put generated counters in metadata fields either, including Tags or Repeat Group values like memory1, unique-memory-scene-1, prompt-12, or option-set-7.',
   'Category, Tone, Relationship Area, Tags, Game Suitability, AI Use Case, and Repeat Group must be chosen because they fit the actual question.',
+  'For a 50-row batch, use at least 4 categories. Do not make the whole file one category unless I explicitly ask for a single-category batch.',
+  'For games that support multiple question types, use at least 5 different question types in a 50-row batch, and do not let one type dominate the file.',
+  'Use at least 2 tones and 2 intensity levels in a 50-row batch. Do not make every row the same Tone or Intensity.',
+  'Do not create rows by cycling five sentence starters with counters. Every row needs a genuinely different sentence shape.',
   'Use varied sentence shapes: direct question, scenario, comparison, confession-style prompt, playful challenge, memory cue, values cue, and practical everyday choice where the game allows it.',
   'Spread rows across the recommended categories instead of clustering most rows in one or two categories.',
   'If the user asks for all categories, cover every recommended category at least once before repeating categories.',
@@ -846,11 +850,11 @@ const STRICT_QUESTION_BANK_GENERATION_RULES = [
   'If the requested tone is spicy, cheeky, deep, playful, or gentle, express that through Tone, Tags, wording, and numeric Intensity. Do not put mood words in numeric columns.',
 ];
 const STRICT_QUESTION_BANK_SELF_CHECKS = [
-  'Before returning the CSV, silently audit the full set for duplicate questions, repeated option pairs, heavily overlapping option pools, repeated opening phrases, random categories, missing options, wrong game/sheet values, wrong column count, and non-numeric intensity.',
+  'Before returning the CSV, silently audit the full set for duplicate questions, repeated option pairs, heavily overlapping option pools, repeated opening phrases, one-note category/type/tone/intensity distribution, random categories, missing options, wrong game/sheet values, wrong column count, and non-numeric intensity.',
   'Verify the CSV contains exactly the requested number of data rows plus one header row. Do not output a partial sample.',
   'Verify every row has the exact selected Sheet and Game values, a valid allowed Question Type, Active set to Yes, and Intensity blank or numeric 1 to 5.',
   'Verify unused optional fields are genuinely blank rather than filled with placeholders.',
-  'If the audit finds a repeated option pair, repeated option pool, repeated concept, random category, or overused sentence template, rewrite those rows before output.',
+  'If the audit finds a repeated option pair, repeated option pool, repeated concept, random category, overused sentence template, or one-note distribution, rewrite those rows before output.',
   'Only output the final corrected CSV after the audit passes.',
 ];
 const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0]) => {
@@ -888,9 +892,16 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
     `Allowed Question Type values for this game: ${profile.questionTypes.join(', ')}.`,
     `Recommended categories: ${profile.categories.join(', ')}.`,
     '',
+    'Hard 50-row composition requirements:',
+    '- Use varied categories, tone, intensity, relationship areas, tags, and sentence shapes.',
+    '- If this game supports more than one Question Type, use at least 5 different Question Type values.',
+    '- Use at least 4 categories unless I explicitly ask for one category only.',
+    '- Use at least 2 Tone values and at least 2 Intensity values.',
+    '- Do not make a batch that is all one type, all one category, all one tone, or all one intensity.',
+    '',
     'Column rules:',
     '- Question must be unique, natural, and ready to show directly in the app.',
-    '- Do not add row numbers, ID codes, bracketed numeric suffixes, or repeated titles to Question.',
+    '- Do not add row numbers, ID codes, bracketed numeric suffixes, generated labels, or repeated titles to Question. This includes description 1, scene 1, prompt 1, or a number added at the end.',
     '- Options should be pipe-separated inside one CSV cell, for example: Option A | Option B | Option C.',
     '- Correct Answer is only required where the game needs a factual/quiz answer; otherwise leave it blank.',
     '- Intensity must be a number only: 1, 2, 3, 4, or 5. Never put words such as gentle, playful, spicy, cheeky, or deep in the Intensity column.',
@@ -1197,9 +1208,47 @@ const makeQuestionBankTemplateKey = (value = '') =>
     .trim();
 const QUESTION_BANK_GENERATED_COUNTER_REGEX =
   /\b(?:variant|row|question|q|description|scene|prompt|memory|moment|option|choice|item|set|bucket|label)\s*\d+\b/i;
-const QUESTION_BANK_TRAILING_COUNTER_REGEX = /\s+\d+\s*[?!.]?$/;
 const QUESTION_BANK_GENERATED_METADATA_COUNTER_REGEX =
   /\b(?:unique[-_\s]*)?(?:memory|scene|prompt|moment|option|choice|item|set|bucket|group|repeat)[-_\s]*\d+\b/i;
+const QUESTION_BANK_MEANINGFUL_OPENER_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'at',
+  'could',
+  'from',
+  'for',
+  'how',
+  'in',
+  'is',
+  'least',
+  'most',
+  'of',
+  'on',
+  'or',
+  'that',
+  'the',
+  'these',
+  'this',
+  'to',
+  'what',
+  'when',
+  'which',
+  'with',
+  'would',
+  'you',
+  'your',
+]);
+const makeQuestionBankMeaningfulOpenerKey = (question = '') => {
+  let key = makeQuestionBankTemplateKey(question)
+    .replace(/^who is (?:more|most) likely to\s+/, '')
+    .trim();
+  const words = key
+    .split(/\s+/)
+    .filter((word) => word && !QUESTION_BANK_MEANINGFUL_OPENER_STOP_WORDS.has(word));
+  return words.slice(0, 5).join(' ');
+};
 const makeQuestionBankOptionPairKey = (value = '') =>
   String(value || '')
     .split('|')
@@ -1258,6 +1307,15 @@ const buildQuestionBankUploadPreflightReport = ({
   const questionRows = new Map();
   const templateRows = new Map();
   const optionRows = new Map();
+  const openerRows = new Map();
+  const typeCounts = new Map();
+  const categoryCounts = new Map();
+  const toneCounts = new Map();
+  const intensityCounts = new Map();
+  const addPreflightCount = (map, value) => {
+    const key = normalizeText(value) || 'blank';
+    map.set(key, (map.get(key) || 0) + 1);
+  };
 
   parsedRows.objects.forEach((row) => {
     const values = row.values || {};
@@ -1267,6 +1325,10 @@ const buildQuestionBankUploadPreflightReport = ({
     const questionType = normalizeText(values['Question Type']);
     const normalizedType = normalizeQuestionType(questionType, 'text');
     const isPutYourPointsPlayerChoiceRow = isPutYourPointsPlayerChoicePreflightRow(normalizedBankType, questionType, question);
+    addPreflightCount(typeCounts, normalizedType || questionType);
+    addPreflightCount(categoryCounts, values.Category);
+    addPreflightCount(toneCounts, values.Tone);
+    addPreflightCount(intensityCounts, values.Intensity);
 
     if (normalizeText(values.Sheet) !== selectedTarget.sheetName) {
       errors.push(`Row ${rowNumber}: Sheet must be "${selectedTarget.sheetName}".`);
@@ -1286,8 +1348,11 @@ const buildQuestionBankUploadPreflightReport = ({
     if (values.Intensity && !/^[1-5]$/.test(String(values.Intensity).trim())) {
       errors.push(`Row ${rowNumber}: Intensity must be blank or a number from 1 to 5.`);
     }
-    if (QUESTION_BANK_GENERATED_COUNTER_REGEX.test(question) || QUESTION_BANK_TRAILING_COUNTER_REGEX.test(question)) {
+    if (QUESTION_BANK_GENERATED_COUNTER_REGEX.test(question)) {
       errors.push(`Row ${rowNumber}: Question must not include generated labels or counters such as Variant 1, Q1, description 1, or numeric endings.`);
+    }
+    if (options && QUESTION_BANK_GENERATED_COUNTER_REGEX.test(options)) {
+      errors.push(`Row ${rowNumber}: Options must not include generated labels or counters such as Signature moment 92 or option 1.`);
     }
     ['Tags', 'Repeat Group'].forEach((column) => {
       const value = normalizeText(values[column]);
@@ -1331,10 +1396,16 @@ const buildQuestionBankUploadPreflightReport = ({
     const templateKey = makeQuestionBankTemplateKey(question);
     if (templateKey && templateKey !== questionKey) {
       if (templateRows.has(templateKey)) {
-        errors.push(`Rows ${templateRows.get(templateKey)} and ${rowNumber}: question only differs by a generated suffix.`);
+        errors.push(`Rows ${templateRows.get(templateKey)} and ${rowNumber}: question only differs by a generated suffix or counter.`);
       } else {
         templateRows.set(templateKey, rowNumber);
       }
+    }
+    const openerKey = makeQuestionBankMeaningfulOpenerKey(question);
+    if (openerKey) {
+      const rows = openerRows.get(openerKey) || [];
+      rows.push(rowNumber);
+      openerRows.set(openerKey, rows);
     }
     const optionPairKey = makeQuestionBankOptionPairKey(options);
     if (optionPairKey && !QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType) && !isPutYourPointsPlayerChoiceRow) {
@@ -1345,6 +1416,60 @@ const buildQuestionBankUploadPreflightReport = ({
       }
     }
   });
+
+  if (rowCount >= 20) {
+    const nonBlankCountEntries = (map) => [...map.entries()].filter(([key]) => key !== 'blank');
+    const topEntry = (map) => nonBlankCountEntries(map).sort((left, right) => right[1] - left[1])[0] || ['', 0];
+    const multiFormatBankTypes = new Set([
+      normalizeQuestionBankType('game'),
+      normalizeQuestionBankType(PUT_YOUR_POINTS_GAME_MODE),
+      normalizeQuestionBankType(COMPATIBILITY_METER_GAME_MODE),
+      normalizeQuestionBankType(MEMORY_LANE_GAME_MODE),
+    ]);
+    const typeEntries = nonBlankCountEntries(typeCounts);
+    const categoryEntries = nonBlankCountEntries(categoryCounts);
+    const toneEntries = nonBlankCountEntries(toneCounts);
+    const intensityEntries = nonBlankCountEntries(intensityCounts);
+    const [topType, topTypeCount] = topEntry(typeCounts);
+    const [topCategory, topCategoryCount] = topEntry(categoryCounts);
+    const [topTone, topToneCount] = topEntry(toneCounts);
+    const [topIntensity, topIntensityCount] = topEntry(intensityCounts);
+
+    if (allowedTypeIds.size > 1) {
+      const requiredTypeCount = multiFormatBankTypes.has(normalizedBankType)
+        ? Math.min(5, allowedTypeIds.size)
+        : Math.min(2, allowedTypeIds.size);
+      if (typeEntries.length < requiredTypeCount) {
+        errors.push(`${selectedTarget.gameName} batch is too one-note: use at least ${requiredTypeCount} question types, not ${typeEntries.length}.`);
+      }
+      if (multiFormatBankTypes.has(normalizedBankType) && topTypeCount > Math.ceil(rowCount * 0.6)) {
+        errors.push(`${selectedTarget.gameName} batch overuses "${topType}" question type (${topTypeCount}/${rowCount}). Mix the answer formats.`);
+      }
+    }
+    if ((profile.categories || []).length > 1 && categoryEntries.length < Math.min(4, profile.categories.length)) {
+      errors.push(`${selectedTarget.gameName} batch is too narrow: use at least ${Math.min(4, profile.categories.length)} categories, not ${categoryEntries.length}.`);
+    }
+    if (topCategoryCount > Math.ceil(rowCount * 0.85)) {
+      errors.push(`${selectedTarget.gameName} batch overuses "${topCategory}" category (${topCategoryCount}/${rowCount}). Spread the rows across categories.`);
+    }
+    if (toneEntries.length && toneEntries.length < 2) {
+      errors.push(`${selectedTarget.gameName} batch uses only one tone (${topTone}). Use at least two tones.`);
+    }
+    if (topToneCount > Math.ceil(rowCount * 0.9)) {
+      errors.push(`${selectedTarget.gameName} batch overuses "${topTone}" tone (${topToneCount}/${rowCount}). Vary the tone.`);
+    }
+    if (intensityEntries.length && intensityEntries.length < 2) {
+      errors.push(`${selectedTarget.gameName} batch uses only one intensity (${topIntensity}). Use at least two intensity levels.`);
+    }
+
+    const openerLimit = Math.max(3, Math.ceil(rowCount * 0.15));
+    [...openerRows.entries()]
+      .filter(([, rows]) => rows.length > openerLimit)
+      .slice(0, 8)
+      .forEach(([opener, rows]) => {
+        errors.push(`Rows ${rows.slice(0, 8).join(', ')}: repeated opener/template "${opener}" appears ${rows.length} times.`);
+      });
+  }
 
   try {
     result = parseQuestionBankCsvForTarget({

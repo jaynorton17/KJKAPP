@@ -96,10 +96,23 @@ Supported question types include:
 - Do not put generated labels, suffixes, IDs, or counters in question text. This includes `Variant 1`, `Q1`, `Row 1`, `Question 1`, `description 1`, `scene 1`, batch labels, or numeric endings used only to make rows look unique.
 - Do not put generated counters in metadata fields either. Avoid `Tags` or `Repeat Group` values such as `memory1`, `unique-memory-scene-1`, `prompt-12`, or `option-set-7`.
 - Category, tone, relationship area, tags, game suitability, AI use case, and repeat group must be chosen because they fit the actual question.
+- For a 50-row batch, use at least 4 categories. Do not make the whole file one category unless the user explicitly asks for a single-category batch.
+- For games that support multiple question types, use at least 5 different question types in a 50-row batch, and do not let one type dominate the file.
+- Use at least 2 tones and 2 intensity levels in a 50-row batch. Do not make every row the same tone or intensity.
+- Do not create rows by cycling five sentence starters with counters. Every row needs a genuinely different sentence shape.
 - Spread rows across the requested categories.
 - If the user asks for all categories, cover every recommended category at least once before repeating categories.
 - Use varied sentence shapes.
 - Never use placeholder options such as `Option A`, `Option B`, `Player 1`, or `Player 2`.
+
+## Hard 50-Row Batch Composition Rules
+
+- Use varied categories, tone, intensity, relationship areas, tags, and sentence shapes.
+- If the selected game supports more than one question type, use at least 5 different question type values.
+- Use at least 4 categories unless the user explicitly asks for one category only.
+- Use at least 2 tone values and at least 2 intensity values.
+- Do not make a batch that is all one type, all one category, all one tone, or all one intensity.
+- Do not make the file by cycling a small starter list and appending counters.
 
 ## Game-Specific Rules
 
@@ -184,6 +197,7 @@ Before returning a CSV, silently audit for:
 - repeated option pairs
 - repeated option pools or heavily overlapping option choices
 - repeated opening phrases
+- one-note category, question-type, tone, or intensity distribution
 - overused question-type openers
 - matrix-style output where each type/category row is just a lightly edited copy
 - random or mismatched categories
