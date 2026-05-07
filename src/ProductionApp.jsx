@@ -3650,6 +3650,9 @@ const normalizeRedFlagGreenFlagChoice = (value = '') => {
 };
 const normalizeComparableAnswer = (value = '') =>
   normalizeText(serialiseAnswerForQuestionType('text', value)).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const COMPATIBILITY_FINAL_REVEAL_STATUS = 'compatibilityFinalReveal';
+const isCompatibilityFinalRevealRound = (round = {}) =>
+  normalizeText(round?.status || '') === COMPATIBILITY_FINAL_REVEAL_STATUS;
 const calculateCompatibilityScore = (round = {}) => {
   const jayAnswer = normalizeComparableAnswer(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
   const kimAnswer = normalizeComparableAnswer(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '');
@@ -3664,6 +3667,69 @@ const calculateCompatibilityScore = (round = {}) => {
 };
 const getCompatibilityPenaltyForScore = (score = 0) =>
   COMPATIBILITY_BANDS.find((band) => Number(score || 0) >= band.min)?.penalty ?? 500;
+const buildCompatibilitySessionOutcome = (rounds = []) => {
+  const normalizedRounds = normalizeStoredRounds(rounds)
+    .filter((round) => !isCompatibilityFinalRevealRound(round));
+  const scoredRounds = normalizedRounds.map((round) => ({
+    ...round,
+    compatibilityScore: getStoredPenaltyOverride(round?.compatibilityScore) ?? calculateCompatibilityScore(round),
+  }));
+  const totalScore = scoredRounds.reduce((sum, round) => sum + Number(round?.compatibilityScore || 0), 0);
+  const averageScore = scoredRounds.length ? Math.round(totalScore / scoredRounds.length) : 0;
+  const finalPenalty = getCompatibilityPenaltyForScore(averageScore);
+  return {
+    rounds: scoredRounds,
+    totalQuestions: scoredRounds.length,
+    averageScore,
+    finalPenalty,
+    totals: {
+      jay: finalPenalty,
+      kim: finalPenalty,
+    },
+  };
+};
+const buildCompatibilityFinalRevealRound = (archivedRounds = []) => {
+  const sessionOutcome = buildCompatibilitySessionOutcome(archivedRounds);
+  const revealRounds = sessionOutcome.rounds.map((round, index) => ({
+    id: round?.id || `compatibility-reveal-${index + 1}`,
+    number: Number(round?.number || index + 1),
+    questionId: round?.questionId || '',
+    question: round?.question || `Question ${index + 1}`,
+    roundType: round?.roundType || 'text',
+    category: round?.category || '',
+    compatibilityScore: Number(round?.compatibilityScore || 0),
+    actualAnswers: {
+      jay: round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '',
+      kim: round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '',
+    },
+    answers: {
+      jay: { ownAnswer: round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '' },
+      kim: { ownAnswer: round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '' },
+    },
+  }));
+  return {
+    id: `compatibility-final-${revealRounds.length || 1}`,
+    number: revealRounds.length || 1,
+    question: 'Compatibility reveal',
+    category: 'Compatibility Meter',
+    roundType: 'text',
+    status: COMPATIBILITY_FINAL_REVEAL_STATUS,
+    ready: { jay: true, kim: true },
+    nextReady: { jay: false, kim: false },
+    answers: {},
+    penalties: {
+      jay: sessionOutcome.finalPenalty,
+      kim: sessionOutcome.finalPenalty,
+    },
+    compatibilityScore: sessionOutcome.averageScore,
+    compatibilityFinalScore: sessionOutcome.averageScore,
+    compatibilityFinalPenalty: sessionOutcome.finalPenalty,
+    compatibilityRevealIndex: 0,
+    compatibilityRevealRounds: revealRounds,
+    compatibilityQuestionCount: revealRounds.length,
+    createdAt: new Date().toISOString(),
+  };
+};
 const clampPutYourPointsStake = (value = 0) => {
   const numericValue = Math.round(Number(value || 0));
   if (!Number.isFinite(numericValue)) return PUT_YOUR_POINTS_STAKE_MIN;
@@ -3959,8 +4025,12 @@ const buildRedFlagGreenFlagRoundOutcome = (round = {}, outcomeOptions = {}) => {
 };
 const buildCompatibilityRoundOutcome = (round = {}, outcomeOptions = {}) => {
   const useStoredPenalties = outcomeOptions.useStoredPenalties !== false;
-  const score = getStoredPenaltyOverride(round?.compatibilityScore) ?? calculateCompatibilityScore(round);
-  const defaultPenalty = getCompatibilityPenaltyForScore(score);
+  const score = isCompatibilityFinalRevealRound(round)
+    ? (getStoredPenaltyOverride(round?.compatibilityFinalScore, round?.compatibilityScore) ?? 0)
+    : (getStoredPenaltyOverride(round?.compatibilityScore) ?? calculateCompatibilityScore(round));
+  const defaultPenalty = isCompatibilityFinalRevealRound(round)
+    ? (getStoredPenaltyOverride(round?.compatibilityFinalPenalty, round?.penalties?.jay, round?.penalties?.kim) ?? getCompatibilityPenaltyForScore(score))
+    : getCompatibilityPenaltyForScore(score);
   const jayStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.jay, round?.penalties?.jay) : null;
   const kimStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.kim, round?.penalties?.kim) : null;
   return {
@@ -4191,8 +4261,8 @@ const buildCompatibilityMeterAnalytics = (sessions = []) => {
     totalScore: 0,
     highestScore: 0,
     lowestScore: roundsData.length ? 100 : 0,
-    jayPenaltyPoints: 0,
-    kimPenaltyPoints: 0,
+    jayPenaltyPoints: sessions.reduce((sum, entry) => sum + Number(entry?.finalScores?.jay ?? entry?.totals?.jay ?? 0), 0),
+    kimPenaltyPoints: sessions.reduce((sum, entry) => sum + Number(entry?.finalScores?.kim ?? entry?.totals?.kim ?? 0), 0),
   };
 
   roundsData.forEach((round) => {
@@ -4221,8 +4291,6 @@ const buildCompatibilityMeterAnalytics = (sessions = []) => {
     totals.totalScore += score;
     totals.highestScore = Math.max(totals.highestScore, score);
     totals.lowestScore = Math.min(totals.lowestScore, score);
-    totals.jayPenaltyPoints += Number(outcome.jayPenalty || 0);
-    totals.kimPenaltyPoints += Number(outcome.kimPenalty || 0);
     bandCounts[bandId] += 1;
   });
 
@@ -11598,8 +11666,18 @@ function RoomRevealPlayerCard({
   }
   if (isCompatibilityMeterGame) {
     const outcome = buildCompatibilityRoundOutcome(currentRound || {});
-    const playerAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
-    const otherAnswerRaw = currentRound?.answers?.[oppositeSeat]?.ownAnswer || '';
+    const compatibilityRevealRounds = isCompatibilityFinalRevealRound(currentRound || {}) ? (currentRound?.compatibilityRevealRounds || []) : [];
+    const compatibilityRevealIndex = isCompatibilityFinalRevealRound(currentRound || {})
+      ? Math.max(0, Math.min(Number(currentRound?.compatibilityRevealIndex || 0), Math.max(compatibilityRevealRounds.length - 1, 0)))
+      : 0;
+    const revealRound = compatibilityRevealRounds[compatibilityRevealIndex] || null;
+    const playerAnswerRaw = revealRound
+      ? (revealRound?.actualAnswers?.[playerSeat] ?? revealRound?.answers?.[playerSeat]?.ownAnswer ?? '')
+      : (currentRound?.answers?.[playerSeat]?.ownAnswer || '');
+    const otherAnswerRaw = revealRound
+      ? (revealRound?.actualAnswers?.[oppositeSeat] ?? revealRound?.answers?.[oppositeSeat]?.ownAnswer ?? '')
+      : (currentRound?.answers?.[oppositeSeat]?.ownAnswer || '');
+    const perQuestionScore = revealRound ? Number(revealRound?.compatibilityScore || 0) : Number(outcome.score || 0);
     return (
       <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
         <div className="room-reveal-player-head">
@@ -11623,8 +11701,8 @@ function RoomRevealPlayerCard({
             <div className="room-reveal-answer-copy">
               <strong>{formatRoundAnswerValue(otherAnswerRaw, currentRound?.roundType)}</strong>
             </div>
-            <small className={`room-reveal-match room-reveal-match--${outcome.score >= 85 ? 'success' : outcome.score >= 70 ? 'neutral' : 'warning'}`}>
-              {`${outcome.score}% compatibility`}
+            <small className={`room-reveal-match room-reveal-match--${perQuestionScore >= 85 ? 'success' : perQuestionScore >= 70 ? 'neutral' : 'warning'}`}>
+              {`${perQuestionScore}% on this question`}
             </small>
           </div>
         </div>
@@ -11731,7 +11809,14 @@ function RoomActiveFrameBase({
   isBusy,
   chatIsBusy = false,
 }) {
-  const question = currentRound?.question || 'Question loaded';
+  const compatibilityFinalReveal = isCompatibilityFinalRevealRound(currentRound || {});
+  const compatibilityRevealRounds = compatibilityFinalReveal ? (currentRound?.compatibilityRevealRounds || []) : [];
+  const compatibilityRevealIndex = compatibilityFinalReveal
+    ? Math.max(0, Math.min(Number(currentRound?.compatibilityRevealIndex || 0), Math.max(compatibilityRevealRounds.length - 1, 0)))
+    : 0;
+  const compatibilityRevealRound = compatibilityFinalReveal ? (compatibilityRevealRounds[compatibilityRevealIndex] || null) : null;
+  const compatibilityDisplayQuestion = compatibilityRevealRound?.question || currentRound?.question || 'Question loaded';
+  const question = compatibilityDisplayQuestion;
   const questionDensity = getQuestionDensityClass(question);
   const stage = revealIsReady ? 'reveal' : 'answering';
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
@@ -11751,15 +11836,17 @@ function RoomActiveFrameBase({
   const isMemoryLaneRecallGame = isMemoryLaneGame && isMemoryLaneRecallRound(currentRound || {});
   const penaltyPreview = useMemo(
     () => (
-      isQuizGame
-        ? buildQuizRoundScoreMap(currentRound || {})
-        : (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: isPutYourPointsGameMode(game?.gameMode || 'standard') }) : null)
-      || {
-          jay: parseNumber(penaltyDraft?.jay, 0),
-          kim: parseNumber(penaltyDraft?.kim, 0),
-        }
+      isCompatibilityMeterGame && !compatibilityFinalReveal
+        ? { jay: 0, kim: 0 }
+        : isQuizGame
+          ? buildQuizRoundScoreMap(currentRound || {})
+          : (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: isPutYourPointsGameMode(game?.gameMode || 'standard') }) : null)
+        || {
+            jay: parseNumber(penaltyDraft?.jay, 0),
+            kim: parseNumber(penaltyDraft?.kim, 0),
+          }
     ),
-    [currentRound, game?.gameMode, isQuizGame, penaltyDraft?.jay, penaltyDraft?.kim],
+    [compatibilityFinalReveal, currentRound, game?.gameMode, isCompatibilityMeterGame, isQuizGame, penaltyDraft?.jay, penaltyDraft?.kim],
   );
   const previewRoundResult = useMemo(() => {
     if (!revealIsReady || !currentRound) return null;
@@ -11836,6 +11923,10 @@ function RoomActiveFrameBase({
     () => (isCompatibilityMeterGame ? buildCompatibilityRoundOutcome(currentRound || {}) : null),
     [currentRound, isCompatibilityMeterGame],
   );
+  const compatibilityAnswersComplete = isCompatibilityMeterGame
+    && !compatibilityFinalReveal
+    && hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound || {}, 'jay')
+    && hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound || {}, 'kim');
   const quizJudgementComplete = isQuizGame ? hasCompletedQuizJudgement(currentRound || {}) : false;
   const trueFalseSummaryLabel = !trueFalseOutcome
     ? ''
@@ -11879,6 +11970,9 @@ function RoomActiveFrameBase({
         : compatibilityOutcome.score >= 70
           ? 'Mixed match'
           : 'Low match';
+  const compatibilityRevealProgressLabel = compatibilityFinalReveal && compatibilityRevealRounds.length
+    ? `Question ${compatibilityRevealIndex + 1} of ${compatibilityRevealRounds.length}`
+    : '';
 
   return (
     <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-frame--put-points' : ''} ${isRedFlagGreenFlagGame ? 'room-active-frame--red-flag-green-flag' : ''} ${isCompatibilityMeterGame ? 'room-active-frame--compatibility-meter' : ''} ${isMemoryLaneGame ? 'room-active-frame--memory-lane' : ''}`} aria-label="Active round scoreboard">
@@ -11886,13 +11980,14 @@ function RoomActiveFrameBase({
       <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-stage--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-stage--put-points' : ''} ${isRedFlagGreenFlagGame ? 'room-active-stage--red-flag-green-flag' : ''} ${isCompatibilityMeterGame ? 'room-active-stage--compatibility-meter' : ''} ${isMemoryLaneGame ? 'room-active-stage--memory-lane' : ''}`}>
         <header className="room-active-header">
           <div>
-            <span className="scoreboard-kicker">{revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
-            <h2>Round {currentRound?.number || 1}</h2>
+            <span className="scoreboard-kicker">{compatibilityFinalReveal ? 'Final Reveal' : revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
+            <h2>{compatibilityFinalReveal ? 'Compatibility Meter' : `Round ${currentRound?.number || 1}`}</h2>
           </div>
           <div className="room-active-pills">
             <span className="scoreboard-mini-badge">{stageStatusLabel}</span>
-            {currentRound?.category ? <span className="scoreboard-mini-badge is-category">{currentRound.category}</span> : null}
-            <span className="scoreboard-mini-badge">{roundTypeLabel}</span>
+            {(compatibilityRevealRound?.category || currentRound?.category) ? <span className="scoreboard-mini-badge is-category">{compatibilityRevealRound?.category || currentRound.category}</span> : null}
+            <span className="scoreboard-mini-badge">{compatibilityFinalReveal ? 'Session Reveal' : roundTypeLabel}</span>
+            {compatibilityRevealProgressLabel ? <span className="scoreboard-mini-badge">{compatibilityRevealProgressLabel}</span> : null}
           </div>
         </header>
         {isQuizGame ? <QuizLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
@@ -12007,6 +12102,14 @@ function RoomActiveFrameBase({
                 onLockAnswerField={onLockMostLikelyAnswer}
                 isBusy={isBusy}
               />
+            ) : isCompatibilityMeterGame && submissionState === 'submitted' ? (
+              <div className="ready-gate-row ready-gate-row--reveal" role="status" aria-live="polite">
+                <span className="ready-gate-copy">
+                  {compatibilityAnswersComplete
+                    ? 'Your answer is locked. Both answers are hidden until the final reveal.'
+                    : 'Your answer is locked. Waiting for the other player.'}
+                </span>
+              </div>
             ) : (
               <QuestionAnswerEntry
                 game={game}
@@ -12023,6 +12126,20 @@ function RoomActiveFrameBase({
                 singleAnswerOnly={isCompatibilityMeterGame || isMemoryLaneRecallGame}
               />
             )}
+            {compatibilityAnswersComplete ? (
+              role === 'host' ? (
+                <div className="ready-gate-row ready-gate-row--reveal">
+                  <span className="ready-gate-copy">Both answers are locked. Load the next question when you are ready.</span>
+                  <Button className="primary-button compact" onClick={onNextQuestion} disabled={isBusy}>
+                    Next Question
+                  </Button>
+                </div>
+              ) : (
+                <div className="ready-gate-row ready-gate-row--reveal" role="status" aria-live="polite">
+                  <span className="ready-gate-copy">Both answers are locked. Waiting for {hostLabel} to load the next question.</span>
+                </div>
+              )
+            ) : null}
           </div>
         ) : (
           <div className={`room-active-reveal-stack ${isQuizGame ? 'room-active-reveal-stack--quiz' : ''}`}>
@@ -12247,19 +12364,32 @@ function RoomActiveFrameBase({
                   </>
                 ) : isCompatibilityMeterGame ? (
                   <>
-                    <span>Compatibility</span>
+                    <span>{compatibilityFinalReveal ? 'Overall Compatibility' : 'Compatibility'}</span>
                     <strong>{`${compatibilityOutcome?.score ?? 0}%`}</strong>
                     <p>
                       {compatibilitySummaryLabel}
                       {' · '}
                       +{formatScore(compatibilityOutcome?.penalty || 0)} each
                     </p>
+                    {compatibilityFinalReveal ? (
+                      <small>
+                        {compatibilityRevealProgressLabel}
+                        {compatibilityRevealRound ? ` · ${compatibilityRevealRound.compatibilityScore || 0}% on this question` : ''}
+                      </small>
+                    ) : null}
                     <small>95%+ adds 0. 85-94 adds +100 each. 70-84 adds +250 each. 0-69 adds +500 each.</small>
                     <small>
                       Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
                       {' · '}
                       {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
                     </small>
+                    {role === 'host' ? (
+                      <div className="ready-gate-row ready-gate-row--reveal">
+                        <Button className="primary-button compact" onClick={onNextQuestion} disabled={isBusy}>
+                          {compatibilityFinalReveal && compatibilityRevealIndex >= compatibilityRevealRounds.length - 1 ? 'Finish Game' : 'Next Reveal'}
+                        </Button>
+                      </div>
+                    ) : null}
                   </>
                 ) : (
                   <>
@@ -12324,7 +12454,9 @@ function RoomActiveFrameBase({
             {role !== 'host' && !isQuizGame ? (
               <div className="room-reveal-footer">
                 <div className="room-reveal-waiting">
-                  <span className="quick-desk-status">Waiting for {hostLabel} to load the next question</span>
+                  <span className="quick-desk-status">
+                    {compatibilityFinalReveal ? `Waiting for ${hostLabel} to continue the reveal` : `Waiting for ${hostLabel} to load the next question`}
+                  </span>
                 </div>
               </div>
             ) : null}
@@ -12367,6 +12499,9 @@ const RoomActiveFrame = memo(RoomActiveFrameBase, (previous, next) => {
     && previous.currentRound?.correctAnswer === next.currentRound?.correctAnswer
     && previous.currentRound?.memoryLaneMode === next.currentRound?.memoryLaneMode
     && Number(previous.currentRound?.compatibilityScore || 0) === Number(next.currentRound?.compatibilityScore || 0)
+    && Number(previous.currentRound?.compatibilityFinalScore || 0) === Number(next.currentRound?.compatibilityFinalScore || 0)
+    && Number(previous.currentRound?.compatibilityFinalPenalty || 0) === Number(next.currentRound?.compatibilityFinalPenalty || 0)
+    && Number(previous.currentRound?.compatibilityRevealIndex || 0) === Number(next.currentRound?.compatibilityRevealIndex || 0)
     && previous.currentRound?.quizTimerEndsAt === next.currentRound?.quizTimerEndsAt
     && Number(previous.currentRound?.putYourPointsStake || 0) === Number(next.currentRound?.putYourPointsStake || 0)
     && JSON.stringify(previous.currentRound?.multipleChoiceOptions || []) === JSON.stringify(next.currentRound?.multipleChoiceOptions || [])
@@ -16010,13 +16145,15 @@ function GameRoomView({
     : null;
   const currentGameMode = game?.gameMode || 'standard';
   const currentRoundPenaltyPreview = currentRound
-    ? isQuizGameMode(currentGameMode)
-      ? buildQuizRoundScoreMap(currentRound)
-      : buildAutoScoredRoundPenaltyMap(currentGameMode, currentRound, { useStoredPenalties: isPutYourPointsGameMode(currentGameMode) })
-      || {
-        jay: parseNumber(penaltyDraft.jay || currentRound.penalties?.jay || 0, 0),
-        kim: parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0),
-      }
+    ? isCompatibilityMeterGameMode(currentGameMode) && !isCompatibilityFinalRevealRound(currentRound || {})
+      ? { jay: 0, kim: 0 }
+      : isQuizGameMode(currentGameMode)
+        ? buildQuizRoundScoreMap(currentRound)
+        : buildAutoScoredRoundPenaltyMap(currentGameMode, currentRound, { useStoredPenalties: isPutYourPointsGameMode(currentGameMode) })
+        || {
+          jay: parseNumber(penaltyDraft.jay || currentRound.penalties?.jay || 0, 0),
+          kim: parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0),
+        }
     : null;
   const boardForm = currentRound
     ? {
@@ -16063,7 +16200,7 @@ function GameRoomView({
           && hasRoundAnswerSubmittedForMode(currentGameMode, currentRound, 'kim'),
         )
       : Boolean(currentRound?.answers?.jay?.ownAnswer && currentRound?.answers?.kim?.ownAnswer);
-  const revealIsReady = bothPlayersSubmitted || currentRound?.status === 'reveal';
+  const revealIsReady = compatibilityFinalReveal || (!isCompatibilityMeterGame && bothPlayersSubmitted) || currentRound?.status === 'reveal';
   const submissionState = isTrueFalseGame
     ? (hasCompletedTrueFalseRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
     : isThisOrThatGame
@@ -16075,6 +16212,7 @@ function GameRoomView({
     : isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame
       ? (hasRoundAnswerSubmittedForMode(currentGameMode, currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
       : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
+  const compatibilityFinalReveal = isCompatibilityFinalRevealRound(currentRound || {});
   const submittedBySeat = {
     jay: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'jay'),
     kim: hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', currentRound, 'kim'),
@@ -16087,7 +16225,7 @@ function GameRoomView({
     jay: hasNextReadySeat(currentRound, 'jay'),
     kim: hasNextReadySeat(currentRound, 'kim'),
   };
-  const showActiveRoundFrame = Boolean(currentRound && (isQuizGame || currentRound.status === 'open' || revealIsReady));
+  const showActiveRoundFrame = Boolean(currentRound && (isQuizGame || currentRound.status === 'open' || revealIsReady || compatibilityFinalReveal));
   const status = game?.status || 'active';
   const isMobile = useMediaQuery('(max-width: 900px)');
   const joinedPlayers = [
@@ -20055,6 +20193,7 @@ function ProductionApp() {
   const finalizeGameLifecycle = async (targetGameId, endedByUid = user?.uid || '', finalStatus = 'ended', options = {}) => {
     if (!firestore || !targetGameId) return null;
     const pendingRoundPenaltyOverride = options.pendingRoundPenaltyOverride || null;
+    const skipPendingRoundArchive = Boolean(options.skipPendingRoundArchive);
     const gameRef = doc(firestore, 'games', targetGameId);
     const jayRef = doc(firestore, 'users', fixedPlayerUids.jay);
     const kimRef = doc(firestore, 'users', fixedPlayerUids.kim);
@@ -20147,14 +20286,18 @@ function ProductionApp() {
       );
       return { appliedLifetimePoints: false, finalScores: finalHoldemScores, winner: holdemWinner, gameSummary };
     }
-    let nextFinalScores = gameDoc.totals || gameDoc.finalScores || { jay: 0, kim: 0 };
+    let nextFinalScores = (skipPendingRoundArchive || isCompatibilityFinalRevealRound(gameDoc.currentRound || {}))
+      ? (gameDoc.finalScores || gameDoc.totals || { jay: 0, kim: 0 })
+      : (gameDoc.totals || gameDoc.finalScores || { jay: 0, kim: 0 });
     let nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
     let nextQuizTotals = gameDoc.quizTotals || { jay: 0, kim: 0 };
     let nextQuizWinner = Number(nextQuizTotals.jay || 0) === Number(nextQuizTotals.kim || 0) ? 'tie' : Number(nextQuizTotals.jay || 0) > Number(nextQuizTotals.kim || 0) ? 'jay' : 'kim';
     let appliedLifetimePoints = false;
     let nextJayLifetime = Number(playerAccounts?.jay?.lifetimePenaltyPoints || 0);
     let nextKimLifetime = Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0);
-    const pendingRound = gameDoc.currentRound || null;
+    const pendingRound = skipPendingRoundArchive || isCompatibilityFinalRevealRound(gameDoc.currentRound || {})
+      ? null
+      : (gameDoc.currentRound || null);
     const pendingRoundPenaltyMap = pendingRound
       ? isQuizGame
         ? buildQuizRoundScoreMap(pendingRound)
@@ -20473,9 +20616,12 @@ function ProductionApp() {
     const sourceRounds = normalizeStoredRounds(rounds);
     const sourceGame = game;
     const pendingRoundPenaltyOverride = options.pendingRoundPenaltyOverride || null;
+    const skipPendingRoundArchive = Boolean(options.skipPendingRoundArchive);
     const sourceGameMode = sourceGame?.gameMode || 'standard';
     const isQuizGame = isQuizGameMode(sourceGameMode);
-    const pendingRound = sourceGame.currentRound || null;
+    const pendingRound = skipPendingRoundArchive || isCompatibilityFinalRevealRound(sourceGame.currentRound || {})
+      ? null
+      : (sourceGame.currentRound || null);
     const pendingRoundPenaltyMap = pendingRound
       ? isQuizGame
         ? buildQuizRoundScoreMap(pendingRound)
@@ -20486,7 +20632,9 @@ function ProductionApp() {
       : true;
 
     let nextRounds = sourceRounds;
-    let nextTotals = sourceGame.totals || sourceGame.finalScores || { jay: 0, kim: 0 };
+    let nextTotals = (skipPendingRoundArchive || isCompatibilityFinalRevealRound(sourceGame.currentRound || {}))
+      ? (sourceGame.finalScores || sourceGame.totals || { jay: 0, kim: 0 })
+      : (sourceGame.totals || sourceGame.finalScores || { jay: 0, kim: 0 });
     let nextQuizTotals = sourceGame.quizTotals || { jay: 0, kim: 0 };
 
     if (pendingRound && !alreadyArchivedCurrentRound) {
@@ -21418,17 +21566,23 @@ function ProductionApp() {
     setNotice(noticeMessage || 'Test game ended. Summary opened from the lobby.');
   };
 
-  const completeCurrentGameFromNextQuestion = async (noticeMessage = '') => {
+  const completeCurrentGameFromNextQuestion = async (noticeMessage = '', options = {}) => {
     const targetGameId = game?.id || '';
     if (!targetGameId) return;
 
     if (isCurrentLocalTestGame) {
-      const result = finalizeLocalTestGame(targetGameId, user?.uid || '', 'completed', { pendingRoundPenaltyOverride: penaltyDraft });
+      const result = finalizeLocalTestGame(targetGameId, user?.uid || '', 'completed', {
+        pendingRoundPenaltyOverride: penaltyDraft,
+        skipPendingRoundArchive: Boolean(options.skipPendingRoundArchive),
+      });
       closeLocalTestGameToLobby(result?.gameSummary || null, noticeMessage || 'Test game ended. Summary opened from the lobby.');
       return;
     }
 
-    const result = await endGameById(targetGameId, user?.uid || '', 'completed', { pendingRoundPenaltyOverride: penaltyDraft });
+    const result = await endGameById(targetGameId, user?.uid || '', 'completed', {
+      pendingRoundPenaltyOverride: penaltyDraft,
+      skipPendingRoundArchive: Boolean(options.skipPendingRoundArchive),
+    });
     autoResumedGameIdRef.current = '';
     leavePendingGameRef.current = '';
     try {
@@ -25323,6 +25477,7 @@ function ProductionApp() {
     const isTrueFalseGame = isTrueFalseGameMode(game?.gameMode || 'standard');
     const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
     const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
+    const isCompatibilityMeterGame = isCompatibilityMeterGameMode(game?.gameMode || 'standard');
     const round = game?.currentRound || null;
     const isMostLikelyVoteGame = isMostLikelyGame && isMostLikelyVoteRound(round || {});
     const roundKey = stableRoundIdentityKey(round || {});
@@ -25332,6 +25487,7 @@ function ProductionApp() {
       || isTrueFalseGame
       || isThisOrThatGame
       || isMostLikelyVoteGame
+      || isCompatibilityMeterGame
       || !round
       || round.status !== 'open'
       || !hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', round, 'jay')
@@ -25698,6 +25854,41 @@ function ProductionApp() {
       const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
       const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
       const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(game?.gameMode || 'standard');
+      const isCompatibilityMeterGame = isCompatibilityMeterGameMode(game?.gameMode || 'standard');
+      const isCompatibilityFinalReveal = isCompatibilityFinalRevealRound(game?.currentRound || {});
+      if (isCompatibilityFinalReveal) {
+        const revealRounds = game.currentRound?.compatibilityRevealRounds || [];
+        const revealIndex = Math.max(0, Number(game.currentRound?.compatibilityRevealIndex || 0));
+        if (revealIndex < revealRounds.length - 1) {
+          if (isCurrentLocalTestGame) {
+            setGame((current) =>
+              current?.currentRound && isCompatibilityFinalRevealRound(current.currentRound)
+                ? {
+                    ...current,
+                    currentRound: {
+                      ...current.currentRound,
+                      compatibilityRevealIndex: revealIndex + 1,
+                      updatedAt: new Date().toISOString(),
+                    },
+                    updatedAt: new Date().toISOString(),
+                  }
+                : current,
+            );
+          } else {
+            const gameRef = makeGameRef();
+            if (!gameRef) throw new Error('Room is missing.');
+            await updateDoc(gameRef, {
+              'currentRound.compatibilityRevealIndex': revealIndex + 1,
+              'currentRound.updatedAt': serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          setNotice('Compatibility reveal continued.');
+          return;
+        }
+        await completeCurrentGameFromNextQuestion('Compatibility reveal finished. Summary moved to Previous Games.', { skipPendingRoundArchive: true });
+        return;
+      }
       if (
         game.currentRound
         && game.currentRound.status !== 'reveal'
@@ -25732,7 +25923,9 @@ function ProductionApp() {
         let savedCurrentRound = false;
 
         if (game.currentRound) {
-          const penalties = isQuizGame
+          const penalties = isCompatibilityMeterGame
+            ? { jay: 0, kim: 0 }
+            : isQuizGame
             ? buildQuizRoundScoreMap(game.currentRound)
             : buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
           const quizPoints = isQuizGame
@@ -25773,7 +25966,7 @@ function ProductionApp() {
           );
 
           nextRounds = normalizeStoredRounds([...rounds, roundResult]);
-          nextTotals = getRoundPenaltyTotals(roundResult);
+          nextTotals = isCompatibilityMeterGame ? nextTotals : getRoundPenaltyTotals(roundResult);
           if (isQuizGame) {
             nextQuizTotals = {
               jay: Number(nextQuizTotals.jay || 0) + Number(quizPoints.jay || 0),
@@ -25795,6 +25988,25 @@ function ProductionApp() {
           };
           savedCurrentRound = true;
 
+          if (isCompatibilityMeterGame && totalQuestionGoal > 0 && nextRoundsPlayed >= totalQuestionGoal) {
+            const compatibilityFinalRound = buildCompatibilityFinalRevealRound(nextRounds);
+            const compatibilityOutcome = buildCompatibilitySessionOutcome(nextRounds);
+            nextGameState = {
+              ...nextGameState,
+              totals: nextTotals,
+              finalScores: compatibilityOutcome.totals,
+              roundsPlayed: nextRoundsPlayed,
+              usedQuestionIds: nextUsedQuestionIds,
+              currentRound: compatibilityFinalRound,
+              quizReadyState: null,
+              status: game.status === 'paused' ? 'paused' : 'active',
+              updatedAt: new Date().toISOString(),
+            };
+            setRounds(nextRounds);
+            setGame(nextGameState);
+            setNotice('All compatibility answers are in. Reveal ready.');
+            return;
+          }
           if (totalQuestionGoal > 0 && nextRoundsPlayed >= totalQuestionGoal) {
             await completeCurrentGameFromNextQuestion('Final round saved. Summary is now shown in the room.');
             return;
@@ -25810,6 +26022,25 @@ function ProductionApp() {
           const drawn = drawQuestion(nextGameState, nextRounds);
           const nextQuestionItem = drawn.question;
           if (!nextQuestionItem) {
+            if (isCompatibilityMeterGame && savedCurrentRound) {
+              const compatibilityFinalRound = buildCompatibilityFinalRevealRound(nextRounds);
+              const compatibilityOutcome = buildCompatibilitySessionOutcome(nextRounds);
+              nextGameState = {
+                ...nextGameState,
+                totals: nextTotals,
+                finalScores: compatibilityOutcome.totals,
+                roundsPlayed: nextRoundsPlayed,
+                usedQuestionIds: nextUsedQuestionIds,
+                currentRound: compatibilityFinalRound,
+                quizReadyState: null,
+                status: game.status === 'paused' ? 'paused' : 'active',
+                updatedAt: new Date().toISOString(),
+              };
+              setRounds(nextRounds);
+              setGame(nextGameState);
+              setNotice('All compatibility answers are in. Reveal ready.');
+              return;
+            }
             await completeCurrentGameFromNextQuestion(
               savedCurrentRound
                 ? 'Final round saved. Summary is now shown in the room.'
@@ -25860,7 +26091,9 @@ function ProductionApp() {
       let savedCurrentRound = false;
 
       if (game.currentRound) {
-        const penalties = isQuizGame
+        const penalties = isCompatibilityMeterGame
+          ? { jay: 0, kim: 0 }
+          : isQuizGame
           ? buildQuizRoundScoreMap(game.currentRound)
           : buildRoundPenaltyMapForArchive(game?.gameMode || 'standard', game.currentRound, penaltyDraft);
         const quizPoints = isQuizGame
@@ -25907,7 +26140,7 @@ function ProductionApp() {
             console.warn('Quiz timer score analytics write failed.', error);
           });
         }
-        totalsAfterSave = getRoundPenaltyTotals(roundResult);
+        totalsAfterSave = isCompatibilityMeterGame ? totalsAfterSave : getRoundPenaltyTotals(roundResult);
         if (isQuizGame) {
           nextQuizTotals = {
             jay: Number(nextQuizTotals.jay || 0) + Number(quizPoints.jay || 0),
@@ -25925,6 +26158,28 @@ function ProductionApp() {
           await recordPairQuestionUsage([archivedQuestionId]);
         }
 
+        if (isCompatibilityMeterGame && totalQuestionGoal > 0 && completedRoundsAfterSave >= totalQuestionGoal) {
+          const compatibilityRounds = normalizeStoredRounds([...rounds, roundResult]);
+          const compatibilityFinalRound = buildCompatibilityFinalRevealRound(compatibilityRounds);
+          const compatibilityOutcome = buildCompatibilitySessionOutcome(compatibilityRounds);
+          await setDoc(gameRef, {
+            totals: totalsAfterSave,
+            finalScores: compatibilityOutcome.totals,
+            roundsPlayed: completedRoundsAfterSave,
+            ...(archivedQuestionId ? { usedQuestionIds: arrayUnion(archivedQuestionId) } : {}),
+            currentRound: compatibilityFinalRound,
+            quizReadyState: null,
+            compatibilitySessionSummary: {
+              averageScore: compatibilityOutcome.averageScore,
+              finalPenalty: compatibilityOutcome.finalPenalty,
+              totalQuestions: compatibilityOutcome.totalQuestions,
+            },
+            status: game.status === 'paused' ? 'paused' : 'active',
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+          setNotice('All compatibility answers are in. Reveal ready.');
+          return;
+        }
         if (totalQuestionGoal > 0 && completedRoundsAfterSave >= totalQuestionGoal) {
           await setDoc(gameRef, {
             totals: totalsAfterSave,
@@ -25961,6 +26216,53 @@ function ProductionApp() {
           }
         }
         if (!nextQuestionItem) {
+          if (isCompatibilityMeterGame && savedCurrentRound) {
+            const compatibilityRounds = normalizeStoredRounds([...rounds, createRoundResult(
+              {
+                ...game.currentRound,
+                penaltyAdded: { jay: 0, kim: 0 },
+                scores: { jay: 0, kim: 0 },
+                actualAnswers: {
+                  jay: game.currentRound.answers?.jay?.ownAnswer || '',
+                  kim: game.currentRound.answers?.kim?.ownAnswer || '',
+                },
+                guessedAnswers: {
+                  jay: game.currentRound.answers?.jay?.guessedOther || '',
+                  kim: game.currentRound.answers?.kim?.guessedOther || '',
+                },
+                actualList: {
+                  jay: parseAnswerList(game.currentRound.answers?.jay?.ownAnswer || ''),
+                  kim: parseAnswerList(game.currentRound.answers?.kim?.ownAnswer || ''),
+                },
+                guessedList: {
+                  jay: parseAnswerList(game.currentRound.answers?.jay?.guessedOther || ''),
+                  kim: parseAnswerList(game.currentRound.answers?.kim?.guessedOther || ''),
+                },
+                compatibilityScore: calculateCompatibilityScore(game.currentRound),
+              },
+              game.currentRound.number || rounds.length + 1,
+              totalsBefore,
+            )]);
+            const compatibilityFinalRound = buildCompatibilityFinalRevealRound(compatibilityRounds);
+            const compatibilityOutcome = buildCompatibilitySessionOutcome(compatibilityRounds);
+            await setDoc(gameRef, {
+              totals: totalsAfterSave,
+              finalScores: compatibilityOutcome.totals,
+              roundsPlayed: completedRoundsAfterSave,
+              ...(archivedQuestionId ? { usedQuestionIds: arrayUnion(archivedQuestionId) } : {}),
+              currentRound: compatibilityFinalRound,
+              quizReadyState: null,
+              compatibilitySessionSummary: {
+                averageScore: compatibilityOutcome.averageScore,
+                finalPenalty: compatibilityOutcome.finalPenalty,
+                totalQuestions: compatibilityOutcome.totalQuestions,
+              },
+              status: game.status === 'paused' ? 'paused' : 'active',
+              updatedAt: serverTimestamp(),
+            }, { merge: true });
+            setNotice('All compatibility answers are in. Reveal ready.');
+            return;
+          }
           if (savedCurrentRound) {
             await setDoc(gameRef, {
               totals: totalsAfterSave,
