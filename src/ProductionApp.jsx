@@ -3700,6 +3700,14 @@ const calculateCompatibilityScore = (round = {}) => {
 };
 const getCompatibilityPenaltyForScore = (score = 0) =>
   COMPATIBILITY_BANDS.find((band) => Number(score || 0) >= band.min)?.penalty ?? 500;
+const getCompatibilityScoreSummary = (score = 0) =>
+  Number(score || 0) >= 95
+    ? 'Strong match'
+    : Number(score || 0) >= 85
+      ? 'Close match'
+      : Number(score || 0) >= 70
+        ? 'Mixed match'
+        : 'Low match';
 const buildCompatibilitySessionOutcome = (rounds = []) => {
   const normalizedRounds = normalizeStoredRounds(rounds)
     .filter((round) => !isCompatibilityFinalRevealRound(round));
@@ -11912,11 +11920,54 @@ function RoomRevealPlayerCard({
   }
   if (isCompatibilityMeterGame) {
     const outcome = buildCompatibilityRoundOutcome(currentRound || {});
-    const compatibilityRevealRounds = isCompatibilityFinalRevealRound(currentRound || {}) ? (currentRound?.compatibilityRevealRounds || []) : [];
-    const compatibilityRevealIndex = isCompatibilityFinalRevealRound(currentRound || {})
-      ? Math.max(0, Math.min(Number(currentRound?.compatibilityRevealIndex || 0), Math.max(compatibilityRevealRounds.length - 1, 0)))
+    const compatibilityFinalReveal = isCompatibilityFinalRevealRound(currentRound || {});
+    const compatibilityRevealRounds = compatibilityFinalReveal ? (currentRound?.compatibilityRevealRounds || []) : [];
+    const compatibilityRevealIndex = compatibilityFinalReveal
+      ? Math.max(0, Math.min(Number(currentRound?.compatibilityRevealIndex || 0), Math.max(compatibilityRevealRounds.length, 0)))
       : 0;
-    const revealRound = compatibilityRevealRounds[compatibilityRevealIndex] || null;
+    const compatibilityOverallStep = compatibilityFinalReveal && (!compatibilityRevealRounds.length || compatibilityRevealIndex >= compatibilityRevealRounds.length);
+    const revealRound = compatibilityOverallStep ? null : (compatibilityRevealRounds[compatibilityRevealIndex] || null);
+    if (compatibilityOverallStep) {
+      const finalPenalty = Number(currentRound?.compatibilityFinalPenalty ?? currentRound?.penalties?.[playerSeat] ?? 0);
+      return (
+        <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+          <div className="room-reveal-player-head">
+            <SeatFlag seat={playerSeat} />
+            <div>
+              <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+              <h3>{playerLabel}</h3>
+            </div>
+          </div>
+
+          <div className="room-reveal-player-body room-reveal-player-body--final">
+            <div className="room-reveal-answer-block">
+              <span>Reveal complete</span>
+              <div className="room-reveal-answer-copy">
+                <strong>{`${compatibilityRevealRounds.length || 0} questions compared`}</strong>
+              </div>
+            </div>
+
+            <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+              <span>Final band</span>
+              <div className="room-reveal-answer-copy">
+                <strong>{getCompatibilityScoreSummary(currentRound?.compatibilityFinalScore ?? currentRound?.compatibilityScore ?? 0)}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="room-reveal-score-strip">
+            <div>
+              <span>Final penalty</span>
+              <strong>{formatScore(finalPenalty)}</strong>
+            </div>
+            <div>
+              <span>Total penalty</span>
+              <strong>{formatScore(totalPenalty || finalPenalty || 0)}</strong>
+            </div>
+          </div>
+        </article>
+      );
+    }
     const playerAnswerRaw = revealRound
       ? (revealRound?.actualAnswers?.[playerSeat] ?? revealRound?.answers?.[playerSeat]?.ownAnswer ?? '')
       : (currentRound?.answers?.[playerSeat]?.ownAnswer || '');
@@ -11955,12 +12006,12 @@ function RoomRevealPlayerCard({
 
         <div className="room-reveal-score-strip">
           <div>
-            <span>Round penalty</span>
-            <strong>{formatScore((playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty) || roundPenalty || 0)}</strong>
+            <span>Question score</span>
+            <strong>{`${perQuestionScore}%`}</strong>
           </div>
           <div>
-            <span>Total penalty</span>
-            <strong>{formatScore(totalPenalty || 0)}</strong>
+            <span>Score band</span>
+            <strong>{getCompatibilityScoreSummary(perQuestionScore)}</strong>
           </div>
         </div>
       </article>
@@ -12017,6 +12068,36 @@ function RoomRevealPlayerCard({
   );
 }
 
+function CompatibilityScoreRoller({ score = 0, revealKey = '' }) {
+  const finalScore = Math.max(0, Math.min(100, Math.round(Number(score || 0))));
+  const [displayScore, setDisplayScore] = useState(finalScore);
+  const [isSpinning, setIsSpinning] = useState(false);
+
+  useEffect(() => {
+    let tickTimer = 0;
+    let settleTimer = 0;
+    setIsSpinning(true);
+    tickTimer = window.setInterval(() => {
+      setDisplayScore(Math.floor(Math.random() * 101));
+    }, 70);
+    settleTimer = window.setTimeout(() => {
+      window.clearInterval(tickTimer);
+      setDisplayScore(finalScore);
+      setIsSpinning(false);
+    }, 1250);
+    return () => {
+      window.clearInterval(tickTimer);
+      window.clearTimeout(settleTimer);
+    };
+  }, [finalScore, revealKey]);
+
+  return (
+    <strong className={`compatibility-score-roller ${isSpinning ? 'is-spinning' : 'is-locked'}`} aria-live="polite">
+      {displayScore}%
+    </strong>
+  );
+}
+
 function RoomActiveFrameBase({
   game,
   seat,
@@ -12058,10 +12139,13 @@ function RoomActiveFrameBase({
   const compatibilityFinalReveal = isCompatibilityFinalRevealRound(currentRound || {});
   const compatibilityRevealRounds = compatibilityFinalReveal ? (currentRound?.compatibilityRevealRounds || []) : [];
   const compatibilityRevealIndex = compatibilityFinalReveal
-    ? Math.max(0, Math.min(Number(currentRound?.compatibilityRevealIndex || 0), Math.max(compatibilityRevealRounds.length - 1, 0)))
+    ? Math.max(0, Math.min(Number(currentRound?.compatibilityRevealIndex || 0), Math.max(compatibilityRevealRounds.length, 0)))
     : 0;
-  const compatibilityRevealRound = compatibilityFinalReveal ? (compatibilityRevealRounds[compatibilityRevealIndex] || null) : null;
-  const compatibilityDisplayQuestion = compatibilityRevealRound?.question || currentRound?.question || 'Question loaded';
+  const compatibilityOverallRevealStep = compatibilityFinalReveal && (!compatibilityRevealRounds.length || compatibilityRevealIndex >= compatibilityRevealRounds.length);
+  const compatibilityRevealRound = compatibilityFinalReveal && !compatibilityOverallRevealStep ? (compatibilityRevealRounds[compatibilityRevealIndex] || null) : null;
+  const compatibilityDisplayQuestion = compatibilityOverallRevealStep
+    ? 'Overall compatibility score'
+    : compatibilityRevealRound?.question || currentRound?.question || 'Question loaded';
   const question = compatibilityDisplayQuestion;
   const questionDensity = getQuestionDensityClass(question);
   const stage = revealIsReady ? 'reveal' : 'answering';
@@ -12207,17 +12291,23 @@ function RoomActiveFrameBase({
       : redFlagGreenFlagOutcome.jayMissingResponse || redFlagGreenFlagOutcome.kimMissingResponse
         ? 'Missed choices triggered penalties'
         : 'Flag mismatch';
-  const compatibilitySummaryLabel = !compatibilityOutcome
-    ? ''
-    : compatibilityOutcome.score >= 95
-      ? 'Strong match'
-      : compatibilityOutcome.score >= 85
-        ? 'Close match'
-        : compatibilityOutcome.score >= 70
-          ? 'Mixed match'
-          : 'Low match';
+  const compatibilityRevealScore = compatibilityFinalReveal
+    ? compatibilityOverallRevealStep
+      ? Number(currentRound?.compatibilityFinalScore ?? currentRound?.compatibilityScore ?? 0)
+      : Number(compatibilityRevealRound?.compatibilityScore || 0)
+    : Number(compatibilityOutcome?.score || 0);
+  const compatibilityRevealPenalty = compatibilityFinalReveal
+    ? compatibilityOverallRevealStep
+      ? Number(currentRound?.compatibilityFinalPenalty ?? currentRound?.penalties?.jay ?? 0)
+      : getCompatibilityPenaltyForScore(compatibilityRevealScore)
+    : Number(compatibilityOutcome?.penalty || 0);
+  const compatibilitySummaryLabel = compatibilityOutcome || compatibilityFinalReveal
+    ? getCompatibilityScoreSummary(compatibilityRevealScore)
+    : '';
   const compatibilityRevealProgressLabel = compatibilityFinalReveal && compatibilityRevealRounds.length
-    ? `Question ${compatibilityRevealIndex + 1} of ${compatibilityRevealRounds.length}`
+    ? compatibilityOverallRevealStep
+      ? 'Overall result'
+      : `Question ${compatibilityRevealIndex + 1} of ${compatibilityRevealRounds.length}`
     : '';
 
   return (
@@ -12610,29 +12700,43 @@ function RoomActiveFrameBase({
                   </>
                 ) : isCompatibilityMeterGame ? (
                   <>
-                    <span>{compatibilityFinalReveal ? 'Overall Compatibility' : 'Compatibility'}</span>
-                    <strong>{`${compatibilityOutcome?.score ?? 0}%`}</strong>
+                    <span>{compatibilityOverallRevealStep ? 'Overall Compatibility' : compatibilityFinalReveal ? 'Question Compatibility' : 'Compatibility'}</span>
+                    <CompatibilityScoreRoller
+                      score={compatibilityRevealScore}
+                      revealKey={`${currentRound?.id || 'compatibility'}-${compatibilityRevealIndex}-${compatibilityOverallRevealStep ? 'overall' : 'question'}`}
+                    />
                     <p>
                       {compatibilitySummaryLabel}
-                      {' · '}
-                      +{formatScore(compatibilityOutcome?.penalty || 0)} each
+                      {compatibilityOverallRevealStep || !compatibilityFinalReveal ? (
+                        <>
+                          {' · '}
+                          +{formatScore(compatibilityRevealPenalty)} each
+                        </>
+                      ) : null}
                     </p>
                     {compatibilityFinalReveal ? (
                       <small>
                         {compatibilityRevealProgressLabel}
-                        {compatibilityRevealRound ? ` · ${compatibilityRevealRound.compatibilityScore || 0}% on this question` : ''}
                       </small>
                     ) : null}
-                    <small>95%+ adds 0. 85-94 adds +100 each. 70-84 adds +250 each. 0-69 adds +500 each.</small>
-                    <small>
-                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
-                      {' · '}
-                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
-                    </small>
+                    {compatibilityOverallRevealStep || !compatibilityFinalReveal ? (
+                      <>
+                        <small>95%+ adds 0. 85-94 adds +100 each. 70-84 adds +250 each. 0-69 adds +500 each.</small>
+                        <small>
+                          Totals {viewerLabel} {formatScore(compatibilityRevealPenalty)}
+                          {' · '}
+                          {oppositeLabel} {formatScore(compatibilityRevealPenalty)}
+                        </small>
+                      </>
+                    ) : null}
                     {role === 'host' ? (
                       <div className="ready-gate-row ready-gate-row--reveal">
                         <Button className="primary-button compact" onClick={onNextQuestion} disabled={isBusy}>
-                          {compatibilityFinalReveal && compatibilityRevealIndex >= compatibilityRevealRounds.length - 1 ? 'Finish Game' : 'Next Reveal'}
+                          {compatibilityOverallRevealStep
+                            ? 'Finish Game'
+                            : compatibilityFinalReveal && compatibilityRevealIndex >= compatibilityRevealRounds.length - 1
+                              ? 'Show Overall'
+                              : 'Next Reveal'}
                         </Button>
                       </div>
                     ) : null}
@@ -19559,7 +19663,7 @@ function ProductionApp() {
       : requestedBankType === MEMORY_LANE_GAME_MODE
         ? playedMemoryLaneQuestionIds
         : effectiveRetiredQuestionIds;
-    const unavailableQuestionIds = new Set(mergeUniqueIds([...retiredQuestionIds], [...reservedQuestionIds], [lastQuestionId]));
+    const unavailableQuestionIds = new Set(mergeUniqueIds([...retiredQuestionIds], [...allPlayedQuestionIds], [...reservedQuestionIds], [lastQuestionId]));
     const typeSet = new Set((filters.roundTypes || []).filter(Boolean));
     const categorySet = new Set((filters.categories || []).map((category) => normalizeText(category)).filter(Boolean));
     const eligible = dedupeQuestionsById(questionBankPool).filter((question) => {
@@ -20588,7 +20692,8 @@ function ProductionApp() {
       );
       return { appliedLifetimePoints: false, finalScores: finalHoldemScores, winner: holdemWinner, gameSummary };
     }
-    let nextFinalScores = (skipPendingRoundArchive || isCompatibilityFinalRevealRound(gameDoc.currentRound || {}))
+    const shouldUseStoredFinalScores = skipPendingRoundArchive || isCompatibilityFinalRevealRound(gameDoc.currentRound || {});
+    let nextFinalScores = shouldUseStoredFinalScores
       ? (gameDoc.finalScores || gameDoc.totals || { jay: 0, kim: 0 })
       : (gameDoc.totals || gameDoc.finalScores || { jay: 0, kim: 0 });
     let nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
@@ -20667,7 +20772,9 @@ function ProductionApp() {
       : null;
     nextFinalScores = archivedRoundResult
       ? getRoundPenaltyTotals(archivedRoundResult)
-      : gameDoc.totals || gameDoc.finalScores || nextFinalScores;
+      : shouldUseStoredFinalScores
+        ? (gameDoc.finalScores || gameDoc.totals || nextFinalScores)
+        : (gameDoc.totals || gameDoc.finalScores || nextFinalScores);
     nextWinner = Number(nextFinalScores.jay || 0) === Number(nextFinalScores.kim || 0) ? 'tie' : Number(nextFinalScores.jay || 0) < Number(nextFinalScores.kim || 0) ? 'jay' : 'kim';
     const archivedQuizPoints = isQuizGame && archivedRoundResult
       ? {
@@ -26297,6 +26404,7 @@ function ProductionApp() {
       : sourceBankType === MEMORY_LANE_GAME_MODE
         ? playedMemoryLaneQuestionIds
         : effectiveRetiredQuestionIds;
+    const globalRetiredQuestionIds = new Set(mergeUniqueIds([...retiredQuestionIds], [...allPlayedQuestionIds]));
     const localUsedQuestionIds = mergeUniqueIds(
       sourceGame?.usedQuestionIds || [],
       (sourceRounds || []).map((round) => round.questionId),
@@ -26308,7 +26416,7 @@ function ProductionApp() {
     const availablePool = sourcePool.filter(
       (question) =>
         (!sourceIsThisOrThatGame || isThisOrThatQuestionCompatible(question))
-        && !retiredQuestionIds.has(question.id)
+        && !globalRetiredQuestionIds.has(question.id)
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
@@ -26317,7 +26425,7 @@ function ProductionApp() {
       : standardSelectableQuestions.filter(
           (question) =>
             (!sourceIsThisOrThatGame || isThisOrThatQuestionCompatible(question))
-            && !retiredQuestionIds.has(question.id)
+            && !globalRetiredQuestionIds.has(question.id)
             && !reservedQuestionIds.has(question.id)
             && !usedIds.has(question.id),
         );
@@ -26362,7 +26470,7 @@ function ProductionApp() {
       if (isCompatibilityFinalReveal) {
         const revealRounds = game.currentRound?.compatibilityRevealRounds || [];
         const revealIndex = Math.max(0, Number(game.currentRound?.compatibilityRevealIndex || 0));
-        if (revealIndex < revealRounds.length - 1) {
+        if (revealRounds.length && revealIndex < revealRounds.length) {
           if (isCurrentLocalTestGame) {
             setGame((current) =>
               current?.currentRound && isCompatibilityFinalRevealRound(current.currentRound)
