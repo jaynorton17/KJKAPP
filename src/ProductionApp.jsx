@@ -1048,7 +1048,36 @@ const extractQuestionBankGeneratedCsv = (value = '', target = QUESTION_BANK_SYNC
 
   return text ? `${text.replace(/\s+$/, '')}\n` : '';
 };
-const normalizeGeneratedQuestionBankCsvColumns = (rawText = '') => {
+const getGeneratedQuestionBankDefaultTypeLabel = (target = QUESTION_BANK_SYNC_TARGETS[0]) => {
+  const normalizedBankType = normalizeQuestionBankType(target?.bankType || 'game');
+  if (normalizedBankType === TRUE_FALSE_GAME_MODE) return 'True or False';
+  if (
+    normalizedBankType === MOST_LIKELY_GAME_MODE
+    || normalizedBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
+  ) {
+    return 'Multiple Choice';
+  }
+  return '';
+};
+const getGeneratedQuestionBankAnswerType = (questionType = 'Text Answer') => {
+  const normalizedType = normalizeQuestionType(questionType, 'text');
+  if (usesNumberInputForQuestionType(normalizedType) || usesRatingInputForQuestionType(normalizedType)) return 'number';
+  if (usesListInputForQuestionType(normalizedType)) return 'ranked';
+  if (usesChoiceInputForQuestionType(normalizedType)) return 'multipleChoice';
+  return 'text';
+};
+const normalizeGeneratedIntensityValue = (value = '', tone = '') => {
+  const rawValue = normalizeText(value);
+  if (/^[1-5]$/.test(rawValue)) return rawValue;
+  const key = normalizeText(`${rawValue} ${tone}`).toLowerCase();
+  if (/\b(spicy|intense|loaded)\b/.test(key)) return '5';
+  if (/\b(cheeky|bold|flirty)\b/.test(key)) return '4';
+  if (/\b(playful|funny|competitive|mixed)\b/.test(key)) return '3';
+  if (/\b(warm|reflective|personal)\b/.test(key)) return '2';
+  if (/\b(gentle|soft|easy)\b/.test(key)) return '1';
+  return '';
+};
+const normalizeGeneratedQuestionBankCsvColumns = (rawText = '', target = QUESTION_BANK_SYNC_TARGETS[0]) => {
   const parsedRows = parseQuestionBankUploadCsvRows(rawText);
   const header = QUESTION_BANK_UPLOAD_COLUMNS.join(',');
   const hasExactHeader =
@@ -1057,11 +1086,87 @@ const normalizeGeneratedQuestionBankCsvColumns = (rawText = '') => {
   if (!hasExactHeader || !parsedRows.rows.length) return rawText;
   if (parsedRows.rows.some((cells) => cells.length > QUESTION_BANK_UPLOAD_COLUMNS.length)) return rawText;
 
+  const selectedTarget = getQuestionBankSyncTarget(target?.bankType || 'game');
+  const normalizedBankType = normalizeQuestionBankType(selectedTarget.bankType);
+  const profile = QUESTION_BANK_GENERATION_PROFILES[normalizedBankType] || QUESTION_BANK_GENERATION_PROFILES.game;
+  const allowedTypeIds = new Set((profile.questionTypes || []).map((type) => normalizeQuestionType(type, 'text')));
+  const categoryKeys = new Set((profile.categories || []).map((category) => normalizeText(category).toLowerCase()));
+  const columnIndex = Object.fromEntries(QUESTION_BANK_UPLOAD_COLUMNS.map((column, index) => [column, index]));
+  const defaultTypeLabel = getGeneratedQuestionBankDefaultTypeLabel(selectedTarget);
+
   const rows = parsedRows.rows.map((cells) => {
+    const workingCells = [...cells];
+    const correctAnswerIndex = columnIndex['Correct Answer'];
+    const activeIndex = columnIndex.Active;
+    if (
+      workingCells.length < QUESTION_BANK_UPLOAD_COLUMNS.length
+      && QUESTION_BANK_BLANK_CORRECT_ANSWER_TARGETS.has(normalizedBankType)
+      && /^yes$/i.test(normalizeText(workingCells[correctAnswerIndex]))
+      && !/^yes$/i.test(normalizeText(workingCells[activeIndex]))
+    ) {
+      workingCells.splice(correctAnswerIndex, 0, '');
+    }
+
     const paddedCells = Array.from(
       { length: QUESTION_BANK_UPLOAD_COLUMNS.length },
-      (_, index) => cells[index] || '',
+      (_, index) => workingCells[index] || '',
     );
+
+    const category = normalizeText(paddedCells[columnIndex.Category]);
+    const questionType = normalizeText(paddedCells[columnIndex['Question Type']]);
+    const normalizedType = normalizeQuestionType(questionType, 'manual');
+    const categoryLooksLikeType = allowedTypeIds.has(normalizeQuestionType(category, 'manual'));
+    const questionTypeLooksLikeCategory = categoryKeys.has(questionType.toLowerCase());
+
+    if (questionType && !allowedTypeIds.has(normalizedType) && categoryLooksLikeType && questionTypeLooksLikeCategory) {
+      paddedCells[columnIndex.Category] = questionType;
+      paddedCells[columnIndex['Question Type']] = category;
+    } else if (defaultTypeLabel && (!questionType || !allowedTypeIds.has(normalizedType))) {
+      if (questionTypeLooksLikeCategory) paddedCells[columnIndex.Category] = questionType;
+      paddedCells[columnIndex['Question Type']] = defaultTypeLabel;
+    }
+
+    if (QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType)) {
+      paddedCells[columnIndex.Options] = '';
+    }
+    if (QUESTION_BANK_BLANK_CORRECT_ANSWER_TARGETS.has(normalizedBankType)) {
+      paddedCells[columnIndex['Correct Answer']] = '';
+    }
+
+    paddedCells[columnIndex.Active] = 'Yes';
+    if (!/^[1-5]$/.test(normalizeText(paddedCells[columnIndex.Intensity]))) {
+      if (/^[1-5]$/.test(normalizeText(paddedCells[columnIndex.Tone]))) {
+        const oldIntensity = paddedCells[columnIndex.Intensity];
+        paddedCells[columnIndex.Intensity] = normalizeText(paddedCells[columnIndex.Tone]);
+        paddedCells[columnIndex.Tone] = oldIntensity;
+      } else {
+        paddedCells[columnIndex.Intensity] = normalizeGeneratedIntensityValue(
+          paddedCells[columnIndex.Intensity],
+          paddedCells[columnIndex.Tone],
+        );
+      }
+    }
+
+    const answerType = getGeneratedQuestionBankAnswerType(paddedCells[columnIndex['Question Type']]);
+    if (!normalizeText(paddedCells[columnIndex['Default Answer Type']])) {
+      paddedCells[columnIndex['Default Answer Type']] = answerType;
+    }
+    if (!normalizeText(paddedCells[columnIndex['Answer Type']])) {
+      paddedCells[columnIndex['Answer Type']] = answerType;
+    }
+    if (!normalizeText(paddedCells[columnIndex['Source Label']])) {
+      paddedCells[columnIndex['Source Label']] = `generated:${selectedTarget.sheetName}`;
+    }
+    if (!normalizeText(paddedCells[columnIndex['Added By']])) {
+      paddedCells[columnIndex['Added By']] = 'Gemini';
+    }
+    if (!normalizeText(paddedCells[columnIndex['Original Sheet']])) {
+      paddedCells[columnIndex['Original Sheet']] = selectedTarget.sheetName;
+    }
+    if (!normalizeText(paddedCells[columnIndex['Original Question Type']])) {
+      paddedCells[columnIndex['Original Question Type']] = paddedCells[columnIndex['Question Type']];
+    }
+
     return paddedCells.map(escapeCsvCell).join(',');
   });
   return `${header}\n${rows.join('\n')}\n`;
@@ -8717,6 +8822,7 @@ function LobbyScreen({
     let fileName = makeQuestionBankGeneratedCsvFilename(target, requestedCount);
     let rawText = '';
     let report = null;
+    let repairAttempts = 0;
 
     setQuestionUploadMode('add');
     setQuestionUploadDraft(null);
@@ -8734,7 +8840,7 @@ function LobbyScreen({
         targetName: target.gameName,
         questionCount: requestedCount,
       });
-      rawText = normalizeGeneratedQuestionBankCsvColumns(extractQuestionBankGeneratedCsv(firstPass.text, target));
+      rawText = normalizeGeneratedQuestionBankCsvColumns(extractQuestionBankGeneratedCsv(firstPass.text, target), target);
       report = buildQuestionUploadReport({
         rawText,
         fileName,
@@ -8756,7 +8862,8 @@ function LobbyScreen({
           targetName: target.gameName,
           questionCount: requestedCount,
         });
-        rawText = normalizeGeneratedQuestionBankCsvColumns(extractQuestionBankGeneratedCsv(repairPass.text, target));
+        repairAttempts = 1;
+        rawText = normalizeGeneratedQuestionBankCsvColumns(extractQuestionBankGeneratedCsv(repairPass.text, target), target);
         fileName = fileName.replace(/\.csv$/i, '-repaired.csv');
         report = buildQuestionUploadReport({
           rawText,
@@ -8775,6 +8882,10 @@ function LobbyScreen({
         rowCount,
         generatedBy: 'gemini',
         generationConstraints: constraints,
+        generationBasePrompt: basePrompt,
+        generationRequestedCount: requestedCount,
+        generationRepairAttempts: repairAttempts,
+        targetBankType: target.bankType,
       });
       setQuestionUploadReport(report);
       if (!report.canUpload) {
@@ -8834,6 +8945,121 @@ function LobbyScreen({
         status: 'error',
         percent: 0,
         message: error?.message || 'Gemini could not generate the question CSV.',
+      });
+    } finally {
+      setIsGeneratingQuestionBankCsv(false);
+    }
+  };
+  const handleRepairGeneratedQuestionBankDraft = async () => {
+    if (!questionUploadDraft?.rawText || !questionUploadReport || questionUploadReport.canUpload) return;
+    if (!geminiIsConfigured) {
+      const message = 'Gemini API key is missing. Add VITE_GEMINI_API_KEY to the app environment and redeploy.';
+      setQuestionUploadProgress({ status: 'error', percent: 0, message });
+      window.alert(message);
+      return;
+    }
+
+    const target = getQuestionBankSyncTarget(questionUploadDraft.targetBankType || questionUploadTarget.bankType);
+    const constraints = questionUploadDraft.generationConstraints || questionGenerationConstraints;
+    const requestedCount = clampQuestionBankGenerationCount(
+      questionUploadDraft.generationRequestedCount || questionUploadDraft.rowCount || questionGenerationCountDraft,
+    );
+    const basePrompt = questionUploadDraft.generationBasePrompt || buildQuestionBankGenerationPrompt(target, {
+      questionCount: requestedCount,
+      questionType: questionGenerationType,
+      category: questionGenerationCategory,
+      tone: questionGenerationTone,
+      intensity: questionGenerationIntensity,
+      extraBrief: questionGenerationBrief,
+    });
+    const nextRepairAttempts = Number(questionUploadDraft.generationRepairAttempts || 0) + 1;
+    const fileName = String(questionUploadDraft.fileName || makeQuestionBankGeneratedCsvFilename(target, requestedCount))
+      .replace(/(?:-repaired-\d+|-repaired)?\.csv$/i, `-repaired-${nextRepairAttempts}.csv`);
+
+    setIsGeneratingQuestionBankCsv(true);
+    setQuestionUploadProgress({
+      status: 'repairing',
+      percent: 38,
+      message: `Repairing generated ${target.gameName} CSV with Gemini...`,
+    });
+
+    try {
+      const repairPass = await generateGeminiQuestionBankCsv({
+        prompt: basePrompt,
+        repairReport: buildQuestionBankGenerationRepairReport(questionUploadReport),
+        previousCsv: questionUploadDraft.rawText,
+        targetName: target.gameName,
+        questionCount: requestedCount,
+      });
+      const rawText = normalizeGeneratedQuestionBankCsvColumns(extractQuestionBankGeneratedCsv(repairPass.text, target), target);
+      const report = buildQuestionUploadReport({
+        rawText,
+        fileName,
+        mode: 'add',
+        target,
+        generationConstraints: constraints,
+      });
+      const rowCount = report.rowCount || countQuestionBankUploadDataRows(rawText);
+      setQuestionUploadDraft({
+        fileName,
+        fileSize: rawText.length,
+        rawText,
+        rowCount,
+        generatedBy: 'gemini',
+        generationConstraints: constraints,
+        generationBasePrompt: basePrompt,
+        generationRequestedCount: requestedCount,
+        generationRepairAttempts: nextRepairAttempts,
+        targetBankType: target.bankType,
+      });
+      setQuestionUploadReport(report);
+
+      if (!report.canUpload) {
+        setQuestionUploadProgress({
+          status: 'error',
+          percent: 0,
+          message: `Repaired draft still needs review: ${report.errorCount} issue${report.errorCount === 1 ? '' : 's'} found.`,
+        });
+        return;
+      }
+
+      if (!onUploadQuestionBankCsv) {
+        setQuestionUploadProgress({
+          status: 'error',
+          percent: 0,
+          message: 'Question bank upload is not available.',
+        });
+        return;
+      }
+
+      setQuestionUploadProgress({
+        status: 'uploading',
+        percent: 78,
+        message: `Repair passed checks. Adding valid ${target.gameName} rows now...`,
+      });
+      const uploadResult = await onUploadQuestionBankCsv({
+        targetBankType: target.bankType,
+        mode: 'add',
+        rawText,
+        fileName,
+      });
+      if (uploadResult?.cancelled || uploadResult?.errorMessage || !uploadResult) {
+        const message = uploadResult?.errorMessage || 'Repair passed checks, but the upload did not complete.';
+        setQuestionUploadProgress({ status: 'error', percent: 0, message });
+        return;
+      }
+      const uploadSummary = uploadResult.result?.summary || {};
+      setQuestionUploadProgress({
+        status: 'done',
+        percent: 100,
+        message: `Repair added ${Number(uploadSummary.imported || 0)} new ${target.gameName} question${Number(uploadSummary.imported || 0) === 1 ? '' : 's'}. ${Number(uploadSummary.duplicates || 0)} duplicate${Number(uploadSummary.duplicates || 0) === 1 ? '' : 's'} skipped.`,
+      });
+      setQuestionUploadDraft(null);
+    } catch (error) {
+      setQuestionUploadProgress({
+        status: 'error',
+        percent: 0,
+        message: error?.message || 'Gemini could not repair the generated CSV.',
       });
     } finally {
       setIsGeneratingQuestionBankCsv(false);
@@ -10696,6 +10922,11 @@ function LobbyScreen({
                   <Button className="primary-button compact question-bank-generate-button" onClick={handleGenerateQuestionBankQuestions} disabled={questionBankGenerationBusy}>
                     Create Questions
                   </Button>
+                  {questionUploadDraft?.generatedBy === 'gemini' && questionUploadReport && !questionUploadReport.canUpload ? (
+                    <Button className="ghost-button compact question-bank-repair-button" onClick={handleRepairGeneratedQuestionBankDraft} disabled={questionBankGenerationBusy}>
+                      Repair Draft
+                    </Button>
+                  ) : null}
                 </div>
                 {questionUploadProgress.status !== 'idle' ? (
                   <div className={`question-bank-upload-progress is-${questionUploadProgress.status}`}>
