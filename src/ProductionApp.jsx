@@ -975,6 +975,7 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
     '- Do not add row numbers, ID codes, bracketed numeric suffixes, generated labels, or repeated titles to Question. This includes description 1, scene 1, prompt 1, or a number added at the end.',
     '- Options should be pipe-separated inside one CSV cell, for example: Option A | Option B | Option C.',
     '- Correct Answer is only required where the game needs a factual/quiz answer; otherwise leave it blank.',
+    `- Every data row must contain exactly ${QUESTION_BANK_UPLOAD_COLUMNS.length} CSV cells, matching the header. Do not omit trailing empty columns.`,
     '- Intensity must be a number only: 1, 2, 3, 4, or 5. Never put words such as gentle, playful, spicy, cheeky, or deep in the Intensity column.',
     '- Use 1 for gentle, 3 for playful/personal, and 5 for spicy or emotionally loaded.',
     '- Tone should be short words such as Warm, Funny, Cheeky, Deep, Spicy, Reflective, Competitive. Put requested moods like spicy here, not in Intensity.',
@@ -1046,6 +1047,24 @@ const extractQuestionBankGeneratedCsv = (value = '', target = QUESTION_BANK_SYNC
   }
 
   return text ? `${text.replace(/\s+$/, '')}\n` : '';
+};
+const normalizeGeneratedQuestionBankCsvColumns = (rawText = '') => {
+  const parsedRows = parseQuestionBankUploadCsvRows(rawText);
+  const header = QUESTION_BANK_UPLOAD_COLUMNS.join(',');
+  const hasExactHeader =
+    parsedRows.headers.length === QUESTION_BANK_UPLOAD_COLUMNS.length
+    && QUESTION_BANK_UPLOAD_COLUMNS.every((column, index) => parsedRows.headers[index] === column);
+  if (!hasExactHeader || !parsedRows.rows.length) return rawText;
+  if (parsedRows.rows.some((cells) => cells.length > QUESTION_BANK_UPLOAD_COLUMNS.length)) return rawText;
+
+  const rows = parsedRows.rows.map((cells) => {
+    const paddedCells = Array.from(
+      { length: QUESTION_BANK_UPLOAD_COLUMNS.length },
+      (_, index) => cells[index] || '',
+    );
+    return paddedCells.map(escapeCsvCell).join(',');
+  });
+  return `${header}\n${rows.join('\n')}\n`;
 };
 const buildQuestionBankGenerationRepairReport = (report) => {
   const errors = (report?.errors || []).slice(0, 30);
@@ -8715,7 +8734,7 @@ function LobbyScreen({
         targetName: target.gameName,
         questionCount: requestedCount,
       });
-      rawText = extractQuestionBankGeneratedCsv(firstPass.text, target);
+      rawText = normalizeGeneratedQuestionBankCsvColumns(extractQuestionBankGeneratedCsv(firstPass.text, target));
       report = buildQuestionUploadReport({
         rawText,
         fileName,
@@ -8737,7 +8756,7 @@ function LobbyScreen({
           targetName: target.gameName,
           questionCount: requestedCount,
         });
-        rawText = extractQuestionBankGeneratedCsv(repairPass.text, target);
+        rawText = normalizeGeneratedQuestionBankCsvColumns(extractQuestionBankGeneratedCsv(repairPass.text, target));
         fileName = fileName.replace(/\.csv$/i, '-repaired.csv');
         report = buildQuestionUploadReport({
           rawText,
