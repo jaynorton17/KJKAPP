@@ -8083,11 +8083,30 @@ function LobbyScreen({
       rawText: questionUploadDraft.rawText,
       fileName: questionUploadDraft.fileName,
     });
+    if (uploadResult?.cancelled) {
+      setQuestionUploadProgress({
+        status: 'ready',
+        percent: 35,
+        message: uploadResult.errorMessage || 'Upload cancelled.',
+      });
+      return;
+    }
+    if (uploadResult?.errorMessage) {
+      setQuestionUploadProgress({
+        status: 'error',
+        percent: 0,
+        message: uploadResult.errorMessage,
+      });
+      if (typeof window !== 'undefined') {
+        window.alert(uploadResult.errorMessage);
+      }
+      return;
+    }
     if (!uploadResult) {
       setQuestionUploadProgress({
         status: 'error',
         percent: 0,
-        message: 'Upload did not complete. Check the app notice above for the reason.',
+        message: 'Upload did not complete. No error details were returned.',
       });
       return;
     }
@@ -29338,18 +29357,25 @@ function ProductionApp() {
     const target = getQuestionBankSyncTarget(targetBankType);
     const shouldReplace = mode !== 'add';
     if (!String(rawText || '').trim()) {
-      setNotice('Choose a CSV file with question rows first.');
-      return null;
+      const message = 'Choose a CSV file with question rows first.';
+      setNotice(message);
+      return { target, errorMessage: message };
     }
     if (
       shouldReplace
       && typeof window !== 'undefined'
       && !window.confirm(`Replace the ${target.gameName} bank from "${fileName}"? Used questions stay retired so history is preserved.`)
     ) {
-      return null;
+      return { target, cancelled: true, errorMessage: 'Upload cancelled.' };
+    }
+    if (isBusy) {
+      const message = 'The app is already busy. Please wait for the current action to finish and try again.';
+      setNotice(message);
+      return { target, errorMessage: message };
     }
 
-    return withBusy(async () => {
+    setIsBusy(true);
+    try {
       validateQuestionBankUploadHeaders(rawText);
       const result = parseQuestionBankCsvForTarget({
         rawText,
@@ -29417,7 +29443,20 @@ function ProductionApp() {
         result,
         upsertQuestions,
       };
-    }, 'Could not upload question bank CSV.');
+    } catch (error) {
+      let message = String(error?.message || 'Could not upload question bank CSV.');
+      if (isLocalStorageQuotaError(error)) {
+        console.warn('Suppressed storage quota warning from question bank upload.', error);
+        message = 'Browser storage is full, so the CSV upload could not complete.';
+      } else if (isFirestoreRateLimitedError(error)) {
+        enterFirestoreCooldown('questionBankUpload');
+        message = 'Firebase is rate-limiting the app right now. Please wait a moment and try again.';
+      }
+      setNotice(message);
+      return { target, errorMessage: message };
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const importSheet = async () =>
