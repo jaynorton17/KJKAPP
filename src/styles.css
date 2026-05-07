@@ -1512,7 +1512,7 @@ button:disabled {
 
 .question-bank-upload-controls {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) repeat(5, minmax(150px, auto));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
   align-items: end;
 }
@@ -1601,10 +1601,15 @@ button:disabled {
   margin: 0;
 }
 
+.question-bank-upload-controls .field-wide {
+  grid-column: span 2;
+}
+
 .question-bank-upload-controls .field span {
   color: rgba(255, 255, 255, 0.88);
 }
 
+.question-bank-upload-controls .field input,
 .question-bank-upload-controls .field select {
   width: 100%;
   min-height: 42px;
@@ -1617,6 +1622,15 @@ button:disabled {
     inset 0 0 0 1px rgba(255, 255, 255, 0.58);
 }
 
+.question-bank-upload-controls .field input::placeholder {
+  color: rgba(7, 17, 34, 0.56);
+}
+
+.question-bank-upload-controls .question-bank-generator-count {
+  max-width: 120px;
+}
+
+.question-bank-upload-controls .field input:focus,
 .question-bank-upload-controls .field select:focus {
   border-color: rgba(255, 255, 255, 0.9);
   background: #fff;
@@ -13500,6 +13514,12 @@ select:focus-visible {
   .question-bank-upload-controls,
   .create-filters-grid {
     grid-template-columns: 1fr;
+  }
+
+  .question-bank-upload-controls .field-wide,
+  .question-bank-upload-controls .question-bank-generator-count {
+    grid-column: auto;
+    max-width: none;
   }
 
   .top-bar--shell {

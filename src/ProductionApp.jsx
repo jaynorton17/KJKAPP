@@ -111,6 +111,7 @@ import {
   geminiConfig,
   geminiIsConfigured,
   generateGeminiDiaryWriteup,
+  generateGeminiQuestionBankCsv,
   generateGeminiRelationshipReply,
 } from './lib/gemini.js';
 import {
@@ -836,9 +837,9 @@ const STRICT_QUESTION_BANK_GENERATION_RULES = [
   'Do not put generated labels, suffixes, IDs, or counters in Question text, including Variant 1, Q1, Row 1, Question 1, description 1, scene 1, batch labels, or numeric endings used only to make rows look unique.',
   'Do not put generated counters in metadata fields either, including Tags or Repeat Group values like memory1, unique-memory-scene-1, prompt-12, or option-set-7.',
   'Category, Tone, Relationship Area, Tags, Game Suitability, AI Use Case, and Repeat Group must be chosen because they fit the actual question.',
-  'For a 50-row batch, use at least 4 categories. Do not make the whole file one category unless I explicitly ask for a single-category batch.',
-  'For games that support multiple question types, use at least 5 different question types in a 50-row batch, and do not let one type dominate the file.',
-  'Use at least 2 tones and 2 intensity levels in a 50-row batch. Do not make every row the same Tone or Intensity.',
+  'For a 50-row batch, use at least 4 categories unless the app selection asks for one category. Do not make the whole file one category unless I explicitly ask for a single-category batch.',
+  'For games that support multiple question types, use at least 5 different question types in a 50-row batch unless the app selection asks for one type, and do not let one type dominate the file unless that one type was requested.',
+  'Use at least 2 tones and 2 intensity levels in a 50-row batch unless the app selection asks for one tone or intensity.',
   'Do not create rows by cycling five sentence starters with counters. Every row needs a genuinely different sentence shape.',
   'Use varied sentence shapes: direct question, scenario, comparison, confession-style prompt, playful challenge, memory cue, values cue, and practical everyday choice where the game allows it.',
   'Spread rows across the recommended categories instead of clustering most rows in one or two categories.',
@@ -857,7 +858,65 @@ const STRICT_QUESTION_BANK_SELF_CHECKS = [
   'If the audit finds a repeated option pair, repeated option pool, repeated concept, random category, overused sentence template, or one-note distribution, rewrite those rows before output.',
   'Only output the final corrected CSV after the audit passes.',
 ];
-const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0]) => {
+const QUESTION_BANK_GENERATION_TONE_OPTIONS = [
+  'Warm',
+  'Funny',
+  'Playful',
+  'Cheeky',
+  'Deep',
+  'Spicy',
+  'Reflective',
+  'Competitive',
+];
+const clampQuestionBankGenerationCount = (value = 50) =>
+  Math.max(1, Math.min(50, Math.floor(parseNumber(value, 50) || 50)));
+const normalizeQuestionBankGenerationChoice = (value = 'surprise') =>
+  String(value || 'surprise').trim() || 'surprise';
+const buildQuestionBankGenerationSelectionLines = ({
+  questionCount = 50,
+  questionType = 'surprise',
+  category = 'surprise',
+  tone = 'surprise',
+  intensity = 'surprise',
+  extraBrief = '',
+  profile = {},
+} = {}) => {
+  const typeChoice = normalizeQuestionBankGenerationChoice(questionType);
+  const categoryChoice = normalizeQuestionBankGenerationChoice(category);
+  const toneChoice = normalizeQuestionBankGenerationChoice(tone);
+  const intensityChoice = normalizeQuestionBankGenerationChoice(intensity);
+  const typeLine = typeChoice === 'surprise'
+    ? 'Question types: Surprise me. Use the best legal mix for this game and avoid one-note batches.'
+    : typeChoice === 'all'
+      ? 'Question types: Use every allowed question type at least once when the row count allows it.'
+      : `Question types: Use only "${typeChoice}" unless the selected game has stricter fixed-type rules.`;
+  const categoryLine = categoryChoice === 'surprise'
+    ? 'Categories: Surprise me. Spread rows across the recommended categories and keep them relevant.'
+    : categoryChoice === 'all'
+      ? 'Categories: Cover every recommended category at least once when the row count allows it.'
+      : `Categories: Use only "${categoryChoice}" and keep every row genuinely tied to that category.`;
+  const toneLine = toneChoice === 'surprise'
+    ? 'Tone: Surprise me with a suitable mix of tones.'
+    : toneChoice === 'mixed'
+      ? 'Tone: Use a deliberate mixed tone with at least three different Tone values.'
+      : `Tone: Make the batch ${toneChoice}; use that Tone value unless a row clearly needs a close matching tone.`;
+  const intensityLine = intensityChoice === 'surprise'
+    ? 'Intensity: Surprise me with a suitable spread from 1 to 5.'
+    : intensityChoice === 'mixed'
+      ? 'Intensity: Use a deliberate spread across at least three different intensity levels.'
+      : `Intensity: Use ${intensityChoice} as the numeric Intensity value for every row unless a row clearly needs to be gentler.`;
+  return [
+    `Row count: exactly ${questionCount} data rows.`,
+    typeLine,
+    categoryLine,
+    toneLine,
+    intensityLine,
+    extraBrief ? `Extra brief: ${normalizeText(extraBrief).slice(0, 500)}` : '',
+    `Allowed question types for reference: ${(profile.questionTypes || []).join(', ')}.`,
+    `Recommended categories for reference: ${(profile.categories || []).join(', ')}.`,
+  ].filter(Boolean);
+};
+const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0], options = {}) => {
   const selectedTarget = getQuestionBankSyncTarget(target?.bankType || 'game');
   const normalizedBankType = normalizeQuestionBankType(selectedTarget.bankType);
   const profile = QUESTION_BANK_GENERATION_PROFILES[normalizedBankType] || QUESTION_BANK_GENERATION_PROFILES.game;
@@ -865,17 +924,26 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
   const exampleLines = profile.examples.map((example, index) => `${index + 1}. ${example}`).join('\n');
   const typeExampleLines = buildQuestionBankTypeExampleLines(profile.questionTypes);
   const allTypeReferenceLines = buildAllQuestionBankTypeReferenceLines();
-  const defaultQuestionCount = 50;
+  const requestedQuestionCount = clampQuestionBankGenerationCount(options.questionCount || 50);
+  const selectionLines = buildQuestionBankGenerationSelectionLines({
+    questionCount: requestedQuestionCount,
+    questionType: options.questionType,
+    category: options.category,
+    tone: options.tone,
+    intensity: options.intensity,
+    extraBrief: options.extraBrief,
+    profile,
+  });
 
   return [
     `Create a KJK app question-bank CSV for the game "${selectedTarget.gameName}".`,
-    `Generate ${defaultQuestionCount} fresh rows unless I give you a different number.`,
+    `Generate exactly ${requestedQuestionCount} fresh data rows.`,
     'For quality control, prefer 50-row batches. If I ask for more than 50 rows, split them into separate 50-row CSV files unless I explicitly ask for one large file.',
     '',
-    'Create and attach a downloadable .csv file every time. Do not only paste sample rows into chat unless file attachment is unavailable.',
-    `For a single-file request, the CSV file must contain exactly the requested number of data rows, or ${defaultQuestionCount} data rows if I do not specify a different number, plus one header row. If splitting a larger request into batches, each CSV must contain exactly that batch's row count plus one header row.`,
+    'Return the full CSV text every time.',
+    `For this single-file request, the CSV file must contain exactly ${requestedQuestionCount} data rows plus one header row. If splitting a larger request into batches, each CSV must contain exactly that batch's row count plus one header row.`,
     'Do not return a partial file, preview file, sample file, or first few rows unless I explicitly ask for a sample.',
-    'If file attachment is unavailable, paste the full CSV text only: no markdown fence, no commentary, no leading blank line, no trailing explanation.',
+    'Return CSV text only: no markdown fence, no commentary, no leading blank line, no trailing explanation.',
     'The first row must be exactly this header:',
     header,
     '',
@@ -892,12 +960,15 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
     `Allowed Question Type values for this game: ${profile.questionTypes.join(', ')}.`,
     `Recommended categories: ${profile.categories.join(', ')}.`,
     '',
-    'Hard 50-row composition requirements:',
+    'Generation choices selected in the app:',
+    ...selectionLines.map((line) => `- ${line}`),
+    '',
+    `${requestedQuestionCount}-row composition requirements:`,
     '- Use varied categories, tone, intensity, relationship areas, tags, and sentence shapes.',
-    '- If this game supports more than one Question Type, use at least 5 different Question Type values.',
-    '- Use at least 4 categories unless I explicitly ask for one category only.',
-    '- Use at least 2 Tone values and at least 2 Intensity values.',
-    '- Do not make a batch that is all one type, all one category, all one tone, or all one intensity.',
+    '- If this game supports more than one Question Type and I did not select one specific type, use at least 5 different Question Type values when the row count allows it.',
+    '- Use at least 4 categories unless I explicitly ask for one category only or the row count is too small.',
+    '- Use at least 2 Tone values and at least 2 Intensity values unless I selected one specific tone or intensity.',
+    '- Do not make a batch that is all one type, all one category, all one tone, or all one intensity unless the app selection above explicitly requested that single focus.',
     '',
     'Column rules:',
     '- Question must be unique, natural, and ready to show directly in the app.',
@@ -942,27 +1013,53 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
     ...STRICT_QUESTION_BANK_SELF_CHECKS.map((rule) => `- ${rule}`),
   ].join('\n');
 };
-const copyTextToClipboard = async (text = '') => {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return true;
+const makeQuestionBankGeneratedCsvFilename = (target = QUESTION_BANK_SYNC_TARGETS[0], questionCount = 50) =>
+  `${String(target.sheetName || target.gameName || 'question-bank')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'question-bank'}-gemini-${clampQuestionBankGenerationCount(questionCount)}-questions.csv`;
+const extractQuestionBankGeneratedCsv = (value = '', target = QUESTION_BANK_SYNC_TARGETS[0]) => {
+  const header = QUESTION_BANK_UPLOAD_COLUMNS.join(',');
+  let text = String(value || '').trim();
+  if (!text) return '';
+  const fencedMatch = text.match(/```(?:csv)?\s*([\s\S]*?)```/i);
+  if (fencedMatch?.[1]) text = fencedMatch[1].trim();
+  const headerIndex = text.indexOf(header);
+  if (headerIndex >= 0) text = text.slice(headerIndex);
+
+  const lines = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const headerLineIndex = lines.findIndex((line) => line.trim() === header);
+  if (headerLineIndex >= 0) {
+    const csvLines = [header];
+    const rowPrefix = `${target.sheetName},${target.gameName},`;
+    for (const line of lines.slice(headerLineIndex + 1)) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+      if (trimmedLine.startsWith(rowPrefix)) {
+        csvLines.push(line);
+        continue;
+      }
+      if (csvLines.length > 1) break;
+    }
+    if (csvLines.length > 1) return `${csvLines.join('\n')}\n`;
   }
 
-  if (typeof document !== 'undefined') {
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.setAttribute('readonly', '');
-    textarea.style.position = 'fixed';
-    textarea.style.left = '-9999px';
-    textarea.style.top = '0';
-    document.body.appendChild(textarea);
-    textarea.select();
-    const copied = document.execCommand('copy');
-    textarea.remove();
-    if (copied) return true;
-  }
-
-  throw new Error('Clipboard is not available.');
+  return text ? `${text.replace(/\s+$/, '')}\n` : '';
+};
+const buildQuestionBankGenerationRepairReport = (report) => {
+  const errors = (report?.errors || []).slice(0, 30);
+  const warnings = (report?.warnings || []).slice(0, 10);
+  return [
+    `${report?.target?.gameName || 'Question bank'} CSV failed app validation.`,
+    `Rows detected: ${Number(report?.rowCount || 0)}.`,
+    `Issue count: ${Number(report?.errorCount || 0)}.`,
+    errors.length ? 'Errors:' : '',
+    ...errors.map((issue) => `- ${issue}`),
+    warnings.length ? 'Warnings:' : '',
+    ...warnings.map((warning) => `- ${warning}`),
+    'Fix every issue and return the full CSV again with the exact same header and requested row count.',
+  ].filter(Boolean).join('\n');
 };
 const downloadTextFile = (filename, text, type = 'text/plain;charset=utf-8') => {
   if (typeof document === 'undefined') return;
@@ -1268,11 +1365,16 @@ const buildQuestionBankUploadPreflightReport = ({
   target = QUESTION_BANK_SYNC_TARGETS[0],
   mode = 'add',
   existingQuestions = [],
+  generationConstraints = null,
 } = {}) => {
   const selectedTarget = getQuestionBankSyncTarget(target?.bankType || 'game');
   const normalizedBankType = normalizeQuestionBankType(selectedTarget.bankType);
   const shouldReplace = mode === 'replace';
   const shouldUpdateMatches = mode === 'upsert';
+  const singleTypeRequested = normalizeText(generationConstraints?.questionTypeMode).toLowerCase() === 'single';
+  const singleCategoryRequested = normalizeText(generationConstraints?.categoryMode).toLowerCase() === 'single';
+  const singleToneRequested = normalizeText(generationConstraints?.toneMode).toLowerCase() === 'single';
+  const singleIntensityRequested = normalizeText(generationConstraints?.intensityMode).toLowerCase() === 'single';
   const errors = [];
   const warnings = [];
   let result = null;
@@ -1435,7 +1537,7 @@ const buildQuestionBankUploadPreflightReport = ({
     const [topTone, topToneCount] = topEntry(toneCounts);
     const [topIntensity, topIntensityCount] = topEntry(intensityCounts);
 
-    if (allowedTypeIds.size > 1) {
+    if (allowedTypeIds.size > 1 && !singleTypeRequested) {
       const requiredTypeCount = multiFormatBankTypes.has(normalizedBankType)
         ? Math.min(5, allowedTypeIds.size)
         : Math.min(2, allowedTypeIds.size);
@@ -1446,19 +1548,19 @@ const buildQuestionBankUploadPreflightReport = ({
         errors.push(`${selectedTarget.gameName} batch overuses "${topType}" question type (${topTypeCount}/${rowCount}). Mix the answer formats.`);
       }
     }
-    if ((profile.categories || []).length > 1 && categoryEntries.length < Math.min(4, profile.categories.length)) {
+    if ((profile.categories || []).length > 1 && !singleCategoryRequested && categoryEntries.length < Math.min(4, profile.categories.length)) {
       errors.push(`${selectedTarget.gameName} batch is too narrow: use at least ${Math.min(4, profile.categories.length)} categories, not ${categoryEntries.length}.`);
     }
-    if (topCategoryCount > Math.ceil(rowCount * 0.85)) {
+    if (!singleCategoryRequested && topCategoryCount > Math.ceil(rowCount * 0.85)) {
       errors.push(`${selectedTarget.gameName} batch overuses "${topCategory}" category (${topCategoryCount}/${rowCount}). Spread the rows across categories.`);
     }
-    if (toneEntries.length && toneEntries.length < 2) {
+    if (!singleToneRequested && toneEntries.length && toneEntries.length < 2) {
       errors.push(`${selectedTarget.gameName} batch uses only one tone (${topTone}). Use at least two tones.`);
     }
-    if (topToneCount > Math.ceil(rowCount * 0.9)) {
+    if (!singleToneRequested && topToneCount > Math.ceil(rowCount * 0.9)) {
       errors.push(`${selectedTarget.gameName} batch overuses "${topTone}" tone (${topToneCount}/${rowCount}). Vary the tone.`);
     }
-    if (intensityEntries.length && intensityEntries.length < 2) {
+    if (!singleIntensityRequested && intensityEntries.length && intensityEntries.length < 2) {
       errors.push(`${selectedTarget.gameName} batch uses only one intensity (${topIntensity}). Use at least two intensity levels.`);
     }
 
@@ -7291,6 +7393,13 @@ function LobbyScreen({
   const [questionUploadDraft, setQuestionUploadDraft] = useState(null);
   const [questionUploadReport, setQuestionUploadReport] = useState(null);
   const [questionUploadProgress, setQuestionUploadProgress] = useState({ status: 'idle', percent: 0, message: '' });
+  const [questionGenerationCountDraft, setQuestionGenerationCountDraft] = useState('50');
+  const [questionGenerationType, setQuestionGenerationType] = useState('surprise');
+  const [questionGenerationCategory, setQuestionGenerationCategory] = useState('surprise');
+  const [questionGenerationTone, setQuestionGenerationTone] = useState('surprise');
+  const [questionGenerationIntensity, setQuestionGenerationIntensity] = useState('surprise');
+  const [questionGenerationBrief, setQuestionGenerationBrief] = useState('');
+  const [isGeneratingQuestionBankCsv, setIsGeneratingQuestionBankCsv] = useState(false);
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
   const [selectedRoundTypes, setSelectedRoundTypes] = useState([]);
   const [selectedCategories, setSelectedCategories] = useState([]);
@@ -8414,7 +8523,16 @@ function LobbyScreen({
       : 'game';
   const questionBankTarget = getQuestionBankSyncTarget(questionBankSegmentBankType);
   const questionUploadTarget = questionBankTarget;
+  const questionGenerationProfile = QUESTION_BANK_GENERATION_PROFILES[normalizeQuestionBankType(questionUploadTarget.bankType)]
+    || QUESTION_BANK_GENERATION_PROFILES.game;
+  const questionBankGenerationBusy = isBusy || isGeneratingQuestionBankCsv;
   const questionBankRemainingExportQuestions = questionBankExportQuestionsByType[normalizeQuestionBankType(questionUploadTarget.bankType)] || [];
+  const questionGenerationConstraints = {
+    questionTypeMode: questionGenerationType === 'surprise' || questionGenerationType === 'all' ? questionGenerationType : 'single',
+    categoryMode: questionGenerationCategory === 'surprise' || questionGenerationCategory === 'all' ? questionGenerationCategory : 'single',
+    toneMode: questionGenerationTone === 'surprise' || questionGenerationTone === 'mixed' ? questionGenerationTone : 'single',
+    intensityMode: questionGenerationIntensity === 'surprise' || questionGenerationIntensity === 'mixed' ? questionGenerationIntensity : 'single',
+  };
   const clearQuestionUploadSelection = () => {
     setQuestionUploadDraft(null);
     setQuestionUploadReport(null);
@@ -8422,15 +8540,24 @@ function LobbyScreen({
   };
   const handleQuestionBankSegmentChange = (segment) => {
     setQuestionBankSegment(segment);
+    setQuestionGenerationType('surprise');
+    setQuestionGenerationCategory('surprise');
     clearQuestionUploadSelection();
   };
-  const buildQuestionUploadReport = ({ rawText, fileName, mode = questionUploadMode, target = questionUploadTarget }) =>
+  const buildQuestionUploadReport = ({
+    rawText,
+    fileName,
+    mode = questionUploadMode,
+    target = questionUploadTarget,
+    generationConstraints = null,
+  }) =>
     buildQuestionBankUploadPreflightReport({
       rawText,
       fileName,
       mode,
       target,
       existingQuestions: bankQuestions,
+      generationConstraints,
     });
   const applyQuestionUploadReport = (report) => {
     setQuestionUploadReport(report);
@@ -8460,6 +8587,7 @@ function LobbyScreen({
       rawText: questionUploadDraft.rawText,
       fileName: questionUploadDraft.fileName,
       mode: nextMode,
+      generationConstraints: questionUploadDraft.generationConstraints || null,
     }));
   };
   const handleDownloadQuestionUploadTemplate = () => {
@@ -8480,12 +8608,137 @@ function LobbyScreen({
       'text/csv;charset=utf-8',
     );
   };
-  const handleCopyQuestionGenerationPrompt = async () => {
+  const handleGenerateQuestionBankQuestions = async () => {
+    if (!geminiIsConfigured) {
+      const message = 'Gemini is not configured for this app.';
+      setQuestionUploadProgress({ status: 'error', percent: 0, message });
+      window.alert(message);
+      return;
+    }
+    if (
+      questionUploadDraft?.rawText
+      && typeof window !== 'undefined'
+      && !window.confirm('Replace the current checked CSV draft with a new Gemini-generated draft?')
+    ) {
+      return;
+    }
+
+    const target = questionUploadTarget;
+    const requestedCount = clampQuestionBankGenerationCount(questionGenerationCountDraft);
+    const constraints = { ...questionGenerationConstraints };
+    const promptOptions = {
+      questionCount: requestedCount,
+      questionType: questionGenerationType,
+      category: questionGenerationCategory,
+      tone: questionGenerationTone,
+      intensity: questionGenerationIntensity,
+      extraBrief: questionGenerationBrief,
+    };
+    const existingQuestionLines = (bankQuestions || [])
+      .filter((question) => normalizeQuestionBankType(question?.bankType) === normalizeQuestionBankType(target.bankType))
+      .map((question) => normalizeText(question?.question))
+      .filter(Boolean)
+      .slice(0, 250)
+      .map((question) => `- ${question}`)
+      .join('\n');
+    const basePrompt = [
+      buildQuestionBankGenerationPrompt(target, promptOptions),
+      existingQuestionLines
+        ? [
+          'Existing Firestore questions to avoid duplicating. This is a sample; the app checker compares against the full database after generation.',
+          existingQuestionLines,
+        ].join('\n')
+        : '',
+      'Return raw CSV only. No markdown, no explanation, no notes before or after the CSV.',
+    ].filter(Boolean).join('\n\n');
+    let fileName = makeQuestionBankGeneratedCsvFilename(target, requestedCount);
+    let rawText = '';
+    let report = null;
+
+    setQuestionUploadMode('add');
+    setQuestionUploadDraft(null);
+    setQuestionUploadReport(null);
+    setIsGeneratingQuestionBankCsv(true);
+    setQuestionUploadProgress({
+      status: 'generating',
+      percent: 12,
+      message: `Asking Gemini for ${requestedCount} ${target.gameName} question${requestedCount === 1 ? '' : 's'}...`,
+    });
+
     try {
-      await copyTextToClipboard(buildQuestionBankGenerationPrompt(questionUploadTarget));
-      window.alert(`${questionUploadTarget.gameName} master prompt copied.`);
+      const firstPass = await generateGeminiQuestionBankCsv({
+        prompt: basePrompt,
+        targetName: target.gameName,
+        questionCount: requestedCount,
+      });
+      rawText = extractQuestionBankGeneratedCsv(firstPass.text, target);
+      report = buildQuestionUploadReport({
+        rawText,
+        fileName,
+        mode: 'add',
+        target,
+        generationConstraints: constraints,
+      });
+
+      if (!report.canUpload) {
+        setQuestionUploadProgress({
+          status: 'repairing',
+          percent: 42,
+          message: `Checker found ${report.errorCount} issue${report.errorCount === 1 ? '' : 's'}; asking Gemini for one repair pass...`,
+        });
+        const repairPass = await generateGeminiQuestionBankCsv({
+          prompt: basePrompt,
+          repairReport: buildQuestionBankGenerationRepairReport(report),
+          previousCsv: rawText,
+          targetName: target.gameName,
+          questionCount: requestedCount,
+        });
+        rawText = extractQuestionBankGeneratedCsv(repairPass.text, target);
+        fileName = fileName.replace(/\.csv$/i, '-repaired.csv');
+        report = buildQuestionUploadReport({
+          rawText,
+          fileName,
+          mode: 'add',
+          target,
+          generationConstraints: constraints,
+        });
+      }
+
+      const rowCount = report.rowCount || countQuestionBankUploadDataRows(rawText);
+      setQuestionUploadDraft({
+        fileName,
+        fileSize: rawText.length,
+        rawText,
+        rowCount,
+        generatedBy: 'gemini',
+        generationConstraints: constraints,
+      });
+      setQuestionUploadReport(report);
+      if (report.canUpload) {
+        const imported = Number(report.summary?.imported || 0);
+        const duplicates = Number(report.summary?.duplicates || 0);
+        setQuestionUploadProgress({
+          status: 'ready',
+          percent: 72,
+          message: `Gemini draft checked: ${imported} new, ${duplicates} duplicate${duplicates === 1 ? '' : 's'} skipped. Review, then submit upload.`,
+        });
+      } else {
+        setQuestionUploadProgress({
+          status: 'error',
+          percent: 0,
+          message: `Gemini draft still needs review after repair: ${report.errorCount} issue${report.errorCount === 1 ? '' : 's'} found.`,
+        });
+      }
     } catch (error) {
-      window.alert(error?.message || 'Could not copy the master prompt.');
+      setQuestionUploadDraft(null);
+      setQuestionUploadReport(null);
+      setQuestionUploadProgress({
+        status: 'error',
+        percent: 0,
+        message: error?.message || 'Gemini could not generate the question CSV.',
+      });
+    } finally {
+      setIsGeneratingQuestionBankCsv(false);
     }
   };
   const handleQuestionUploadFileChange = async (event) => {
@@ -10273,32 +10526,96 @@ function LobbyScreen({
 
               <div className="question-bank-upload-panel" aria-label="Firestore CSV question upload">
                 <div className="question-bank-upload-copy">
-                  <p className="eyebrow">Firestore Upload</p>
+                  <p className="eyebrow">AI Question Generator</p>
                   <h3>{questionUploadTarget.gameName}</h3>
-                  <span>Choose a CSV and the app checks it before upload. Replace keeps used questions retired instead of deleting them.</span>
+                  <span>Generate questions with Gemini, then the app checks the CSV before anything can be uploaded. Manual CSV upload is still available as a fallback.</span>
                 </div>
                 <div className="question-bank-upload-controls">
+                  <label className="field question-bank-generator-count">
+                    <span>Number</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="50"
+                      step="1"
+                      value={questionGenerationCountDraft}
+                      onChange={(event) => setQuestionGenerationCountDraft(event.target.value)}
+                      disabled={questionBankGenerationBusy}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Type</span>
+                    <select value={questionGenerationType} onChange={(event) => setQuestionGenerationType(event.target.value)} disabled={questionBankGenerationBusy}>
+                      <option value="surprise">Surprise me</option>
+                      <option value="all">All allowed types</option>
+                      {(questionGenerationProfile.questionTypes || []).map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Category</span>
+                    <select value={questionGenerationCategory} onChange={(event) => setQuestionGenerationCategory(event.target.value)} disabled={questionBankGenerationBusy}>
+                      <option value="surprise">Surprise me</option>
+                      <option value="all">All categories</option>
+                      {(questionGenerationProfile.categories || []).map((category) => (
+                        <option key={category} value={category}>{category}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Tone</span>
+                    <select value={questionGenerationTone} onChange={(event) => setQuestionGenerationTone(event.target.value)} disabled={questionBankGenerationBusy}>
+                      <option value="surprise">Surprise me</option>
+                      <option value="mixed">Mixed</option>
+                      {QUESTION_BANK_GENERATION_TONE_OPTIONS.map((tone) => (
+                        <option key={tone} value={tone}>{tone}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Intensity</span>
+                    <select value={questionGenerationIntensity} onChange={(event) => setQuestionGenerationIntensity(event.target.value)} disabled={questionBankGenerationBusy}>
+                      <option value="surprise">Surprise me</option>
+                      <option value="mixed">Mixed</option>
+                      <option value="1">1 Gentle</option>
+                      <option value="2">2 Warm</option>
+                      <option value="3">3 Playful</option>
+                      <option value="4">4 Cheeky</option>
+                      <option value="5">5 Spicy</option>
+                    </select>
+                  </label>
+                  <label className="field field-wide">
+                    <span>Brief</span>
+                    <input
+                      type="text"
+                      value={questionGenerationBrief}
+                      onChange={(event) => setQuestionGenerationBrief(event.target.value)}
+                      placeholder="Surprise me, or add a theme to steer this batch"
+                      disabled={questionBankGenerationBusy}
+                    />
+                  </label>
+                  <Button className="primary-button compact" onClick={handleGenerateQuestionBankQuestions} disabled={questionBankGenerationBusy || !geminiIsConfigured}>
+                    Create Questions
+                  </Button>
                   <label className="field">
                     <span>Mode</span>
-                    <select value={questionUploadMode} onChange={handleQuestionUploadModeChange} disabled={isBusy}>
+                    <select value={questionUploadMode} onChange={handleQuestionUploadModeChange} disabled={questionBankGenerationBusy}>
                       <option value="add">Add new questions only</option>
                       <option value="upsert">Add new and update matches</option>
                       <option value="replace">Replace this game bank</option>
                     </select>
                   </label>
-                  <Button className="ghost-button compact" onClick={handleDownloadQuestionUploadTemplate} disabled={isBusy}>
+                  <Button className="ghost-button compact" onClick={handleDownloadQuestionUploadTemplate} disabled={questionBankGenerationBusy}>
                     Download Blank Template
                   </Button>
-                  <Button className="ghost-button compact" onClick={handleDownloadRemainingQuestions} disabled={isBusy}>
+                  <Button className="ghost-button compact" onClick={handleDownloadRemainingQuestions} disabled={questionBankGenerationBusy}>
                     Download Remaining Questions
                   </Button>
-                  <Button className="ghost-button compact" onClick={handleCopyQuestionGenerationPrompt} disabled={isBusy}>
-                    Copy Master Prompt
-                  </Button>
-                  <Button className="primary-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={isBusy}>
+                  <Button className="ghost-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={questionBankGenerationBusy}>
                     Choose + Check CSV
                   </Button>
-                  <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={isBusy || !questionUploadDraft || (questionUploadReport && !questionUploadReport.canUpload)}>
+                  <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={questionBankGenerationBusy || !questionUploadDraft || (questionUploadReport && !questionUploadReport.canUpload)}>
                     Submit Upload
                   </Button>
                   <input
@@ -10316,7 +10633,7 @@ function LobbyScreen({
                         {questionUploadDraft?.fileName || (questionUploadProgress.status === 'done' ? 'Upload complete' : 'CSV upload')}
                       </strong>
                       {questionUploadDraft ? (
-                        <button type="button" onClick={handleClearQuestionUploadDraft} disabled={isBusy}>
+                        <button type="button" onClick={handleClearQuestionUploadDraft} disabled={questionBankGenerationBusy}>
                           Clear
                         </button>
                       ) : null}

@@ -34,9 +34,9 @@ const readGeminiErrorMessage = async (response) => {
   }
 };
 
-const withTimeoutSignal = () => {
+const withTimeoutSignal = (timeoutMs = GEMINI_TIMEOUT_MS) => {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(new Error('Gemini request timed out.')), GEMINI_TIMEOUT_MS);
+  const timeoutId = window.setTimeout(() => controller.abort(new Error('Gemini request timed out.')), timeoutMs);
   return {
     signal: controller.signal,
     clear: () => window.clearTimeout(timeoutId),
@@ -53,12 +53,13 @@ const requestGeminiText = async ({
   systemInstruction = '',
   contents = [],
   generationConfig = {},
+  timeoutMs = GEMINI_TIMEOUT_MS,
 } = {}) => {
   if (!geminiIsConfigured) {
     throw new Error('Gemini is not configured.');
   }
 
-  const { signal, clear } = withTimeoutSignal();
+  const { signal, clear } = withTimeoutSignal(timeoutMs);
 
   try {
     const response = await fetch(buildGeminiUrl(), {
@@ -218,4 +219,46 @@ export const generateGeminiDiaryWriteup = async ({
     raw: result.raw,
     text: result.text,
   };
+};
+
+export const generateGeminiQuestionBankCsv = async ({
+  prompt = '',
+  repairReport = '',
+  previousCsv = '',
+  targetName = 'Question Bank',
+  questionCount = 50,
+} = {}) => {
+  const requestedCount = Math.max(1, Math.min(50, Number.parseInt(questionCount, 10) || 50));
+  const isRepair = Boolean(String(repairReport || '').trim() || String(previousCsv || '').trim());
+  const userPrompt = [
+    String(prompt || '').trim(),
+    isRepair ? 'Repair request from the KJK app checker:' : '',
+    isRepair ? String(repairReport || '').trim() : '',
+    isRepair ? 'Previous CSV that failed the checker:' : '',
+    isRepair ? String(previousCsv || '').trim() : '',
+    isRepair
+      ? `Return the full corrected CSV for ${targetName}. Do not explain the repair.`
+      : `Return the full CSV for ${targetName}.`,
+  ].filter(Boolean).join('\n\n');
+
+  return requestGeminiText({
+    systemInstruction: [
+      'You generate strict CSV files for the KJK app question bank.',
+      'Return raw CSV text only: no markdown fences, no commentary, no surrounding explanation.',
+      'The first line must be the requested header, followed by exactly the requested number of data rows.',
+      'Do not return a sample, preview, or shortened response.',
+    ].join('\n'),
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: userPrompt }],
+      },
+    ],
+    generationConfig: {
+      temperature: isRepair ? 0.35 : 0.82,
+      topP: 0.95,
+      maxOutputTokens: Math.min(24000, Math.max(7000, requestedCount * 340)),
+    },
+    timeoutMs: 90000,
+  });
 };
