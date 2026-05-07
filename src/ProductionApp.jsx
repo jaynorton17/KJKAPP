@@ -1176,6 +1176,14 @@ const makeQuestionBankPreflightKey = (value = '') =>
     .replace(/[’']/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+const makeQuestionBankTemplateKey = (value = '') =>
+  makeQuestionBankPreflightKey(value)
+    .replace(/\bvariant\s+\d+\b/g, '')
+    .replace(/\brow\s+\d+\b/g, '')
+    .replace(/\bquestion\s+\d+\b/g, '')
+    .replace(/\bq\s+\d+\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 const makeQuestionBankOptionPairKey = (value = '') =>
   String(value || '')
     .split('|')
@@ -1183,6 +1191,12 @@ const makeQuestionBankOptionPairKey = (value = '') =>
     .filter(Boolean)
     .sort()
     .join(' | ');
+const isPutYourPointsPlayerChoicePreflightRow = (bankType = '', questionType = '', question = '') =>
+  normalizeQuestionBankType(bankType) === PUT_YOUR_POINTS_GAME_MODE
+    && (
+      /\bwho\s+is\s+(?:more|most)\s+likely\b/i.test(`${questionType} ${question}`)
+      || ['whoismorelikelyto', 'whoismostlikelyto', 'mostlikelyto'].includes(normalizeQuestionBankUploadHeader(questionType))
+    );
 const buildQuestionBankUploadPreflightReport = ({
   rawText = '',
   fileName = 'CSV upload',
@@ -1226,6 +1240,7 @@ const buildQuestionBankUploadPreflightReport = ({
   const profile = QUESTION_BANK_GENERATION_PROFILES[normalizedBankType] || QUESTION_BANK_GENERATION_PROFILES.game;
   const allowedTypeIds = new Set((profile.questionTypes || []).map((type) => normalizeQuestionType(type, 'text')));
   const questionRows = new Map();
+  const templateRows = new Map();
   const optionRows = new Map();
 
   parsedRows.objects.forEach((row) => {
@@ -1235,6 +1250,7 @@ const buildQuestionBankUploadPreflightReport = ({
     const options = normalizeText(values.Options);
     const questionType = normalizeText(values['Question Type']);
     const normalizedType = normalizeQuestionType(questionType, 'text');
+    const isPutYourPointsPlayerChoiceRow = isPutYourPointsPlayerChoicePreflightRow(normalizedBankType, questionType, question);
 
     if (normalizeText(values.Sheet) !== selectedTarget.sheetName) {
       errors.push(`Row ${rowNumber}: Sheet must be "${selectedTarget.sheetName}".`);
@@ -1253,6 +1269,9 @@ const buildQuestionBankUploadPreflightReport = ({
     }
     if (values.Intensity && !/^[1-5]$/.test(String(values.Intensity).trim())) {
       errors.push(`Row ${rowNumber}: Intensity must be blank or a number from 1 to 5.`);
+    }
+    if (/\b(?:variant|row|question|q)\s*\d+\b/i.test(question)) {
+      errors.push(`Row ${rowNumber}: Question must not include generated labels such as Variant 1 or Q1.`);
     }
     QUESTION_BANK_UPLOAD_OPTIONAL_COLUMNS.forEach((column) => {
       const value = String(values[column] || '').trim();
@@ -1274,7 +1293,7 @@ const buildQuestionBankUploadPreflightReport = ({
       const optionCount = options ? options.split('|').map((entry) => normalizeText(entry)).filter(Boolean).length : 0;
       if (optionCount !== 2) errors.push(`Row ${rowNumber}: This or That needs exactly two pipe-separated options.`);
     }
-    if (!QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType) && QUESTION_BANK_UPLOAD_OPTION_TYPES.has(normalizedType)) {
+    if (!QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType) && QUESTION_BANK_UPLOAD_OPTION_TYPES.has(normalizedType) && !isPutYourPointsPlayerChoiceRow) {
       const optionCount = options ? options.split('|').map((entry) => normalizeText(entry)).filter(Boolean).length : 0;
       if (optionCount < 2) errors.push(`Row ${rowNumber}: ${questionType} needs at least two pipe-separated options.`);
     }
@@ -1287,8 +1306,16 @@ const buildQuestionBankUploadPreflightReport = ({
         questionRows.set(questionKey, rowNumber);
       }
     }
+    const templateKey = makeQuestionBankTemplateKey(question);
+    if (templateKey && templateKey !== questionKey) {
+      if (templateRows.has(templateKey)) {
+        errors.push(`Rows ${templateRows.get(templateKey)} and ${rowNumber}: question only differs by a generated suffix.`);
+      } else {
+        templateRows.set(templateKey, rowNumber);
+      }
+    }
     const optionPairKey = makeQuestionBankOptionPairKey(options);
-    if (optionPairKey && !QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType)) {
+    if (optionPairKey && !QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType) && !isPutYourPointsPlayerChoiceRow) {
       if (optionRows.has(optionPairKey)) {
         errors.push(`Rows ${optionRows.get(optionPairKey)} and ${rowNumber}: duplicate option set.`);
       } else {
