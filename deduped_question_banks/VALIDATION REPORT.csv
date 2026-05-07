@@ -1,0 +1,10 @@
+Source Folder,Sheet,Input Rows,Duplicate Rows Removed,Output Rows,Blank Questions,Remaining Duplicate Groups,Question Type Counts
+corrected_question_banks,Questions,1641,36,1605,0,0,Favourite: 32; Multiple Choice: 159; Numeric: 25; Pet Peeve: 4; Preference: 140; Ranked / Top 3: 36; Rating: 73; Sort Into Order: 49; Text Answer: 781; True or False: 306
+corrected_question_banks,Memory Lane,300,0,300,0,0,Favourite: 45; Multiple Choice: 45; Numeric: 15; Pet Peeve: 15; Ranked / Top 3: 15; Rating: 15; Sort Into Order: 15; Text Answer: 120; True or False: 15
+corrected_question_banks,Compatibility,300,0,300,0,0,Favourite: 15; Multiple Choice: 90; Numeric: 15; Pet Peeve: 15; Preference: 60; Ranked / Top 3: 15; Rating: 45; Sort Into Order: 30; Text Answer: 15
+corrected_question_banks,Red Flag Green Flag,300,0,300,0,0,Multiple Choice: 300
+corrected_question_banks,Put Your Money Where Your Mouth Is,151,4,147,0,0,Multiple Choice: 50; Preference: 16; Rating: 15; Text Answer: 51; True or False: 15
+corrected_question_banks,Most Like To,189,1,188,0,0,Multiple Choice: 188
+corrected_question_banks,This or That,1000,895,105,0,0,Preference: 105
+corrected_question_banks,Quiz,3546,234,3312,0,0,Multiple Choice: 1560; Text Answer: 1692; True or False: 60
+corrected_question_banks,True or False,2518,2300,218,0,0,True or False: 218
