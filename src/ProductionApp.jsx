@@ -328,6 +328,7 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'Use a wide mix of answer styles so the normal game does not feel repetitive.',
       'For Multiple Choice, Preference, and Sort Into Order rows, fill Options with specific choices separated by pipes.',
       'For free text, favourite, pet peeve, numeric, rating, and ranked rows, leave Options blank unless the wording needs fixed choices.',
+      'Do not make rows by swapping one word into the same sentence template.',
     ],
     examples: [
       'Favourite | Affection | What is the tiny everyday thing the other person does that makes you feel most wanted? |',
@@ -345,6 +346,7 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'For Multiple Choice rows, Options must include the correct answer plus believable distractors.',
       'For True or False rows, put Correct Answer as True or False and leave Options blank.',
       'Keep questions short enough to answer quickly.',
+      'Do not create a run of questions with the same opener, category, or answer pattern.',
     ],
     examples: [
       'Multiple Choice | Relationship History | Where did Jay and Kim first go for a proper date? | The correct place | A believable place | Another believable place | A funny wrong place',
@@ -360,6 +362,10 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'Every row should be a genuine two-choice preference.',
       'Options must contain exactly two choices separated by a pipe.',
       'Phrase the question so both players can answer personally, not as trivia.',
+      'Every option pair must be unique across the entire CSV. Do not reuse the same two choices with a new sentence wrapper.',
+      'No more than 5 rows may start with the same first 4 words.',
+      'The Category and Relationship Area must directly match the two choices. Do not assign categories randomly.',
+      'Avoid filler endings such as "right now", "tonight", or "today" unless the timing materially changes the choice.',
     ],
     examples: [
       'Preference | Date Night | Last-minute hotel night or planned romantic weekend? | Last-minute hotel night | Planned romantic weekend',
@@ -375,6 +381,7 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'Questions should start with or clearly imply "Who is most likely to".',
       'Leave Options blank because the app supplies Jay, Kim, Both, and Neither.',
       'Avoid prompts where only one player could ever reasonably be chosen.',
+      'Vary the situation, stakes, and tone so the set does not read like one repeated template.',
     ],
     examples: [
       'Multiple Choice | Funny | Who is most likely to turn a quick errand into a full side quest? |',
@@ -392,6 +399,7 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'For Sort Into Order, put every sortable item in Options so the app can create one slot per item.',
       'For Ranked / Top 3, ask for exactly three answers unless Options specify a fixed list.',
       'Use playful adult energy where suitable, but keep everything consensual and couple-safe.',
+      'Do not repeat the same option set, question frame, or category pattern across rows.',
     ],
     examples: [
       'Multiple Choice | Playful | Which compliment would secretly land hardest after a long day? | You look gorgeous | I noticed how hard you tried | I feel lucky with you | Come here now',
@@ -408,6 +416,7 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'Write clean standalone statements, not questions.',
       'Do not append numeric codes or IDs to the statement.',
       'Leave Options and Correct Answer blank; the app supplies True and False.',
+      'Mix statements about Jay, Kim, and both of them. Do not let every row follow the same sentence shape.',
     ],
     examples: [
       'True or False | Trust | Jay is more likely to overthink a quiet reply than admit it straight away. |',
@@ -423,6 +432,7 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'Every question should describe one behaviour or situation to judge.',
       'Leave Options blank because the app supplies Green Flag, Red Flag, and Depends.',
       'Make the scenario debatable rather than obviously good or bad.',
+      'Do not repeat the same behaviour with only a different setting or adjective.',
     ],
     examples: [
       'Multiple Choice | Communication | They go quiet after an argument but come back later with a proper apology. |',
@@ -439,6 +449,7 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'For Multiple Choice and Preference rows, provide clear options separated by pipes.',
       'For Rating rows, make the 1 to 10 scale obvious in the wording.',
       'Avoid questions that require the host to know a single factual correct answer.',
+      'Balance practical, emotional, romantic, lifestyle, and intimate compatibility instead of clustering around one theme.',
     ],
     examples: [
       'Preference | Lifestyle | Ideal reset weekend: total quiet, social plans, small adventure, or getting life admin done? | Total quiet | Social plans | Small adventure | Life admin',
@@ -456,6 +467,7 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'Only use Memory Lane Mode pastAnswerRecall when you are deliberately creating a recall-style multiple-choice row with one real answer and distractors.',
       'For recall rows, fill Correct Answer and include it inside Options with two believable wrong options.',
       'Most rows should be memoryPrompt, because the app can generate past-answer recall rounds from history itself.',
+      'Make each memory prompt point to a distinct time, feeling, person, place, achievement, embarrassment, or relationship moment.',
     ],
     examples: [
       'Text Answer | Earliest Memories | What is your earliest memory of feeling really proud of yourself? |',
@@ -652,6 +664,24 @@ const buildAllQuestionBankTypeReferenceLines = () =>
   QUESTION_BANK_TYPE_EXAMPLES
     .map((example, index) => `${index + 1}. ${buildQuestionBankExampleLine(example)}`)
     .join('\n');
+const STRICT_QUESTION_BANK_GENERATION_RULES = [
+  'Do not generate rows by taking a small list of option pairs and wrapping each pair in repeated sentence templates.',
+  'Do not reuse a question concept, option pair, opening phrase, category pairing, or repeat group unless the row is genuinely asking something different.',
+  'No two rows may have the same Question after lowercasing and removing punctuation.',
+  'No two rows may have the same Options value after lowercasing and sorting the choices, except fixed-choice games where the app supplies the options.',
+  'No more than 5% of rows may begin with the same first 4 words.',
+  'Do not add filler words such as "right now", "tonight", "today", "secretly", or "honestly" repeatedly to make duplicates look unique.',
+  'Category, Tone, Relationship Area, Tags, Game Suitability, AI Use Case, and Repeat Group must be chosen because they fit the actual question.',
+  'Use varied sentence shapes: direct question, scenario, comparison, confession-style prompt, playful challenge, memory cue, values cue, and practical everyday choice where the game allows it.',
+  'Spread rows across the recommended categories instead of clustering most rows in one or two categories.',
+  'If a row has Options, every option must be specific to that question and should be plausible for Jay and Kim.',
+  'Never use placeholder options such as Option A, Option B, Player 1, Player 2, Jay, Kim, Both, or Neither unless the selected game rules explicitly require those choices.',
+];
+const STRICT_QUESTION_BANK_SELF_CHECKS = [
+  'Before returning the CSV, silently audit the full set for duplicate questions, repeated option pairs, repeated opening phrases, random categories, missing options, wrong game/sheet values, and wrong column count.',
+  'If the audit finds a repeated option pair, repeated concept, random category, or overused sentence template, rewrite those rows before output.',
+  'Only output the final corrected CSV after the audit passes.',
+];
 const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0]) => {
   const selectedTarget = getQuestionBankSyncTarget(target?.bankType || 'game');
   const normalizedBankType = normalizeQuestionBankType(selectedTarget.bankType);
@@ -697,6 +727,9 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
     '- Leave Unit Label, Scoring Divisor, Rounding Mode, Round Penalty Value, Fixed Penalty, and Scoring columns blank unless the question clearly needs them.',
     '- Quote CSV cells that contain commas, quotes, or line breaks. Escape quotes by doubling them.',
     '',
+    'Strict anti-repetition rules:',
+    ...STRICT_QUESTION_BANK_GENERATION_RULES.map((rule) => `- ${rule}`),
+    '',
     'Game-specific rules:',
     ...profile.rules.map((rule) => `- ${rule}`),
     '',
@@ -717,6 +750,9 @@ const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0
     '- Keep anything adult consensual, private, and non-abusive.',
     '- Avoid filler, duplicate phrasing, and generic therapy-card wording.',
     '- Make sure every CSV row has the same number of columns as the header.',
+    '',
+    'Mandatory self-check before output:',
+    ...STRICT_QUESTION_BANK_SELF_CHECKS.map((rule) => `- ${rule}`),
   ].join('\n');
 };
 const copyTextToClipboard = async (text = '') => {

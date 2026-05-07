@@ -1522,8 +1522,32 @@ button:disabled {
   margin: 0;
 }
 
+.question-bank-upload-controls .field span {
+  color: rgba(255, 255, 255, 0.88);
+}
+
 .question-bank-upload-controls .field select {
   width: 100%;
+  min-height: 42px;
+  border-color: rgba(255, 255, 255, 0.34);
+  background: linear-gradient(180deg, #f9fbff, #dbe7ff);
+  color: #071122;
+  font-weight: 900;
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.58);
+}
+
+.question-bank-upload-controls .field select:focus {
+  border-color: rgba(255, 255, 255, 0.9);
+  background: #fff;
+  color: #071122;
+}
+
+.question-bank-upload-controls .field select option {
+  background: #fff;
+  color: #071122;
+  font-weight: 800;
 }
 
 .question-bank-upload-input {
