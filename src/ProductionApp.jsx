@@ -555,7 +555,8 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'For Sort Into Order, put every sortable item in Options so the app can create one slot per item.',
       'For Ranked / Top 3, ask for exactly three answers unless Options specify a fixed list.',
       'Use playful adult energy where suitable, but keep everything consensual and couple-safe.',
-      'Do not repeat the same option set, question frame, or category pattern across rows.',
+      'Do not repeat the same option set, option pool, question frame, or category pattern across rows.',
+      'For every Multiple Choice, Preference, Would You Rather, Ranking, and Sort Into Order row, the Options choices must be unique to that row and must not be recycled later.',
     ],
     examples: [
       'Multiple Choice | Playful | Which compliment would secretly land hardest after a long day? | You look gorgeous | I noticed how hard you tried | I feel lucky with you | Come here now',
@@ -827,6 +828,8 @@ const STRICT_QUESTION_BANK_GENERATION_RULES = [
   'No two rows may be the same base question with only category, tone, timing, or a small noun phrase changed.',
   'No two rows may have the same Question after lowercasing and removing punctuation.',
   'No two rows may have the same Options value after lowercasing and sorting the choices, except fixed-choice games where the app supplies the options.',
+  'For any row with Options, write the Options cell from scratch for that exact question. Do not reuse the same option pool in a different order, across another question type, or with only one item swapped.',
+  'For Multiple Choice, Preference, Would You Rather, Ranking, and Sort Into Order rows, no two rows should share most of the same choices. If two option cells overlap heavily, rewrite one completely.',
   'No more than 2 rows may begin with the same first 5 meaningful words, except fixed opener formats such as "Who is most likely to"; for those, the words after the fixed opener must still vary strongly.',
   'Do not repeat the same question-type opener across a batch, such as "What is your favourite", "Finish this truthfully", "Which experience would feel", "Name your top three", or "Put these in order", without changing the actual sentence shape and concept.',
   'Do not add filler words such as "right now", "tonight", "today", "secretly", or "honestly" repeatedly to make duplicates look unique.',
@@ -842,11 +845,11 @@ const STRICT_QUESTION_BANK_GENERATION_RULES = [
   'If the requested tone is spicy, cheeky, deep, playful, or gentle, express that through Tone, Tags, wording, and numeric Intensity. Do not put mood words in numeric columns.',
 ];
 const STRICT_QUESTION_BANK_SELF_CHECKS = [
-  'Before returning the CSV, silently audit the full set for duplicate questions, repeated option pairs, repeated opening phrases, random categories, missing options, wrong game/sheet values, wrong column count, and non-numeric intensity.',
+  'Before returning the CSV, silently audit the full set for duplicate questions, repeated option pairs, heavily overlapping option pools, repeated opening phrases, random categories, missing options, wrong game/sheet values, wrong column count, and non-numeric intensity.',
   'Verify the CSV contains exactly the requested number of data rows plus one header row. Do not output a partial sample.',
   'Verify every row has the exact selected Sheet and Game values, a valid allowed Question Type, Active set to Yes, and Intensity blank or numeric 1 to 5.',
   'Verify unused optional fields are genuinely blank rather than filled with placeholders.',
-  'If the audit finds a repeated option pair, repeated concept, random category, or overused sentence template, rewrite those rows before output.',
+  'If the audit finds a repeated option pair, repeated option pool, repeated concept, random category, or overused sentence template, rewrite those rows before output.',
   'Only output the final corrected CSV after the audit passes.',
 ];
 const buildQuestionBankGenerationPrompt = (target = QUESTION_BANK_SYNC_TARGETS[0]) => {

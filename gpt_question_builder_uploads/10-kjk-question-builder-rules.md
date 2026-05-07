@@ -85,6 +85,8 @@ Supported question types include:
 - No two rows may be the same base question with only category, tone, timing, or a small noun phrase changed.
 - No two rows may have the same question after lowercasing and removing punctuation.
 - No two rows may have the same options value after lowercasing and sorting the choices, except fixed-choice games where the app supplies the options.
+- For any row with `Options`, write the `Options` cell from scratch for that exact question. Do not reuse the same option pool in a different order, across another question type, or with only one item swapped.
+- For `Multiple Choice`, `Preference`, `Would you rather`, `Ranking`, and `Sort Into Order` rows, no two rows should share most of the same choices. If two option cells overlap heavily, rewrite one completely.
 - No more than 2 rows may begin with the same first 5 meaningful words, except fixed opener formats such as "Who is most likely to"; for those, the words after the fixed opener must still vary strongly.
 - Do not repeat the same question-type opener across a batch, such as "What is your favourite", "Finish this truthfully", "Which experience would feel", "Name your top three", or "Put these in order", without changing the actual sentence shape and concept.
 - Do not add filler words such as "right now", "tonight", "today", "secretly", or "honestly" repeatedly to make duplicates look unique.
@@ -132,8 +134,11 @@ Supported question types include:
 - A random stake is chosen, players answer and guess, host marks match or miss.
 - Use varied question types.
 - Do not use `Jay`, `Kim`, `Both`, `Neither` as generic options unless the prompt is genuinely "who is more likely".
+- For Multiple Choice, create question-specific options that make sense for that exact prompt.
 - For Sort Into Order, put every sortable item in `Options`.
 - For Ranked / Top 3, ask for exactly three answers unless options specify a fixed list.
+- Do not repeat the same option set, option pool, question frame, or category pattern across rows.
+- For every Multiple Choice, Preference, Would You Rather, Ranking, and Sort Into Order row, the Options choices must be unique to that row and must not be recycled later.
 
 ### True or False
 
@@ -172,6 +177,7 @@ Before returning a CSV, silently audit for:
 - same base question with only small wording/category/tone changes
 - generated labels or suffixes in question text
 - repeated option pairs
+- repeated option pools or heavily overlapping option choices
 - repeated opening phrases
 - overused question-type openers
 - matrix-style output where each type/category row is just a lightly edited copy
