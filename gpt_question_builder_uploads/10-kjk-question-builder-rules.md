@@ -93,7 +93,8 @@ Supported question types include:
 - No more than 2 rows may begin with the same first 5 meaningful words, except fixed opener formats such as "Who is most likely to"; for those, the words after the fixed opener must still vary strongly.
 - Do not repeat the same question-type opener across a batch, such as "What is your favourite", "Finish this truthfully", "Which experience would feel", "Name your top three", or "Put these in order", without changing the actual sentence shape and concept.
 - Do not add filler words such as "right now", "tonight", "today", "secretly", or "honestly" repeatedly to make duplicates look unique.
-- Do not put generated labels, suffixes, IDs, or counters in question text. This includes `Variant 1`, `Q1`, `Row 1`, `Question 1`, batch labels, or numeric endings used only to make rows look unique.
+- Do not put generated labels, suffixes, IDs, or counters in question text. This includes `Variant 1`, `Q1`, `Row 1`, `Question 1`, `description 1`, `scene 1`, batch labels, or numeric endings used only to make rows look unique.
+- Do not put generated counters in metadata fields either. Avoid `Tags` or `Repeat Group` values such as `memory1`, `unique-memory-scene-1`, `prompt-12`, or `option-set-7`.
 - Category, tone, relationship area, tags, game suitability, AI use case, and repeat group must be chosen because they fit the actual question.
 - Spread rows across the requested categories.
 - If the user asks for all categories, cover every recommended category at least once before repeating categories.
@@ -179,6 +180,7 @@ Before returning a CSV, silently audit for:
 - duplicate questions
 - same base question with only small wording/category/tone changes
 - generated labels or suffixes in question text
+- generated numeric counters in questions, tags, or repeat groups
 - repeated option pairs
 - repeated option pools or heavily overlapping option choices
 - repeated opening phrases

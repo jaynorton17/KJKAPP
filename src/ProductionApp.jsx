@@ -833,7 +833,8 @@ const STRICT_QUESTION_BANK_GENERATION_RULES = [
   'No more than 2 rows may begin with the same first 5 meaningful words, except fixed opener formats such as "Who is most likely to"; for those, the words after the fixed opener must still vary strongly.',
   'Do not repeat the same question-type opener across a batch, such as "What is your favourite", "Finish this truthfully", "Which experience would feel", "Name your top three", or "Put these in order", without changing the actual sentence shape and concept.',
   'Do not add filler words such as "right now", "tonight", "today", "secretly", or "honestly" repeatedly to make duplicates look unique.',
-  'Do not put generated labels, suffixes, IDs, or counters in Question text, including Variant 1, Q1, Row 1, Question 1, batch labels, or numeric endings used only to make rows look unique.',
+  'Do not put generated labels, suffixes, IDs, or counters in Question text, including Variant 1, Q1, Row 1, Question 1, description 1, scene 1, batch labels, or numeric endings used only to make rows look unique.',
+  'Do not put generated counters in metadata fields either, including Tags or Repeat Group values like memory1, unique-memory-scene-1, prompt-12, or option-set-7.',
   'Category, Tone, Relationship Area, Tags, Game Suitability, AI Use Case, and Repeat Group must be chosen because they fit the actual question.',
   'Use varied sentence shapes: direct question, scenario, comparison, confession-style prompt, playful challenge, memory cue, values cue, and practical everyday choice where the game allows it.',
   'Spread rows across the recommended categories instead of clustering most rows in one or two categories.',
@@ -1190,8 +1191,15 @@ const makeQuestionBankTemplateKey = (value = '') =>
     .replace(/\brow\s+\d+\b/g, '')
     .replace(/\bquestion\s+\d+\b/g, '')
     .replace(/\bq\s+\d+\b/g, '')
+    .replace(/\b(?:description|scene|prompt|memory|moment|option|choice|item|set|bucket|label)\s+\d+\b/g, '')
+    .replace(/\s+\d+\s*$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+const QUESTION_BANK_GENERATED_COUNTER_REGEX =
+  /\b(?:variant|row|question|q|description|scene|prompt|memory|moment|option|choice|item|set|bucket|label)\s*\d+\b/i;
+const QUESTION_BANK_TRAILING_COUNTER_REGEX = /\s+\d+\s*[?!.]?$/;
+const QUESTION_BANK_GENERATED_METADATA_COUNTER_REGEX =
+  /\b(?:unique[-_\s]*)?(?:memory|scene|prompt|moment|option|choice|item|set|bucket|group|repeat)[-_\s]*\d+\b/i;
 const makeQuestionBankOptionPairKey = (value = '') =>
   String(value || '')
     .split('|')
@@ -1278,9 +1286,15 @@ const buildQuestionBankUploadPreflightReport = ({
     if (values.Intensity && !/^[1-5]$/.test(String(values.Intensity).trim())) {
       errors.push(`Row ${rowNumber}: Intensity must be blank or a number from 1 to 5.`);
     }
-    if (/\b(?:variant|row|question|q)\s*\d+\b/i.test(question)) {
-      errors.push(`Row ${rowNumber}: Question must not include generated labels such as Variant 1 or Q1.`);
+    if (QUESTION_BANK_GENERATED_COUNTER_REGEX.test(question) || QUESTION_BANK_TRAILING_COUNTER_REGEX.test(question)) {
+      errors.push(`Row ${rowNumber}: Question must not include generated labels or counters such as Variant 1, Q1, description 1, or numeric endings.`);
     }
+    ['Tags', 'Repeat Group'].forEach((column) => {
+      const value = normalizeText(values[column]);
+      if (value && QUESTION_BANK_GENERATED_METADATA_COUNTER_REGEX.test(value)) {
+        errors.push(`Row ${rowNumber}: ${column} must not use generated counters such as memory1 or unique-memory-scene-1.`);
+      }
+    });
     QUESTION_BANK_UPLOAD_OPTIONAL_COLUMNS.forEach((column) => {
       const value = String(values[column] || '').trim();
       if (value && QUESTION_BANK_UPLOAD_PLACEHOLDER_VALUE.test(value)) {
