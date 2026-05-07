@@ -10765,7 +10765,7 @@ function LobbyScreen({
               user={user}
               profile={profile}
               currentPlayerSeat={currentPlayerSeat}
-              diaryEntries={visibleDiaryEntries}
+              diaryEntries={diaryEntries}
               roundAnalytics={lobbyRoundAnalytics}
               onSubmitAmaQuestion={onSubmitAmaQuestion}
               onAnswerAmaRequest={onAnswerAmaRequest}
@@ -10788,7 +10788,7 @@ function LobbyScreen({
             redemptionItems={redemptionItems}
             redemptionHistory={redemptionHistory}
             amaRequests={amaRequests}
-            diaryEntries={visibleDiaryEntries}
+            diaryEntries={diaryEntries}
             forfeitPriceRequests={forfeitPriceRequests}
             onSaveRedemptionItem={onSaveRedemptionItem}
             onDeleteRedemptionItem={onDeleteRedemptionItem}
