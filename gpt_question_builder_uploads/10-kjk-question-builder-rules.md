@@ -20,6 +20,8 @@ Use this as the knowledge guide for the custom GPT that creates upload-ready que
 - `Source Label` should be `generated:[Sheet Name]`.
 - `Intensity` must be numeric only: `1`, `2`, `3`, `4`, or `5`. Do not put words such as `gentle`, `playful`, `cheeky`, `spicy`, or `deep` in the `Intensity` column.
 - Put requested moods such as spicy, cheeky, playful, deep, or gentle in `Tone`, `Tags`, and the wording of the question instead.
+- Use blank cells for unused optional fields. Do not write `N/A`, `none`, `null`, `tbc`, `unknown`, or placeholder text into unused cells.
+- Every restricted column must use the exact requested value or exact allowed value. Do not invent synonyms for `Sheet`, `Game`, `Question Type`, `Active`, `Default Answer Type`, `Answer Type`, or scoring fields.
 - Quote CSV cells that contain commas, quotes, or line breaks.
 - Escape quotes inside CSV cells by doubling them.
 
@@ -85,6 +87,7 @@ Supported question types include:
 - Do not add filler words such as "right now", "tonight", "today", "secretly", or "honestly" repeatedly to make duplicates look unique.
 - Category, tone, relationship area, tags, game suitability, AI use case, and repeat group must be chosen because they fit the actual question.
 - Spread rows across the requested categories.
+- If the user asks for all categories, cover every recommended category at least once before repeating categories.
 - Use varied sentence shapes.
 - Never use placeholder options such as `Option A`, `Option B`, `Player 1`, or `Player 2`.
 
@@ -170,6 +173,7 @@ Before returning a CSV, silently audit for:
 - wrong column count
 - invalid question type for the selected game
 - non-numeric intensity values
+- placeholder values in unused optional fields
 - wrong number of data rows
 
 Rewrite failed rows before output.

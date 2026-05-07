@@ -771,12 +771,18 @@ const STRICT_QUESTION_BANK_GENERATION_RULES = [
   'Category, Tone, Relationship Area, Tags, Game Suitability, AI Use Case, and Repeat Group must be chosen because they fit the actual question.',
   'Use varied sentence shapes: direct question, scenario, comparison, confession-style prompt, playful challenge, memory cue, values cue, and practical everyday choice where the game allows it.',
   'Spread rows across the recommended categories instead of clustering most rows in one or two categories.',
+  'If the user asks for all categories, cover every recommended category at least once before repeating categories.',
   'If a row has Options, every option must be specific to that question and should be plausible for Jay and Kim.',
   'Never use placeholder options such as Option A, Option B, Player 1, Player 2, Jay, Kim, Both, or Neither unless the selected game rules explicitly require those choices.',
+  'Use blank cells for unused optional fields. Never write N/A, none, null, tbc, unknown, or placeholder text into unused cells.',
+  'Every restricted column must use the exact requested value or exact allowed value. Do not invent synonyms for Sheet, Game, Question Type, Active, Default Answer Type, Answer Type, or scoring fields.',
+  'If the requested tone is spicy, cheeky, deep, playful, or gentle, express that through Tone, Tags, wording, and numeric Intensity. Do not put mood words in numeric columns.',
 ];
 const STRICT_QUESTION_BANK_SELF_CHECKS = [
-  'Before returning the CSV, silently audit the full set for duplicate questions, repeated option pairs, repeated opening phrases, random categories, missing options, wrong game/sheet values, and wrong column count.',
+  'Before returning the CSV, silently audit the full set for duplicate questions, repeated option pairs, repeated opening phrases, random categories, missing options, wrong game/sheet values, wrong column count, and non-numeric intensity.',
   'Verify the CSV contains exactly the requested number of data rows plus one header row. Do not output a partial sample.',
+  'Verify every row has the exact selected Sheet and Game values, a valid allowed Question Type, Active set to Yes, and Intensity blank or numeric 1 to 5.',
+  'Verify unused optional fields are genuinely blank rather than filled with placeholders.',
   'If the audit finds a repeated option pair, repeated concept, random category, or overused sentence template, rewrite those rows before output.',
   'Only output the final corrected CSV after the audit passes.',
 ];
@@ -29390,7 +29396,15 @@ function ProductionApp() {
 
       const upsertQuestions = dedupeQuestionsById([...result.imports, ...result.updates]);
       if (!upsertQuestions.length) {
-        throw new Error(`${target.gameName} upload did not add any new questions. Existing duplicate rows were skipped.`);
+        setSyncNotice(
+          `Uploaded ${fileName} into ${target.gameName}: 0 new, 0 updated, ${result.summary.duplicates} existing duplicates skipped.`,
+        );
+        setNotice(`${target.gameName} CSV upload complete. No new questions were added because the rows already exist.`);
+        return {
+          target,
+          result,
+          upsertQuestions: [],
+        };
       }
       await upsertQuestionBankBatch(firestore, upsertQuestions);
       setBankQuestions((current) => mergeQuestionBankRecords(current, upsertQuestions));
