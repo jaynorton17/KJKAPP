@@ -18965,10 +18965,6 @@ function ProductionApp() {
     () => putYourPointsBankQuestions,
     [putYourPointsBankQuestions],
   );
-  const lobbyCategoryOptions = useMemo(
-    () => deriveCategories(gameBankQuestions, lobbyRounds, DEFAULT_CATEGORIES).map((category) => category.name).filter(Boolean),
-    [gameBankQuestions, lobbyRounds],
-  );
   const analytics = useMemo(() => calculateAnalytics(rounds), [rounds]);
   const redemptionPenaltyAdjustments = useMemo(
     () =>
@@ -18991,10 +18987,6 @@ function ProductionApp() {
         })
         .filter(Boolean),
     [redemptionHistory],
-  );
-  const lobbyRoundAnalytics = useMemo(
-    () => calculateAnalytics(lobbyRounds, { penaltyAdjustments: redemptionPenaltyAdjustments }),
-    [lobbyRounds, redemptionPenaltyAdjustments],
   );
   const bankCount = gameBankQuestions.length;
   const quizBankCount = quizBankQuestions.length;
@@ -19035,6 +19027,14 @@ function ProductionApp() {
       return [...mergedById.values()].flatMap((entry) => entry.rounds || []);
     },
     [previousGames, trackedGameEntries],
+  );
+  const lobbyCategoryOptions = useMemo(
+    () => deriveCategories(gameBankQuestions, lobbyRounds, DEFAULT_CATEGORIES).map((category) => category.name).filter(Boolean),
+    [gameBankQuestions, lobbyRounds],
+  );
+  const lobbyRoundAnalytics = useMemo(
+    () => calculateAnalytics(lobbyRounds, { penaltyAdjustments: redemptionPenaltyAdjustments }),
+    [lobbyRounds, redemptionPenaltyAdjustments],
   );
   const bankQuestionIds = useMemo(
     () => new Set(standardSelectableQuestions.map((question) => question.id).filter(Boolean)),
