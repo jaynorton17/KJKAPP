@@ -614,6 +614,18 @@ export const normalizeQuestionBankType = (value = 'game') => {
     return 'putYourPointsGame';
   }
   if (
+    normalized === 'secretauctiongame'
+    || normalized === 'secretauction'
+    || normalized === 'howsureareyougame'
+    || normalized === 'howsureareyou'
+    || normalized === 'auction'
+    || normalized === 'privatebid'
+    || normalized === 'privatebids'
+    || normalized === 'confidencestakes'
+  ) {
+    return 'secretAuctionGame';
+  }
+  if (
     normalized === 'redflaggreenflaggame'
     || normalized === 'redflaggreenflag'
     || normalized === 'redgreenflag'
@@ -945,6 +957,18 @@ export const createRoundResult = (input, nextNumber = 1, priorTotals = emptyTota
       kim: normalizeText(input.putYourPointsResults?.kim),
     },
     putYourPointsStakeGeneratedAt: normalizeText(input.putYourPointsStakeGeneratedAt),
+    secretAuctionBids: {
+      jay: toScore(input.answers?.jay?.secretAuctionBid ?? input.secretAuctionBids?.jay ?? input.jaySecretAuctionBid ?? 0),
+      kim: toScore(input.answers?.kim?.secretAuctionBid ?? input.secretAuctionBids?.kim ?? input.kimSecretAuctionBid ?? 0),
+    },
+    secretAuctionStakeIds: {
+      jay: normalizeText(input.secretAuctionStakeIds?.jay ?? input.answers?.jay?.secretAuctionStakeId ?? input.jaySecretAuctionStakeId ?? ''),
+      kim: normalizeText(input.secretAuctionStakeIds?.kim ?? input.answers?.kim?.secretAuctionStakeId ?? input.kimSecretAuctionStakeId ?? ''),
+    },
+    secretAuctionResults: {
+      jay: normalizeText(input.secretAuctionResults?.jay),
+      kim: normalizeText(input.secretAuctionResults?.kim),
+    },
     compatibilityScore: Math.max(0, Math.min(100, parseNumber(input.compatibilityScore, 0))),
     memoryLaneMode: normalizeText(input.memoryLaneMode),
     sourceGameId: normalizeText(input.sourceGameId),

@@ -6593,6 +6593,55 @@ button:disabled {
   transform: none;
 }
 
+.secret-auction-stake-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.secret-auction-stake-card {
+  display: inline-grid;
+  place-items: center;
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background:
+    linear-gradient(135deg, rgba(255, 215, 128, 0.16), rgba(255, 255, 255, 0.05)),
+    rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 950;
+  line-height: 1;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease,
+    background 160ms ease;
+}
+
+.secret-auction-stake-card:not(:disabled):hover,
+.secret-auction-stake-card:not(:disabled):focus-visible {
+  border-color: rgba(255, 229, 166, 0.64);
+  box-shadow: 0 0 16px rgba(255, 199, 95, 0.22);
+  transform: translateY(-1px);
+}
+
+.secret-auction-stake-card.is-on {
+  border-color: rgba(255, 229, 166, 0.9);
+  background:
+    linear-gradient(135deg, rgba(255, 200, 88, 0.28), rgba(255, 255, 255, 0.08)),
+    rgba(255, 255, 255, 0.07);
+  box-shadow: 0 0 18px rgba(255, 199, 95, 0.28);
+}
+
+.secret-auction-stake-card:disabled {
+  cursor: default;
+  opacity: 0.58;
+  transform: none;
+}
+
 .live-round-actions {
   justify-content: space-between;
   align-items: center;

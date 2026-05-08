@@ -39,6 +39,7 @@ import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
 import questionMakerAgentRules from '../docs/question-maker-agent.md?raw';
 import normalGameTileImage from './assets/lobby-normal-game.webp';
 import compatibilityTileImage from './assets/lobby-compatability.png';
+import howSureAreYouTileImage from './assets/lobby-how-sure-are-you.png';
 import memoryLaneTileImage from './assets/lobby-memory.png';
 import mostLikelyTileImage from './assets/lobby-most-likely.png';
 import pokerTileImage from './assets/lobby-poker.webp';
@@ -132,6 +133,8 @@ const TRUE_FALSE_GAME_MODE = 'trueFalseGame';
 const THIS_OR_THAT_GAME_MODE = 'thisOrThatGame';
 const MOST_LIKELY_GAME_MODE = 'mostLikelyGame';
 const PUT_YOUR_POINTS_GAME_MODE = 'putYourPointsGame';
+const SECRET_AUCTION_GAME_MODE = 'secretAuctionGame';
+const HOW_SURE_ARE_YOU_GAME_NAME = 'How Sure Are You?';
 const RED_FLAG_GREEN_FLAG_GAME_MODE = 'redFlagGreenFlagGame';
 const COMPATIBILITY_METER_GAME_MODE = 'compatibilityMeterGame';
 const MEMORY_LANE_GAME_MODE = 'memoryLaneGame';
@@ -147,6 +150,9 @@ const PUT_YOUR_POINTS_STAKE_RANDOM_COUNT = 20;
 const PUT_YOUR_POINTS_STAKE_RANDOM_DURATION_MS = 3000;
 const PUT_YOUR_POINTS_STAKE_FINAL_HOLD_MS = 2000;
 const PUT_YOUR_POINTS_STAKE_DOCK_MS = 720;
+const SECRET_AUCTION_STAKE_MIN = 1;
+const SECRET_AUCTION_STAKE_MAX = 500;
+const SECRET_AUCTION_BID_MAX = SECRET_AUCTION_STAKE_MAX;
 const RED_FLAG_GREEN_FLAG_OPTIONS = ['Green Flag', 'Red Flag', 'Depends'];
 const RED_FLAG_GREEN_FLAG_WRONG_PENALTY = 10;
 const RED_FLAG_GREEN_FLAG_UNANSWERED_PENALTY = 10;
@@ -196,6 +202,13 @@ const QUESTION_BANK_SYNC_TARGETS = [
     label: 'Put Your Points Where Your Mouth Is Bank',
     importLabel: 'Put Your Points Questions',
     sheetName: 'Put Your Money Where Your Mouth Is',
+  },
+  {
+    bankType: SECRET_AUCTION_GAME_MODE,
+    gameName: HOW_SURE_ARE_YOU_GAME_NAME,
+    label: 'How Sure Are You? Bank',
+    importLabel: 'How Sure Are You? Questions',
+    sheetName: 'How Sure Are You',
   },
   {
     bankType: TRUE_FALSE_GAME_MODE,
@@ -565,6 +578,26 @@ const QUESTION_BANK_GENERATION_PROFILES = {
       'Sort Into Order | Attraction | Put these in order from most to least dangerous as private signals: look, phrase, touch, emoji | Look | Phrase | Touch | Emoji',
       'Ranked / Top 3 | Memory | Name your top three childhood memories that still shape you now. |',
       'Numeric | Secrets | How many minutes could the other person stay annoyed before wanting a cuddle? |',
+    ],
+  },
+  [SECRET_AUCTION_GAME_MODE]: {
+    howItWorks: 'Each player gets the same random stake deck for the game, answers for themselves, guesses the other player answer, and privately spends one remaining stake on their confidence. The host marks each player Match or Miss. A Miss adds only that player spent stake as penalty points.',
+    questionTypes: ['Favourite', 'Fill in the Blank', 'Multiple Choice', 'Numeric', 'Open Answer', 'Pet Peeve', 'Preference', 'Ranked / Top 3', 'Ranking', 'Rating', 'Text Answer', 'True or False', 'Who is more likely to', 'Would you rather', 'Sort Into Order'],
+    categories: ['Affection', 'Attraction', 'Turn Ons', 'Secrets', 'Habits', 'Hobbies', 'Memory', 'Conflict', 'Future', 'Money', 'Playful', 'Spicy', 'Boundaries', 'Comfort'],
+    rules: [
+      'Do not write stake amounts into the question text. The app gives both players the same random stake deck and collects one private stake choice separately.',
+      'For Multiple Choice, create question-specific options that make sense for that exact prompt.',
+      'For Sort Into Order, put every sortable item in Options so the app can create one slot per item.',
+      'For Ranked / Top 3, ask for exactly three answers unless Options specify a fixed list.',
+      'Use questions where a confident player could reasonably spend a high stake on knowing the other person.',
+      'Do not reuse Jay, Kim, Both, Neither as generic options unless the question is genuinely "who is more likely".',
+      'Every row needs a distinct answer concept, option set, and confidence/risk moment.',
+    ],
+    examples: [
+      'Favourite | Hobbies | What hobby could the other person get weirdly obsessed with if they had a free month? |',
+      'Multiple Choice | Turn Ons | Which private compliment would make the other person melt fastest? | You look unreal | I want you now | I noticed every detail | You feel like home',
+      'Sort Into Order | Spicy | Put these in order from safest bet to riskiest guess: favourite kiss, favourite touch, favourite outfit, favourite private move | Favourite kiss | Favourite touch | Favourite outfit | Favourite private move',
+      'Numeric | Money | How much money could the other person spend on a treat before feeling slightly guilty? |',
     ],
   },
   [TRUE_FALSE_GAME_MODE]: {
@@ -1336,6 +1369,21 @@ const parseQuestionBankCsvForTarget = ({
       allowTemplateMatch,
     });
   }
+  if (normalizedTargetBankType === SECRET_AUCTION_GAME_MODE) {
+    return parseGoogleSheetModeImport({
+      rawText,
+      existingQuestions: nextExistingQuestions,
+      overwriteExisting,
+      importedAt,
+      sourceLabel: resolvedSourceLabel,
+      allowIdMatch,
+      allowTemplateMatch,
+      bankType: SECRET_AUCTION_GAME_MODE,
+      source: 'firestoreUploadSecretAuction',
+      defaultCategory: HOW_SURE_ARE_YOU_GAME_NAME,
+      defaultRoundType: 'text',
+    });
+  }
   if (normalizedTargetBankType === TRUE_FALSE_GAME_MODE) {
     return parseGoogleSheetTrueFalseImport({
       rawText,
@@ -1473,6 +1521,7 @@ const QUESTION_BANK_BLANK_CORRECT_ANSWER_TARGETS = new Set([
   MOST_LIKELY_GAME_MODE,
   RED_FLAG_GREEN_FLAG_GAME_MODE,
   THIS_OR_THAT_GAME_MODE,
+  SECRET_AUCTION_GAME_MODE,
 ]);
 const QUESTION_BANK_UPLOAD_PLACEHOLDER_VALUE = /^(?:n\/?a|none|null|tbc|unknown|placeholder)$/i;
 const QUESTION_BANK_UPLOAD_OPTIONAL_COLUMNS = [
@@ -1556,7 +1605,7 @@ const makeQuestionBankOptionPairKey = (value = '') =>
     .sort()
     .join(' | ');
 const isPutYourPointsPlayerChoicePreflightRow = (bankType = '', questionType = '', question = '') =>
-  normalizeQuestionBankType(bankType) === PUT_YOUR_POINTS_GAME_MODE
+  [PUT_YOUR_POINTS_GAME_MODE, SECRET_AUCTION_GAME_MODE].includes(normalizeQuestionBankType(bankType))
     && (
       /\bwho\s+is\s+(?:more|most)\s+likely\b/i.test(`${questionType} ${question}`)
       || ['whoismorelikelyto', 'whoismostlikelyto', 'mostlikelyto'].includes(normalizeQuestionBankUploadHeader(questionType))
@@ -1727,6 +1776,7 @@ const buildQuestionBankUploadPreflightReport = ({
     const multiFormatBankTypes = new Set([
       normalizeQuestionBankType('game'),
       normalizeQuestionBankType(PUT_YOUR_POINTS_GAME_MODE),
+      normalizeQuestionBankType(SECRET_AUCTION_GAME_MODE),
       normalizeQuestionBankType(COMPATIBILITY_METER_GAME_MODE),
       normalizeQuestionBankType(MEMORY_LANE_GAME_MODE),
     ]);
@@ -2024,6 +2074,8 @@ const resolveGameMode = (value = 'standard') => {
           ? MOST_LIKELY_GAME_MODE
           : value === PUT_YOUR_POINTS_GAME_MODE || normalizedBankType === PUT_YOUR_POINTS_GAME_MODE
             ? PUT_YOUR_POINTS_GAME_MODE
+            : value === SECRET_AUCTION_GAME_MODE || normalizedBankType === SECRET_AUCTION_GAME_MODE
+              ? SECRET_AUCTION_GAME_MODE
             : value === RED_FLAG_GREEN_FLAG_GAME_MODE || normalizedBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
               ? RED_FLAG_GREEN_FLAG_GAME_MODE
             : value === COMPATIBILITY_METER_GAME_MODE || normalizedBankType === COMPATIBILITY_METER_GAME_MODE
@@ -2038,17 +2090,19 @@ const isTrueFalseGameMode = (value = 'standard') => resolveGameMode(value) === T
 const isThisOrThatGameMode = (value = 'standard') => resolveGameMode(value) === THIS_OR_THAT_GAME_MODE;
 const isMostLikelyGameMode = (value = 'standard') => resolveGameMode(value) === MOST_LIKELY_GAME_MODE;
 const isPutYourPointsGameMode = (value = 'standard') => resolveGameMode(value) === PUT_YOUR_POINTS_GAME_MODE;
+const isSecretAuctionGameMode = (value = 'standard') => resolveGameMode(value) === SECRET_AUCTION_GAME_MODE;
 const isRedFlagGreenFlagGameMode = (value = 'standard') => resolveGameMode(value) === RED_FLAG_GREEN_FLAG_GAME_MODE;
 const isCompatibilityMeterGameMode = (value = 'standard') => resolveGameMode(value) === COMPATIBILITY_METER_GAME_MODE;
 const isMemoryLaneGameMode = (value = 'standard') => resolveGameMode(value) === MEMORY_LANE_GAME_MODE;
 const isAutoScoredChoiceGameMode = (value = 'standard') =>
-  isTrueFalseGameMode(value) || isThisOrThatGameMode(value) || isMostLikelyGameMode(value) || isPutYourPointsGameMode(value) || isRedFlagGreenFlagGameMode(value) || isCompatibilityMeterGameMode(value);
+  isTrueFalseGameMode(value) || isThisOrThatGameMode(value) || isMostLikelyGameMode(value) || isPutYourPointsGameMode(value) || isSecretAuctionGameMode(value) || isRedFlagGreenFlagGameMode(value) || isCompatibilityMeterGameMode(value);
 const getQuestionBankTypeForGameMode = (value = 'standard') => {
   const gameMode = resolveGameMode(value);
   if (gameMode === 'quiz') return 'quiz';
   if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThatGame';
   if (gameMode === MOST_LIKELY_GAME_MODE) return 'mostLikelyGame';
   if (gameMode === PUT_YOUR_POINTS_GAME_MODE) return 'putYourPointsGame';
+  if (gameMode === SECRET_AUCTION_GAME_MODE) return SECRET_AUCTION_GAME_MODE;
   if (gameMode === TRUE_FALSE_GAME_MODE) return 'trueFalseGame';
   if (gameMode === RED_FLAG_GREEN_FLAG_GAME_MODE) return RED_FLAG_GREEN_FLAG_GAME_MODE;
   if (gameMode === COMPATIBILITY_METER_GAME_MODE) return COMPATIBILITY_METER_GAME_MODE;
@@ -2062,6 +2116,7 @@ const ANALYTICS_GAME_SCORE_MODES = [
   { id: 'thisOrThat', label: 'This or That' },
   { id: 'mostLikely', label: 'Most Likely To' },
   { id: 'putYourPoints', label: 'Put Your Points' },
+  { id: 'secretAuction', label: HOW_SURE_ARE_YOU_GAME_NAME },
   { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag' },
   { id: 'compatibilityMeter', label: 'Compatibility Meter' },
   { id: 'memoryLane', label: 'Memory Lane' },
@@ -2074,6 +2129,7 @@ const SURPRISE_ME_GAME_OPTIONS = [
   { id: 'thisOrThat', label: 'This or That', gameMode: THIS_OR_THAT_GAME_MODE, gameName: 'This or That' },
   { id: 'mostLikely', label: 'Most Likely To', gameMode: MOST_LIKELY_GAME_MODE, gameName: 'Most Likely To' },
   { id: 'putYourPoints', label: 'Put Your Points', gameMode: PUT_YOUR_POINTS_GAME_MODE, gameName: 'Put Your Points Where Your Mouth Is' },
+  { id: 'secretAuction', label: HOW_SURE_ARE_YOU_GAME_NAME, gameMode: SECRET_AUCTION_GAME_MODE, gameName: HOW_SURE_ARE_YOU_GAME_NAME },
   { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag', gameMode: RED_FLAG_GREEN_FLAG_GAME_MODE, gameName: 'Red Flag Green Flag' },
   { id: 'compatibilityMeter', label: 'Compatibility Meter', gameMode: COMPATIBILITY_METER_GAME_MODE, gameName: 'Compatibility Meter' },
   { id: 'memoryLane', label: 'Memory Lane', gameMode: MEMORY_LANE_GAME_MODE, gameName: 'Memory Lane' },
@@ -2093,6 +2149,7 @@ const getAnalyticsGameScoreModeId = (value = 'standard') => {
   if (gameMode === THIS_OR_THAT_GAME_MODE) return 'thisOrThat';
   if (gameMode === MOST_LIKELY_GAME_MODE) return 'mostLikely';
   if (gameMode === PUT_YOUR_POINTS_GAME_MODE) return 'putYourPoints';
+  if (gameMode === SECRET_AUCTION_GAME_MODE) return 'secretAuction';
   if (gameMode === RED_FLAG_GREEN_FLAG_GAME_MODE) return 'redFlagGreenFlag';
   if (gameMode === COMPATIBILITY_METER_GAME_MODE) return 'compatibilityMeter';
   if (gameMode === MEMORY_LANE_GAME_MODE) return 'memoryLane';
@@ -3243,6 +3300,7 @@ const getDiaryGameModeLabel = (gameMode = 'standard') => {
   if (resolveGameMode(gameMode) === 'quiz') return 'Quick Fire Quiz';
   if (isMostLikelyGameMode(gameMode)) return 'Most Likely To';
   if (isPutYourPointsGameMode(gameMode)) return 'Put Your Points';
+  if (isSecretAuctionGameMode(gameMode)) return HOW_SURE_ARE_YOU_GAME_NAME;
   if (isThisOrThatGameMode(gameMode)) return 'This or That';
   if (isTrueFalseGameMode(gameMode)) return 'True or False';
   if (isRedFlagGreenFlagGameMode(gameMode)) return 'Red Flag Green Flag';
@@ -3614,10 +3672,18 @@ const buildGameDiaryRoundHighlights = (gameSummary = {}) => {
       jayPenalty: Number(round?.penaltyAdded?.jay ?? round?.scores?.jay ?? 0),
       kimPenalty: Number(round?.penaltyAdded?.kim ?? round?.scores?.kim ?? 0),
       roundStake: gameMode === PUT_YOUR_POINTS_GAME_MODE ? Number(round?.putYourPointsStake || 0) : 0,
+      secretAuctionBids: gameMode === SECRET_AUCTION_GAME_MODE ? {
+        jay: Number(round?.secretAuctionBids?.jay || 0),
+        kim: Number(round?.secretAuctionBids?.kim || 0),
+      } : null,
       compatibilityScore: gameMode === COMPATIBILITY_METER_GAME_MODE ? Number(round?.compatibilityScore || 0) : 0,
       putYourPointsResults: gameMode === PUT_YOUR_POINTS_GAME_MODE ? {
         jay: normalizePutYourPointsResult(round?.putYourPointsResults?.jay),
         kim: normalizePutYourPointsResult(round?.putYourPointsResults?.kim),
+      } : null,
+      secretAuctionResults: gameMode === SECRET_AUCTION_GAME_MODE ? {
+        jay: normalizePutYourPointsResult(round?.secretAuctionResults?.jay),
+        kim: normalizePutYourPointsResult(round?.secretAuctionResults?.kim),
       } : null,
     }));
 };
@@ -3854,6 +3920,12 @@ const buildGameDiaryChapterTitleFallback = (gameSummary = {}, scoreContext = nul
     if (winnerLabel) specificCandidates.push(`${winnerLabel} Dodged the Stake`, `${winnerLabel}'s Points Night`);
     if (categoryLabel) specificCandidates.push(`${categoryLabel} Raised the Stakes`, `${categoryLabel} on the Line`);
     generalCandidates.push('Points, Guesses, and Close Calls', 'Stakes on the Table', 'A Put Your Points Scorecard');
+  } else if (gameMode === SECRET_AUCTION_GAME_MODE) {
+    if (wasTie) specificCandidates.push('All Stakes, No Breakaway', 'The How Sure Are You Deadlock');
+    if (wasClose && winnerLabel) specificCandidates.push(`${winnerLabel}'s Narrow Stake Escape`, `${winnerLabel} Won the Nerve Test`);
+    if (winnerLabel) specificCandidates.push(`${winnerLabel} Beat the Stake`, `${winnerLabel}'s Confidence Night`);
+    if (categoryLabel) specificCandidates.push(`${categoryLabel} Raised the Stakes`, `A ${categoryLabel} Confidence Bet`);
+    generalCandidates.push('Stakes, Bluffs, and Close Calls', 'The How Sure Are You Scorecard', 'Risky Guesses on the Table');
   } else {
     if (wasTie) specificCandidates.push('Too Close to Call', 'A Perfect Little Deadlock');
     if (wasClose && winnerLabel) specificCandidates.push(`${winnerLabel} by a Whisper`, `${winnerLabel}'s Narrow Escape`);
@@ -3992,6 +4064,7 @@ const buildAiDiarySystemInstruction = (sourceType = 'game') => [
   'Explain what Jay and Kim learned about each other, what went well, and who struggled where, while staying kind and playful.',
   'For Most Likely To chapters, use facts.mostLikely to preserve matched votes, split votes, missed votes, and the exact Jay/Kim vote contrast on key split rounds.',
   'For Put Your Points chapters, mention the round stakes and whether the host marked each player as matched or missed when those facts are present.',
+  'For How Sure Are You? chapters, mention the private stakes, confidence swings, and whether the host marked each player as matched or missed when those facts are present.',
   'For Texas Hold’em chapters, use facts.game.holdemStats and facts.game.scoreSummary; do not invent card-by-card hand history when it is not supplied.',
   'Do not sound clinical, robotic, mean, or generic.',
   'Keep quiz scoring and penalty-point scoring separate: quiz points are higher-is-better, penalty points are lower-is-better.',
@@ -4151,6 +4224,8 @@ const buildAiEvidenceSnapshot = ({
         ? 'Most Likely To'
         : gameMode === PUT_YOUR_POINTS_GAME_MODE
           ? 'Put Your Points'
+        : gameMode === SECRET_AUCTION_GAME_MODE
+          ? HOW_SURE_ARE_YOU_GAME_NAME
         : gameMode === THIS_OR_THAT_GAME_MODE
           ? 'This or That'
           : gameMode === TRUE_FALSE_GAME_MODE
@@ -5678,6 +5753,124 @@ const buildPutYourPointsStakeSnapshot = () => {
 };
 const getPutYourPointsStake = (round = {}) =>
   clampPutYourPointsStake(round?.putYourPointsStake ?? round?.roundStake ?? round?.stake);
+const clampSecretAuctionStake = (value = 0) => {
+  const numericValue = Math.round(Number(value || 0));
+  if (!Number.isFinite(numericValue)) return SECRET_AUCTION_STAKE_MIN;
+  return Math.min(SECRET_AUCTION_STAKE_MAX, Math.max(SECRET_AUCTION_STAKE_MIN, numericValue));
+};
+const clampSecretAuctionBid = (value = 0) => {
+  const numericValue = Math.round(Number(value || 0));
+  if (!Number.isFinite(numericValue)) return 0;
+  return Math.min(SECRET_AUCTION_STAKE_MAX, Math.max(0, numericValue));
+};
+const makeSecretAuctionStakeValue = () =>
+  Math.floor(Math.random() * (SECRET_AUCTION_STAKE_MAX - SECRET_AUCTION_STAKE_MIN + 1)) + SECRET_AUCTION_STAKE_MIN;
+const buildSecretAuctionStakeDeck = (count = 0) => {
+  const deckSize = Math.max(0, Math.min(5000, Math.round(Number(count || 0))));
+  const uniqueAmountLimit = SECRET_AUCTION_STAKE_MAX - SECRET_AUCTION_STAKE_MIN + 1;
+  const usedAmounts = new Set();
+  return Array.from({ length: deckSize }, (_, index) => {
+    let amount = makeSecretAuctionStakeValue();
+    if (deckSize <= uniqueAmountLimit) {
+      let attempts = 0;
+      while (usedAmounts.has(amount) && attempts < uniqueAmountLimit * 2) {
+        amount = makeSecretAuctionStakeValue();
+        attempts += 1;
+      }
+      usedAmounts.add(amount);
+    }
+    return {
+      id: `stake-${index + 1}`,
+      amount,
+    };
+  });
+};
+const normalizeSecretAuctionStakeDeck = (rawDeck = [], fallbackCount = 0) => {
+  const source = Array.isArray(rawDeck) ? rawDeck : [];
+  const seenIds = new Set();
+  const deck = source
+    .map((entry, index) => {
+      const isObjectEntry = entry && typeof entry === 'object' && !Array.isArray(entry);
+      const rawId = isObjectEntry ? entry.id ?? entry.key ?? entry.stakeId : '';
+      const baseId = sanitizeNoteKey(rawId || `stake-${index + 1}`) || `stake-${index + 1}`;
+      let id = baseId;
+      let duplicateIndex = 2;
+      while (seenIds.has(id)) {
+        id = `${baseId}-${duplicateIndex}`;
+        duplicateIndex += 1;
+      }
+      seenIds.add(id);
+      const rawAmount = isObjectEntry ? entry.amount ?? entry.value ?? entry.bid ?? entry.stake : entry;
+      return {
+        id,
+        amount: clampSecretAuctionStake(rawAmount),
+      };
+    })
+    .filter((entry) => entry.id && entry.amount > 0);
+  return deck.length ? deck : buildSecretAuctionStakeDeck(fallbackCount);
+};
+const getSecretAuctionStakeDeck = (game = {}, fallbackCount = 0) =>
+  normalizeSecretAuctionStakeDeck(game?.secretAuctionStakeDeck || [], fallbackCount);
+const getSecretAuctionStakeId = (round = {}, seat = 'jay') =>
+  normalizeText(round?.secretAuctionStakeIds?.[seat] ?? round?.answers?.[seat]?.secretAuctionStakeId ?? '');
+const getSecretAuctionBid = (round = {}, seat = 'jay') => {
+  const answerBid = round?.answers?.[seat]?.secretAuctionBid;
+  if (normalizeText(answerBid ?? '') !== '' && Number.isFinite(Number(answerBid))) {
+    return clampSecretAuctionBid(answerBid);
+  }
+  return clampSecretAuctionBid(round?.secretAuctionBids?.[seat] ?? 0);
+};
+const getSecretAuctionUsedStakeIdsForSeat = (game = {}, seat = 'jay') => {
+  const usedIds = new Set(
+    (Array.isArray(game?.secretAuctionStakeUsage?.[seat]) ? game.secretAuctionStakeUsage[seat] : [])
+      .map(normalizeText)
+      .filter(Boolean),
+  );
+  const currentStakeId = getSecretAuctionStakeId(game?.currentRound || {}, seat);
+  if (currentStakeId) usedIds.add(currentStakeId);
+  return usedIds;
+};
+const getSecretAuctionAvailableStakesForSeat = (game = {}, seat = 'jay', selectedStakeId = '') => {
+  const selectedId = normalizeText(selectedStakeId);
+  const usedIds = getSecretAuctionUsedStakeIdsForSeat(game, seat);
+  return getSecretAuctionStakeDeck(game)
+    .filter((stake) => stake.id === selectedId || !usedIds.has(stake.id))
+    .sort((left, right) => right.amount - left.amount || left.id.localeCompare(right.id));
+};
+const resolveSecretAuctionStakeSelection = (game = {}, seat = 'jay', draft = {}) => {
+  const deck = getSecretAuctionStakeDeck(game);
+  const selectedStakeId = normalizeText(draft?.secretAuctionStakeId || '');
+  const currentStakeId = getSecretAuctionStakeId(game?.currentRound || {}, seat);
+  const selectedStake = selectedStakeId ? deck.find((stake) => stake.id === selectedStakeId) : null;
+  if (!selectedStake && deck.length) {
+    return { stake: null, error: 'Choose one of your remaining stake cards.' };
+  }
+  if (selectedStake) {
+    const usedIds = getSecretAuctionUsedStakeIdsForSeat(game, seat);
+    if (usedIds.has(selectedStake.id) && selectedStake.id !== currentStakeId) {
+      return { stake: null, error: 'That stake has already been used. Choose one of your remaining stake cards.' };
+    }
+    return { stake: selectedStake, error: '' };
+  }
+  if (normalizeText(draft?.secretAuctionBid ?? '') !== '' && Number.isFinite(Number(draft.secretAuctionBid))) {
+    return {
+      stake: {
+        id: '',
+        amount: clampSecretAuctionStake(draft.secretAuctionBid),
+      },
+      error: '',
+    };
+  }
+  return { stake: null, error: 'Choose one of your remaining stake cards.' };
+};
+const buildSecretAuctionStakeUsageForSeat = (game = {}, seat = 'jay', nextStakeId = '') => {
+  const previousStakeId = getSecretAuctionStakeId(game?.currentRound || {}, seat);
+  const usedIds = getSecretAuctionUsedStakeIdsForSeat(game, seat);
+  if (previousStakeId) usedIds.delete(previousStakeId);
+  const normalizedNextStakeId = normalizeText(nextStakeId);
+  if (normalizedNextStakeId) usedIds.add(normalizedNextStakeId);
+  return [...usedIds];
+};
 const isMemoryLaneRecallRound = (round = {}) =>
   normalizeIdentity(round?.memoryLaneMode || round?.memoryLaneType || '') === 'pastanswerrecall';
 const buildStableOptionSet = (correctAnswer = '', candidateAnswers = [], seed = '') => {
@@ -5789,9 +5982,17 @@ const hasCompletedMemoryLanePromptRoundAnswer = (round = {}, seat = '') =>
 const hasCompletedPutYourPointsRoundAnswer = (round = {}, seat = '') =>
   Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''))
   && Boolean(normalizeText(round?.answers?.[seat]?.guessedOther || ''));
+const hasCompletedSecretAuctionRoundAnswer = (round = {}, seat = '') =>
+  Boolean(normalizeText(round?.answers?.[seat]?.ownAnswer || ''))
+  && Boolean(normalizeText(round?.answers?.[seat]?.guessedOther || ''))
+  && normalizeText(round?.answers?.[seat]?.secretAuctionBid ?? round?.secretAuctionBids?.[seat] ?? '') !== ''
+  && Number.isFinite(Number(round?.answers?.[seat]?.secretAuctionBid ?? round?.secretAuctionBids?.[seat]));
 const hasCompletedPutYourPointsJudgement = (round = {}) =>
   Boolean(normalizePutYourPointsResult(round?.putYourPointsResults?.jay))
   && Boolean(normalizePutYourPointsResult(round?.putYourPointsResults?.kim));
+const hasCompletedSecretAuctionJudgement = (round = {}) =>
+  Boolean(normalizePutYourPointsResult(round?.secretAuctionResults?.jay))
+  && Boolean(normalizePutYourPointsResult(round?.secretAuctionResults?.kim));
 const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat = '') =>
   isQuizGameMode(gameMode)
     ? hasSubmittedOrJudgedQuizRoundAnswer(round, seat)
@@ -5805,6 +6006,8 @@ const hasRoundAnswerSubmittedForMode = (gameMode = 'standard', round = {}, seat 
           : hasSubmittedRoundAnswer(round, seat)
         : isPutYourPointsGameMode(gameMode)
           ? hasCompletedPutYourPointsRoundAnswer(round, seat)
+          : isSecretAuctionGameMode(gameMode)
+            ? hasCompletedSecretAuctionRoundAnswer(round, seat)
           : isRedFlagGreenFlagGameMode(gameMode)
             ? hasCompletedRedFlagGreenFlagRoundAnswer(round, seat)
           : isCompatibilityMeterGameMode(gameMode)
@@ -6021,6 +6224,34 @@ const buildPutYourPointsRoundOutcome = (round = {}, outcomeOptions = {}) => {
   const kimStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.kim, round?.penalties?.kim) : null;
   return {
     stake,
+    jayResult,
+    kimResult,
+    jayMatched: jayResult === 'matched',
+    kimMatched: kimResult === 'matched',
+    jayMissed: jayResult === 'missed',
+    kimMissed: kimResult === 'missed',
+    jayPenalty: jayStoredPenalty ?? jayDefaultPenalty,
+    kimPenalty: kimStoredPenalty ?? kimDefaultPenalty,
+    complete: Boolean(jayResult && kimResult),
+  };
+};
+const buildSecretAuctionRoundOutcome = (round = {}, outcomeOptions = {}) => {
+  const useStoredPenalties = outcomeOptions.useStoredPenalties !== false;
+  const jayBid = getSecretAuctionBid(round, 'jay');
+  const kimBid = getSecretAuctionBid(round, 'kim');
+  const jayResult = normalizePutYourPointsResult(round?.secretAuctionResults?.jay);
+  const kimResult = normalizePutYourPointsResult(round?.secretAuctionResults?.kim);
+  const jayDefaultPenalty = jayResult === 'missed' ? jayBid : 0;
+  const kimDefaultPenalty = kimResult === 'missed' ? kimBid : 0;
+  const jayStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.jay, round?.penalties?.jay) : null;
+  const kimStoredPenalty = useStoredPenalties ? getStoredPenaltyOverride(round?.penaltyAdded?.kim, round?.penalties?.kim) : null;
+  return {
+    jayBid,
+    kimBid,
+    jayStakeId: getSecretAuctionStakeId(round, 'jay'),
+    kimStakeId: getSecretAuctionStakeId(round, 'kim'),
+    totalBid: jayBid + kimBid,
+    biggestBid: Math.max(jayBid, kimBid),
     jayResult,
     kimResult,
     jayMatched: jayResult === 'matched',
@@ -6341,13 +6572,17 @@ const buildAutoScoredRoundPenaltyMap = (gameMode = 'standard', round = {}, optio
     const outcome = buildPutYourPointsRoundOutcome(round, options);
     return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
   }
+  if (isSecretAuctionGameMode(gameMode)) {
+    const outcome = buildSecretAuctionRoundOutcome(round, options);
+    return { jay: outcome.jayPenalty, kim: outcome.kimPenalty };
+  }
   return null;
 };
 const buildRoundPenaltyMapForArchive = (gameMode = 'standard', round = {}, manualPenaltyDraft = defaultPenaltyDraft) =>
-  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: isPutYourPointsGameMode(gameMode) })
+  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: isPutYourPointsGameMode(gameMode) || isSecretAuctionGameMode(gameMode) })
   || toPenaltyScores(manualPenaltyDraft || defaultPenaltyDraft);
 const buildPendingRoundPenaltyMapForFinalize = (gameMode = 'standard', round = {}, pendingRoundPenaltyOverride = null) =>
-  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: isPutYourPointsGameMode(gameMode) })
+  buildAutoScoredRoundPenaltyMap(gameMode, round, { useStoredPenalties: isPutYourPointsGameMode(gameMode) || isSecretAuctionGameMode(gameMode) })
   || {
     jay: toScore(pendingRoundPenaltyOverride?.jay ?? round?.penalties?.jay ?? 0),
     kim: toScore(pendingRoundPenaltyOverride?.kim ?? round?.penalties?.kim ?? 0),
@@ -6495,6 +6730,8 @@ const stableRoomSnapshotValue = (game = {}) => {
     roundsPlayed: Number(game.roundsPlayed || 0),
     requestedQuestionCount: Number(game.requestedQuestionCount || 0),
     actualQuestionCount: Number(game.actualQuestionCount || 0),
+    secretAuctionStakeDeck: game.secretAuctionStakeDeck || [],
+    secretAuctionStakeUsage: game.secretAuctionStakeUsage || null,
     questionQueueIds: game.questionQueueIds || [],
     retiredQuestionIds: game.retiredQuestionIds || [],
     usedQuestionIds: game.usedQuestionIds || [],
@@ -6512,6 +6749,8 @@ const areStableRoomSnapshotsEqual = (left, right) =>
 const areRoundAnswerSnapshotsEqual = (left = {}, right = {}) =>
   String(left?.ownAnswer ?? '') === String(right?.ownAnswer ?? '')
   && String(left?.guessedOther ?? '') === String(right?.guessedOther ?? '')
+  && String(left?.secretAuctionBid ?? '') === String(right?.secretAuctionBid ?? '')
+  && String(left?.secretAuctionStakeId ?? '') === String(right?.secretAuctionStakeId ?? '')
   && String(left?.submittedBy ?? '') === String(right?.submittedBy ?? '')
   && String(left?.submittedAt ?? '') === String(right?.submittedAt ?? '')
   && String(left?.finalResult ?? '') === String(right?.finalResult ?? '')
@@ -6638,6 +6877,9 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     && Number(currentGame.currentRound.putYourPointsStake || 0) === Number(incomingGame.currentRound.putYourPointsStake || 0)
     && JSON.stringify(currentGame.currentRound.putYourPointsStakeSequence || []) === JSON.stringify(incomingGame.currentRound.putYourPointsStakeSequence || [])
     && JSON.stringify(currentGame.currentRound.putYourPointsResults || {}) === JSON.stringify(incomingGame.currentRound.putYourPointsResults || {})
+    && JSON.stringify(currentGame.currentRound.secretAuctionResults || {}) === JSON.stringify(incomingGame.currentRound.secretAuctionResults || {})
+    && JSON.stringify(currentGame.currentRound.secretAuctionBids || {}) === JSON.stringify(incomingGame.currentRound.secretAuctionBids || {})
+    && JSON.stringify(currentGame.currentRound.secretAuctionStakeIds || {}) === JSON.stringify(incomingGame.currentRound.secretAuctionStakeIds || {})
     && JSON.stringify(currentGame.currentRound.multipleChoiceOptions || []) === JSON.stringify(incomingGame.currentRound.multipleChoiceOptions || [])
     && currentGame.currentRound.penalties?.jay === incomingGame.currentRound.penalties?.jay
     && currentGame.currentRound.penalties?.kim === incomingGame.currentRound.penalties?.kim
@@ -6680,6 +6922,18 @@ const mergeActiveRoundSnapshot = (currentGame, incomingGame) => {
     putYourPointsResults: {
       ...(currentRound.putYourPointsResults || {}),
       ...(incomingRound.putYourPointsResults || {}),
+    },
+    secretAuctionResults: {
+      ...(currentRound.secretAuctionResults || {}),
+      ...(incomingRound.secretAuctionResults || {}),
+    },
+    secretAuctionBids: {
+      ...(currentRound.secretAuctionBids || {}),
+      ...(incomingRound.secretAuctionBids || {}),
+    },
+    secretAuctionStakeIds: {
+      ...(currentRound.secretAuctionStakeIds || {}),
+      ...(incomingRound.secretAuctionStakeIds || {}),
     },
     answers: nextAnswers,
   };
@@ -7558,6 +7812,9 @@ function LobbyScreen({
   putYourPointsQuestionCount,
   usedPutYourPointsQuestionCount,
   remainingPutYourPointsQuestionCount,
+  secretAuctionQuestionCount = 0,
+  usedSecretAuctionQuestionCount = 0,
+  remainingSecretAuctionQuestionCount = 0,
   trueFalseQuestionCount,
   usedTrueFalseQuestionCount,
   remainingTrueFalseQuestionCount,
@@ -7624,6 +7881,8 @@ function LobbyScreen({
   const [mostLikelyQuestionCountDraft, setMostLikelyQuestionCountDraft] = useState('10');
   const [putYourPointsCreateCodeDraft, setPutYourPointsCreateCodeDraft] = useState('');
   const [putYourPointsQuestionCountDraft, setPutYourPointsQuestionCountDraft] = useState('10');
+  const [secretAuctionCreateCodeDraft, setSecretAuctionCreateCodeDraft] = useState('');
+  const [secretAuctionQuestionCountDraft, setSecretAuctionQuestionCountDraft] = useState('10');
   const [redFlagGreenFlagCreateCodeDraft, setRedFlagGreenFlagCreateCodeDraft] = useState('');
   const [redFlagGreenFlagQuestionCountDraft, setRedFlagGreenFlagQuestionCountDraft] = useState('10');
   const [compatibilityMeterCreateCodeDraft, setCompatibilityMeterCreateCodeDraft] = useState('');
@@ -7640,6 +7899,7 @@ function LobbyScreen({
     thisOrThat: false,
     mostLikely: false,
     putYourPoints: false,
+    secretAuction: false,
     redFlagGreenFlag: false,
     compatibilityMeter: false,
     memoryLane: false,
@@ -7700,6 +7960,7 @@ function LobbyScreen({
   const thisOrThatReadyCount = Number(thisOrThatQuestionCount || 0);
   const mostLikelyReadyCount = Number(mostLikelyQuestionCount || 0);
   const putYourPointsReadyCount = Number(putYourPointsQuestionCount || 0);
+  const secretAuctionReadyCount = Number(secretAuctionQuestionCount || 0);
   const redFlagGreenFlagReadyCount = Number(redFlagGreenFlagQuestionCount || 0);
   const compatibilityMeterReadyCount = Number(compatibilityMeterQuestionCount || 0);
   const memoryLaneReadyCount = Number(memoryLaneQuestionCount || 0);
@@ -7710,6 +7971,7 @@ function LobbyScreen({
     Number(thisOrThatQuestionCount || 0),
     Number(mostLikelyQuestionCount || 0),
     Number(putYourPointsQuestionCount || 0),
+    Number(secretAuctionQuestionCount || 0),
     Number(redFlagGreenFlagQuestionCount || 0),
     Number(compatibilityMeterQuestionCount || 0),
     Number(memoryLaneQuestionCount || 0),
@@ -7799,6 +8061,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: putYourPointsQuestionCountDraft,
+      ...(sendInvite ? { sendInvite: true } : {}),
+    });
+
+  const handleCreateSecretAuctionGame = (sendInvite = false) =>
+    onCreateGame({
+      createCode: secretAuctionCreateCodeDraft,
+      gameName: HOW_SURE_ARE_YOU_GAME_NAME,
+      mode: 'random',
+      gameMode: SECRET_AUCTION_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: secretAuctionQuestionCountDraft,
       ...(sendInvite ? { sendInvite: true } : {}),
     });
 
@@ -7910,6 +8184,19 @@ function LobbyScreen({
           gameName: 'Put Your Points Where Your Mouth Is',
           mode: 'random',
           gameMode: PUT_YOUR_POINTS_GAME_MODE,
+          roundTypes: [],
+          categories: [],
+          requestedQuestionCount,
+          ...(sendInvite ? { sendInvite: true } : {}),
+        }),
+      },
+      {
+        id: 'secretAuction',
+        label: HOW_SURE_ARE_YOU_GAME_NAME,
+        buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
+          gameName: HOW_SURE_ARE_YOU_GAME_NAME,
+          mode: 'random',
+          gameMode: SECRET_AUCTION_GAME_MODE,
           roundTypes: [],
           categories: [],
           requestedQuestionCount,
@@ -8684,6 +8971,71 @@ function LobbyScreen({
     };
   }, [activeGames, previousGames]);
 
+  const secretAuctionAnalytics = useMemo(() => {
+    const sessions = collectAnalyticsSessionsForMode(activeGames, previousGames, isSecretAuctionGameMode);
+    const roundsData = getAnalyticsRoundsForSessions(sessions, HOW_SURE_ARE_YOU_GAME_NAME);
+    const categoryStats = new Map();
+    const totals = {
+      ...summarizeAnalyticsSessions(sessions),
+      totalQuestionsAnswered: roundsData.length,
+      matchedResults: 0,
+      missedResults: 0,
+      totalBid: 0,
+      biggestBid: 0,
+      jayPenaltyPoints: 0,
+      kimPenaltyPoints: 0,
+    };
+
+    roundsData.forEach((round) => {
+      const outcome = buildSecretAuctionRoundOutcome(round, { useStoredPenalties: false });
+      const categoryKey = normalizeText(round?.category) || 'uncategorised';
+      const categoryEntry = categoryStats.get(categoryKey) || {
+        category: round?.category || 'Uncategorised',
+        rounds: 0,
+        matchedResults: 0,
+        missedResults: 0,
+        totalBid: 0,
+        biggestBid: 0,
+        jayPenalty: 0,
+        kimPenalty: 0,
+      };
+      categoryEntry.rounds += 1;
+      categoryEntry.totalBid += Number(outcome.totalBid || 0);
+      categoryEntry.biggestBid = Math.max(categoryEntry.biggestBid, Number(outcome.biggestBid || 0));
+      totals.totalBid += Number(outcome.totalBid || 0);
+      totals.biggestBid = Math.max(totals.biggestBid, Number(outcome.biggestBid || 0));
+
+      seats.forEach((seatName) => {
+        const result = seatName === 'jay' ? outcome.jayResult : outcome.kimResult;
+        if (result === 'matched') {
+          totals.matchedResults += 1;
+          categoryEntry.matchedResults += 1;
+        }
+        if (result === 'missed') {
+          totals.missedResults += 1;
+          categoryEntry.missedResults += 1;
+        }
+      });
+
+      totals.jayPenaltyPoints += Number(outcome.jayPenalty || 0);
+      totals.kimPenaltyPoints += Number(outcome.kimPenalty || 0);
+      categoryEntry.jayPenalty += Number(outcome.jayPenalty || 0);
+      categoryEntry.kimPenalty += Number(outcome.kimPenalty || 0);
+      categoryStats.set(categoryKey, categoryEntry);
+    });
+
+    return {
+      ...totals,
+      averageBid: roundsData.length ? Math.round(totals.totalBid / Math.max(1, roundsData.length * 2)) : 0,
+      categoryRows: [...categoryStats.values()].sort(
+        (left, right) =>
+          right.rounds - left.rounds
+          || right.missedResults - left.missedResults
+          || left.category.localeCompare(right.category),
+      ),
+    };
+  }, [activeGames, previousGames]);
+
   const thisOrThatAnalytics = useMemo(
     () => buildChoiceGuessGameAnalytics({
       sessions: collectAnalyticsSessionsForMode(activeGames, previousGames, isThisOrThatGameMode),
@@ -8725,6 +9077,8 @@ function LobbyScreen({
       ? MOST_LIKELY_GAME_MODE
     : questionBankSegment === 'putYourPoints'
       ? PUT_YOUR_POINTS_GAME_MODE
+    : questionBankSegment === 'secretAuction'
+      ? SECRET_AUCTION_GAME_MODE
     : questionBankSegment === 'trueFalse'
       ? TRUE_FALSE_GAME_MODE
     : questionBankSegment === 'redFlagGreenFlag'
@@ -8745,6 +9099,7 @@ function LobbyScreen({
     [THIS_OR_THAT_GAME_MODE]: thisOrThatQuestionCount,
     [MOST_LIKELY_GAME_MODE]: mostLikelyQuestionCount,
     [PUT_YOUR_POINTS_GAME_MODE]: putYourPointsQuestionCount,
+    [SECRET_AUCTION_GAME_MODE]: secretAuctionQuestionCount,
     [TRUE_FALSE_GAME_MODE]: trueFalseQuestionCount,
     [RED_FLAG_GREEN_FLAG_GAME_MODE]: redFlagGreenFlagQuestionCount,
     [COMPATIBILITY_METER_GAME_MODE]: compatibilityMeterQuestionCount,
@@ -8756,6 +9111,7 @@ function LobbyScreen({
     [THIS_OR_THAT_GAME_MODE]: usedThisOrThatQuestionCount,
     [MOST_LIKELY_GAME_MODE]: usedMostLikelyQuestionCount,
     [PUT_YOUR_POINTS_GAME_MODE]: usedPutYourPointsQuestionCount,
+    [SECRET_AUCTION_GAME_MODE]: usedSecretAuctionQuestionCount,
     [TRUE_FALSE_GAME_MODE]: usedTrueFalseQuestionCount,
     [RED_FLAG_GREEN_FLAG_GAME_MODE]: usedRedFlagGreenFlagQuestionCount,
     [COMPATIBILITY_METER_GAME_MODE]: usedCompatibilityMeterQuestionCount,
@@ -8767,6 +9123,7 @@ function LobbyScreen({
     [THIS_OR_THAT_GAME_MODE]: remainingThisOrThatQuestionCount,
     [MOST_LIKELY_GAME_MODE]: remainingMostLikelyQuestionCount,
     [PUT_YOUR_POINTS_GAME_MODE]: remainingPutYourPointsQuestionCount,
+    [SECRET_AUCTION_GAME_MODE]: remainingSecretAuctionQuestionCount,
     [TRUE_FALSE_GAME_MODE]: remainingTrueFalseQuestionCount,
     [RED_FLAG_GREEN_FLAG_GAME_MODE]: remainingRedFlagGreenFlagQuestionCount,
     [COMPATIBILITY_METER_GAME_MODE]: remainingCompatibilityMeterQuestionCount,
@@ -9355,6 +9712,7 @@ function LobbyScreen({
   const lobbyCarouselCards = [
     { id: 'random', label: 'Random', image: randomTileImage },
     { id: 'putYourPoints', label: 'Put Your Points', image: putYourPointsTileImage },
+    { id: 'secretAuction', label: HOW_SURE_ARE_YOU_GAME_NAME, image: howSureAreYouTileImage },
     { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
     { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
     { id: 'thisOrThat', label: 'This or That', image: thisOrThatTileImage },
@@ -9417,6 +9775,7 @@ function LobbyScreen({
   const isThisOrThatTileFlipped = Boolean(flippedLobbyTiles.thisOrThat);
   const isMostLikelyTileFlipped = Boolean(flippedLobbyTiles.mostLikely);
   const isPutYourPointsTileFlipped = Boolean(flippedLobbyTiles.putYourPoints);
+  const isSecretAuctionTileFlipped = Boolean(flippedLobbyTiles.secretAuction);
   const isRedFlagGreenFlagTileFlipped = Boolean(flippedLobbyTiles.redFlagGreenFlag);
   const isCompatibilityMeterTileFlipped = Boolean(flippedLobbyTiles.compatibilityMeter);
   const isMemoryLaneTileFlipped = Boolean(flippedLobbyTiles.memoryLane);
@@ -9461,6 +9820,12 @@ function LobbyScreen({
       howItWorks: 'Each round generates a random 1-200 point stake. Players answer for themselves and guess the other person, then the host marks Match or Miss for each player. A Miss adds the stake as that player’s penalty.',
       questionTypes: ['Text Answer', 'Multiple Choice', 'True or False', 'Who is More Likely To', 'Would You Rather', 'Rating'],
       categories: ['Food', 'Lifestyle', 'Entertainment', 'Romance', 'Travel', 'Technology', 'Home', 'Funny', 'Games', 'Personality', 'Communication', 'Social', 'Fashion', 'Future', 'Habits', 'Music', 'Money', 'Wellbeing', 'Fitness'],
+    },
+    secretAuction: {
+      name: HOW_SURE_ARE_YOU_GAME_NAME,
+      howItWorks: 'Both players start with the same random stake deck. Each round, players answer for themselves, guess the other person, and privately spend one remaining stake on their confidence. The host marks Match or Miss; a miss only charges that player’s spent stake.',
+      questionTypes: ['Text Answer', 'Multiple Choice', 'Numeric', 'Rating', 'Ranking', 'Ranked / Top 3', 'Preference', 'Favourite', 'Who is More Likely To', 'Would You Rather', 'Sort Into Order'],
+      categories: ['Affection', 'Attraction', 'Turn Ons', 'Secrets', 'Habits', 'Hobbies', 'Memory', 'Conflict', 'Future', 'Money', 'Playful', 'Spicy', 'Boundaries', 'Comfort'],
     },
     redFlagGreenFlag: {
       name: 'Red Flag Green Flag',
@@ -10341,6 +10706,26 @@ function LobbyScreen({
                     </section>
                   </div>
 
+                  {renderSimpleLobbySetupCard({
+                    index: getLobbyCarouselCardIndex('secretAuction'),
+                    cardId: 'secretAuction',
+                    className: 'lobby-image-tile--secret-auction',
+                    image: howSureAreYouTileImage,
+                    eyebrow: 'Confidence Stakes',
+                    title: HOW_SURE_ARE_YOU_GAME_NAME,
+                    readyCount: secretAuctionReadyCount,
+                    description: 'Both players get the same random stake deck. Spend your high stakes on answers you are sure about, then the host marks Match or Miss for each player.',
+                    codeLabel: 'How Sure Are You Code',
+                    codeValue: secretAuctionCreateCodeDraft,
+                    onCodeChange: setSecretAuctionCreateCodeDraft,
+                    questionCountValue: secretAuctionQuestionCountDraft,
+                    onQuestionCountChange: setSecretAuctionQuestionCountDraft,
+                    fieldNote: 'Each player spends one remaining stake per question. Match adds 0; Miss adds that player’s spent stake.',
+                    createLabel: 'Create How Sure Are You',
+                    onCreate: handleCreateSecretAuctionGame,
+                    isFlipped: isSecretAuctionTileFlipped,
+                  })}
+
                   <div
                     className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('quiz'))}`}
                     inert={getLobbyCarouselPosition(getLobbyCarouselCardIndex('quiz')) !== 'center'}
@@ -10806,7 +11191,7 @@ function LobbyScreen({
                     showCodeField: false,
                     questionCountValue: randomQuestionCountDraft,
                     onQuestionCountChange: setRandomQuestionCountDraft,
-                    fieldNote: 'Cycles through Put Your Points, Normal Game, Quick Fire Quiz, This or That, Memory Lane, True or False, Most Likely To, Red Flag Green Flag, and Compatibility Meter.',
+                    fieldNote: 'Cycles through Put Your Points, How Sure Are You, Normal Game, Quick Fire Quiz, This or That, Memory Lane, True or False, Most Likely To, Red Flag Green Flag, and Compatibility Meter.',
                     createLabel: 'Surprise Me',
                     onCreate: handleCreateRandomGame,
                     isFlipped: isRandomTileFlipped,
@@ -10947,6 +11332,9 @@ function LobbyScreen({
                 </button>
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'putYourPoints' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('putYourPoints')}>
                   Put Your Points
+                </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'secretAuction' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('secretAuction')}>
+                  How Sure Are You
                 </button>
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'trueFalse' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('trueFalse')}>
                   True or False
@@ -11513,6 +11901,9 @@ function LobbyScreen({
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'putYourPoints' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('putYourPoints')}>
                   Put Your Points
+                </button>
+                <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'secretAuction' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('secretAuction')}>
+                  How Sure Are You
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'redFlagGreenFlag' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('redFlagGreenFlag')}>
                   Red Flag Green Flag
@@ -12092,6 +12483,70 @@ function LobbyScreen({
                           ))
                         ) : (
                           <p className="empty-copy">No Put Your Points rounds have been recorded yet.</p>
+                        )}
+                      </div>
+                    </section>
+                  </div>
+                </section>
+              ) : analyticsSegment === 'secretAuction' ? (
+                <section className="analytics-questions-panel">
+                  <div className="question-bank-status-grid">
+                    <article className="stat-tile">
+                      <small>Total Games Played</small>
+                      <strong>{secretAuctionAnalytics.totalGamesPlayed}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Total Questions</small>
+                      <strong>{secretAuctionAnalytics.totalQuestionsAnswered}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Matched Results</small>
+                      <strong>{secretAuctionAnalytics.matchedResults}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Missed Results</small>
+                      <strong>{secretAuctionAnalytics.missedResults}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Biggest Stake</small>
+                      <strong>{formatScore(secretAuctionAnalytics.biggestBid)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Average Stake</small>
+                      <strong>{formatScore(secretAuctionAnalytics.averageBid)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Jay Penalty</small>
+                      <strong>{formatScore(secretAuctionAnalytics.jayPenaltyPoints)}</strong>
+                    </article>
+                    <article className="stat-tile">
+                      <small>Kim Penalty</small>
+                      <strong>{formatScore(secretAuctionAnalytics.kimPenaltyPoints)}</strong>
+                    </article>
+                  </div>
+                  <div className="summary-columns">
+                    <section className="summary-column">
+                      <div className="mini-heading"><div><span>How Sure Are You</span><h3>Host Results</h3></div></div>
+                      <div className="summary-list">
+                        <article className="mini-list-row"><strong>Matches</strong><span>{secretAuctionAnalytics.matchedResults}</span></article>
+                        <article className="mini-list-row"><strong>Misses</strong><span>{secretAuctionAnalytics.missedResults}</span></article>
+                        <article className="mini-list-row"><strong>Total stakes risked</strong><span>{formatScore(secretAuctionAnalytics.totalBid)}</span></article>
+                        <article className="mini-list-row"><strong>Tracked games</strong><span>{secretAuctionAnalytics.sessionsTracked}</span></article>
+                      </div>
+                    </section>
+                    <section className="summary-column">
+                      <div className="mini-heading"><div><span>Categories</span><h3>Miss Hotspots</h3></div></div>
+                      <div className="summary-list">
+                        {secretAuctionAnalytics.categoryRows.length ? (
+                          secretAuctionAnalytics.categoryRows.slice(0, 14).map((row) => (
+                            <article className="mini-list-row" key={`secret-auction-cat-${row.category}`}>
+                              <strong>{row.category}</strong>
+                              <span>{`${row.rounds} rounds · ${row.missedResults} misses`}</span>
+                              <small>{`Matched ${row.matchedResults} · Stakes ${formatScore(row.totalBid)} · Jay ${formatScore(row.jayPenalty)} / Kim ${formatScore(row.kimPenalty)}`}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="empty-copy">No How Sure Are You rounds have been recorded yet.</p>
                         )}
                       </div>
                     </section>
@@ -12758,6 +13213,72 @@ function PutYourPointsHostDesk({ currentRound, onSetResult, onNextQuestion, onPa
   );
 }
 
+function SecretAuctionHostDesk({ currentRound, onSetResult, onNextQuestion, onPauseToggle, status, isPaused, isCompleted, isBusy }) {
+  const outcome = buildSecretAuctionRoundOutcome(currentRound || {});
+  const resultBySeat = {
+    jay: outcome.jayResult,
+    kim: outcome.kimResult,
+  };
+  const isComplete = outcome.complete;
+
+  return (
+    <section className="panel quick-desk-panel put-points-host-desk secret-auction-host-desk">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">{HOW_SURE_ARE_YOU_GAME_NAME}</p>
+          <h2>Host Judgement</h2>
+        </div>
+        <span className="status-pill">Stake deck</span>
+      </div>
+
+      <div className="put-points-judgement-grid">
+        {seats.map((seatName) => {
+          const result = resultBySeat[seatName] || '';
+          const bid = seatName === 'jay' ? outcome.jayBid : outcome.kimBid;
+          const penalty = result === 'missed' ? bid : 0;
+          return (
+            <article className="put-points-judgement-card" key={`secret-auction-result-${seatName}`}>
+              <div>
+                <strong>{PLAYER_LABEL[seatName] || seatName}</strong>
+                <span>{result ? `Stake ${formatScore(bid)} · Penalty +${formatScore(penalty)}` : `Stake ${formatScore(bid)} · needs host mark`}</span>
+              </div>
+              <div className="button-row put-points-result-buttons">
+                <Button
+                  type="button"
+                  className={`ghost-button compact ${result === 'matched' ? 'is-on' : ''}`}
+                  onClick={() => onSetResult?.(seatName, 'matched')}
+                  disabled={isBusy || isCompleted}
+                >
+                  Match
+                </Button>
+                <Button
+                  type="button"
+                  className={`ghost-button compact ${result === 'missed' ? 'is-on' : ''}`}
+                  onClick={() => onSetResult?.(seatName, 'missed')}
+                  disabled={isBusy || isCompleted}
+                >
+                  Miss
+                </Button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <Button className="primary-button compact next-question-button" onClick={onNextQuestion} disabled={isBusy || isCompleted || !isComplete}>
+        Next Question
+      </Button>
+
+      <div className="button-row tiny-actions quick-desk-footer">
+        <Button className="ghost-button compact" onClick={onPauseToggle} disabled={isBusy || isCompleted}>
+          {isPaused ? 'Resume' : 'Pause'}
+        </Button>
+        <span className="quick-desk-status">{isComplete ? 'Judged' : 'Mark both players'}</span>
+      </div>
+    </section>
+  );
+}
+
 function QuestionAnswerEntryBase({
   game = null,
   gameId,
@@ -12775,6 +13296,7 @@ function QuestionAnswerEntryBase({
   const currentPlayer = viewerSeat === 'kim' ? 'kim' : viewerSeat === 'jay' ? 'jay' : seat === 'kim' ? 'kim' : 'jay';
   const inputRound = getAnswerInputRound(game, currentRound || {});
   const roundType = inputRound.roundType;
+  const isSecretAuctionGame = isSecretAuctionGameMode(game?.gameMode || 'standard');
   const choiceOptions = resolvePlayerChoiceOptionsForRound(inferChoiceOptions(inputRound), game, inputRound);
   const otherPlayer = currentPlayer === 'jay' ? 'kim' : 'jay';
   const currentPlayerAnswer = currentRound?.answers?.[currentPlayer] || {};
@@ -12838,6 +13360,10 @@ function QuestionAnswerEntryBase({
   const buildSavedDraft = () => ({
     ownAnswer: String(currentPlayerAnswer?.ownAnswer ?? ''),
     guessedOther: isQuizRound || singleAnswerOnly ? '' : String(currentPlayerAnswer?.guessedOther ?? ''),
+    ...(isSecretAuctionGame ? {
+      secretAuctionBid: String(currentPlayerAnswer?.secretAuctionBid ?? ''),
+      secretAuctionStakeId: String(currentPlayerAnswer?.secretAuctionStakeId ?? getSecretAuctionStakeId(currentRound || {}, currentPlayer) ?? ''),
+    } : {}),
   });
   const buildInitialDraft = () => {
     const savedDraft = buildSavedDraft();
@@ -12852,6 +13378,7 @@ function QuestionAnswerEntryBase({
   const answerEntryRef = useRef(null);
   const ownAnswerRef = useRef(null);
   const guessedOtherRef = useRef(null);
+  const secretAuctionBidRef = useRef(null);
   const rankedInputRefs = useRef({});
   const orderingDragRef = useRef(null);
   const [orderingDragState, setOrderingDragState] = useState({ fieldName: '', index: -1, overIndex: -1 });
@@ -12860,6 +13387,16 @@ function QuestionAnswerEntryBase({
   const hasSubmittedAnswer = localSubmittedAnswer || hasServerSubmittedAnswer;
   const canEditSubmittedAnswer = !isQuizRound;
   const isLocked = hasSubmittedAnswer && (!canEditSubmittedAnswer || !isEditingSubmittedAnswer);
+  const secretAuctionGameSnapshot = isSecretAuctionGame ? { ...(game || {}), currentRound } : game;
+  const selectedSecretAuctionStakeId = normalizeText(
+    localDraft.secretAuctionStakeId
+    || currentPlayerAnswer?.secretAuctionStakeId
+    || getSecretAuctionStakeId(currentRound || {}, currentPlayer),
+  );
+  const secretAuctionStakeChoices = isSecretAuctionGame
+    ? getSecretAuctionAvailableStakesForSeat(secretAuctionGameSnapshot, currentPlayer, selectedSecretAuctionStakeId)
+    : [];
+  const selectedSecretAuctionStake = secretAuctionStakeChoices.find((stake) => stake.id === selectedSecretAuctionStakeId) || null;
 
   useEffect(() => {
     if (!draftStorageKey) return;
@@ -12885,6 +13422,8 @@ function QuestionAnswerEntryBase({
       lastServerDraft.key !== draftStorageKey
       || lastServerDraft.ownAnswer !== savedDraft.ownAnswer
       || lastServerDraft.guessedOther !== savedDraft.guessedOther
+      || lastServerDraft.secretAuctionBid !== savedDraft.secretAuctionBid
+      || lastServerDraft.secretAuctionStakeId !== savedDraft.secretAuctionStakeId
       || lastServerDraft.submitted !== hasServerSubmittedAnswer;
     if (!serverDraftChanged) return;
 
@@ -12909,12 +13448,14 @@ function QuestionAnswerEntryBase({
       setLocalDraft(savedDraft);
       localDraftRef.current = savedDraft;
     }
-  }, [draftStorageKey, hasServerSubmittedAnswer, currentPlayerAnswer?.ownAnswer, currentPlayerAnswer?.guessedOther, isEditingSubmittedAnswer]);
+  }, [draftStorageKey, hasServerSubmittedAnswer, currentPlayerAnswer?.ownAnswer, currentPlayerAnswer?.guessedOther, currentPlayerAnswer?.secretAuctionBid, currentPlayerAnswer?.secretAuctionStakeId, isEditingSubmittedAnswer]);
 
   useLayoutEffect(() => {
     if (!draftStorageKey || activeAnswerInputMemory.key !== draftStorageKey || !activeAnswerInputMemory.field || isLocked) return;
     const target =
       rankedInputRefs.current[activeAnswerInputMemory.field]
+      || (activeAnswerInputMemory.field === 'secretAuctionStakeId' ? secretAuctionBidRef.current : null)
+      || (activeAnswerInputMemory.field === 'secretAuctionBid' ? secretAuctionBidRef.current : null)
       || (activeAnswerInputMemory.field === 'guessedOther' ? guessedOtherRef.current : ownAnswerRef.current);
     if (!target || document.activeElement === target) return;
     target.focus({ preventScroll: true });
@@ -12966,7 +13507,7 @@ function QuestionAnswerEntryBase({
     const isAnswerDraft =
       draftToSubmit
       && typeof draftToSubmit === 'object'
-      && ('ownAnswer' in draftToSubmit || 'guessedOther' in draftToSubmit);
+      && ('ownAnswer' in draftToSubmit || 'guessedOther' in draftToSubmit || 'secretAuctionBid' in draftToSubmit || 'secretAuctionStakeId' in draftToSubmit);
     const safeDraftToSubmit = applyDefaultOrderingDraft(isAnswerDraft ? draftToSubmit : localDraftRef.current);
     if (canEditSubmittedAnswer && hasSubmittedAnswer && !isEditingSubmittedAnswer) {
       setIsEditingSubmittedAnswer(true);
@@ -13322,6 +13863,77 @@ function QuestionAnswerEntryBase({
             <span>My Answer</span>
             {renderField('ownAnswer', localDraft.ownAnswer, (value) => updateLocalDraft({ ownAnswer: value }), `Your ${promptLabel.toLowerCase()}`)}
           </label>
+          {isSecretAuctionGame ? (
+            <label className="field secret-auction-bid-field">
+              <span>My Stake</span>
+              {secretAuctionStakeChoices.length ? (
+                <>
+                  <select
+                    ref={secretAuctionBidRef}
+                    value={selectedSecretAuctionStakeId}
+                    onFocus={(event) => rememberFocusedField('secretAuctionStakeId', event)}
+                    onChange={(event) => {
+                      rememberFocusedField('secretAuctionStakeId', event);
+                      const stakeId = event.target.value;
+                      const stake = secretAuctionStakeChoices.find((entry) => entry.id === stakeId) || null;
+                      updateLocalDraft({
+                        secretAuctionStakeId: stakeId,
+                        secretAuctionBid: stake ? String(stake.amount) : '',
+                      });
+                    }}
+                    onBlur={() => forgetFocusedField('secretAuctionStakeId')}
+                    disabled={isLocked || !isRoundOpen}
+                  >
+                    <option value="">Choose a stake</option>
+                    {secretAuctionStakeChoices.map((stake) => (
+                      <option value={stake.id} key={`${currentPlayer}-stake-${stake.id}`}>
+                        {formatScore(stake.amount)}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="secret-auction-stake-grid" role="list" aria-label="Available stake cards">
+                    {secretAuctionStakeChoices.slice(0, 12).map((stake) => (
+                      <button
+                        type="button"
+                        key={`${currentPlayer}-stake-button-${stake.id}`}
+                        className={`secret-auction-stake-card ${stake.id === selectedSecretAuctionStakeId ? 'is-on' : ''}`}
+                        onClick={() => updateLocalDraft({ secretAuctionStakeId: stake.id, secretAuctionBid: String(stake.amount) })}
+                        disabled={isLocked || !isRoundOpen}
+                      >
+                        {formatScore(stake.amount)}
+                      </button>
+                    ))}
+                  </div>
+                  <small>
+                    {selectedSecretAuctionStake
+                      ? `Selected stake risks +${formatScore(selectedSecretAuctionStake.amount)} if the host marks Miss.`
+                      : 'Pick one of your remaining stake cards. Both players started with the same random deck.'}
+                  </small>
+                </>
+              ) : (
+                <>
+                  <input
+                    ref={secretAuctionBidRef}
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    max={SECRET_AUCTION_BID_MAX}
+                    value={localDraft.secretAuctionBid ?? ''}
+                    onFocus={(event) => rememberFocusedField('secretAuctionBid', event)}
+                    onSelect={(event) => rememberFocusedField('secretAuctionBid', event)}
+                    onChange={(event) => {
+                      rememberFocusedField('secretAuctionBid', event);
+                      updateLocalDraft({ secretAuctionBid: event.target.value });
+                    }}
+                    onBlur={() => forgetFocusedField('secretAuctionBid')}
+                    placeholder={`0-${SECRET_AUCTION_BID_MAX}`}
+                    disabled={isLocked || !isRoundOpen}
+                  />
+                  <small>Legacy room fallback: risk up to {formatScore(SECRET_AUCTION_BID_MAX)} of your own penalty points if the host marks Miss.</small>
+                </>
+              )}
+            </label>
+          ) : null}
         </section>
         {!isQuizRound && !singleAnswerOnly ? (
           <section className={`answer-section ${embedded ? 'answer-section--embedded' : ''}`}>
@@ -13375,6 +13987,10 @@ const QuestionAnswerEntry = memo(QuestionAnswerEntryBase, (previous, next) => {
     && previous.singleAnswerOnly === next.singleAnswerOnly
     && previousAnswer.ownAnswer === nextAnswer.ownAnswer
     && previousAnswer.guessedOther === nextAnswer.guessedOther
+    && String(previousAnswer.secretAuctionBid ?? '') === String(nextAnswer.secretAuctionBid ?? '')
+    && String(previousAnswer.secretAuctionStakeId ?? '') === String(nextAnswer.secretAuctionStakeId ?? '')
+    && JSON.stringify(previous.game?.secretAuctionStakeDeck || []) === JSON.stringify(next.game?.secretAuctionStakeDeck || [])
+    && JSON.stringify(previous.game?.secretAuctionStakeUsage || {}) === JSON.stringify(next.game?.secretAuctionStakeUsage || {})
     && previous.embedded === next.embedded;
 });
 
@@ -14287,6 +14903,7 @@ function RoomRevealPlayerCard({
   isThisOrThatGame = false,
   isMostLikelyGame = false,
   isPutYourPointsGame = false,
+  isSecretAuctionGame = false,
   isRedFlagGreenFlagGame = false,
   isCompatibilityMeterGame = false,
   totalQuizPoints = 0,
@@ -14620,6 +15237,70 @@ function RoomRevealPlayerCard({
       </article>
     );
   }
+  if (isSecretAuctionGame) {
+    const outcome = buildSecretAuctionRoundOutcome(currentRound || {});
+    const playerAnswerRaw = currentRound?.answers?.[playerSeat]?.ownAnswer || '';
+    const playerGuessRaw = currentRound?.answers?.[playerSeat]?.guessedOther || '';
+    const targetAnswerRaw = currentRound?.answers?.[oppositeSeat]?.ownAnswer || '';
+    const playerBid = playerSeat === 'jay' ? outcome.jayBid : outcome.kimBid;
+    const result = playerSeat === 'jay' ? outcome.jayResult : outcome.kimResult;
+    const penalty = playerSeat === 'jay' ? outcome.jayPenalty : outcome.kimPenalty;
+    const matchTone = result === 'matched' ? 'success' : result === 'missed' ? 'warning' : 'neutral';
+    const matchLabel = result === 'matched'
+      ? `Host marked match: ${formatScore(playerBid)} stake safe`
+      : result === 'missed'
+        ? `Host marked miss: +${formatScore(playerBid)}`
+        : 'Waiting for host judgement';
+    return (
+      <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
+        <div className="room-reveal-player-head">
+          <SeatFlag seat={playerSeat} />
+          <div>
+            <span>{playerSeat === viewerSeat ? 'You' : 'Other player'}</span>
+            <h3>{playerLabel}</h3>
+          </div>
+        </div>
+
+        <div className="room-reveal-player-body">
+          <div className="room-reveal-answer-block">
+            <span>{`${playerLabel}'s guess for ${oppositeLabel}`}</span>
+            <div className="room-reveal-answer-copy">
+              {renderAnswerText(playerGuessRaw)}
+            </div>
+          </div>
+
+          <div className="room-reveal-answer-block room-reveal-answer-block--guess">
+            <span>{`${oppositeLabel}'s real answer`}</span>
+            <div className="room-reveal-answer-copy">
+              {renderAnswerText(targetAnswerRaw)}
+            </div>
+            <small className={`room-reveal-match room-reveal-match--${matchTone}`}>
+              {matchLabel}
+            </small>
+          </div>
+        </div>
+
+        <div className="room-reveal-score-strip room-reveal-score-strip--answer-summary">
+          <div>
+            <span>{`${playerLabel}'s answer`}</span>
+            {renderAnswerText(playerAnswerRaw)}
+          </div>
+          <div>
+            <span>Stake spent</span>
+            <strong>{formatScore(playerBid)}</strong>
+          </div>
+          <div>
+            <span>Round penalty</span>
+            <strong>{formatScore(penalty || roundPenalty || 0)}</strong>
+          </div>
+          <div>
+            <span>Total penalty</span>
+            <strong>{formatScore(totalPenalty || 0)}</strong>
+          </div>
+        </div>
+      </article>
+    );
+  }
   if (isRedFlagGreenFlagGame) {
     const outcome = buildRedFlagGreenFlagRoundOutcome(currentRound || {});
     const viewerGuess = playerSeat === 'jay' ? outcome.jayGuess : outcome.kimGuess;
@@ -14880,6 +15561,7 @@ function RoomActiveFrameBase({
   onLockThisOrThatAnswer,
   onLockMostLikelyAnswer,
   onSetPutYourPointsResult,
+  onSetSecretAuctionResult,
   onMarkReady,
   onRequestQuizOverride,
   onRespondQuizOverride,
@@ -14928,6 +15610,7 @@ function RoomActiveFrameBase({
   const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
   const isMostLikelyVoteGame = isMostLikelyGame && isMostLikelyVoteRound(currentRound || {});
   const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
+  const isSecretAuctionGame = isSecretAuctionGameMode(game?.gameMode || 'standard');
   const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(game?.gameMode || 'standard');
   const isCompatibilityMeterGame = isCompatibilityMeterGameMode(game?.gameMode || 'standard');
   const isMemoryLaneGame = isMemoryLaneGameMode(game?.gameMode || 'standard');
@@ -14938,7 +15621,7 @@ function RoomActiveFrameBase({
         ? { jay: 0, kim: 0 }
         : isQuizGame
           ? buildQuizRoundScoreMap(currentRound || {})
-          : (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: isPutYourPointsGameMode(game?.gameMode || 'standard') }) : null)
+          : (currentRound ? buildAutoScoredRoundPenaltyMap(game?.gameMode || 'standard', currentRound, { useStoredPenalties: isPutYourPointsGameMode(game?.gameMode || 'standard') || isSecretAuctionGameMode(game?.gameMode || 'standard') }) : null)
         || {
             jay: parseNumber(penaltyDraft?.jay, 0),
             kim: parseNumber(penaltyDraft?.kim, 0),
@@ -14985,7 +15668,7 @@ function RoomActiveFrameBase({
       ? 'Waiting'
       : 'Answering';
   const showReplayAction = false;
-  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame && !isMostLikelyVoteGame && !isPutYourPointsGame;
+  const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame && !isMostLikelyVoteGame && !isPutYourPointsGame && !isSecretAuctionGame;
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
   const otherOverrideRequest = currentRound?.overrideRequests?.[otherPlayer] || null;
   const viewerOverrideRequest = currentRound?.overrideRequests?.[currentPlayer] || null;
@@ -15012,6 +15695,10 @@ function RoomActiveFrameBase({
   const putYourPointsOutcome = useMemo(
     () => (isPutYourPointsGame ? buildPutYourPointsRoundOutcome(currentRound || {}) : null),
     [currentRound, isPutYourPointsGame],
+  );
+  const secretAuctionOutcome = useMemo(
+    () => (isSecretAuctionGame ? buildSecretAuctionRoundOutcome(currentRound || {}) : null),
+    [currentRound, isSecretAuctionGame],
   );
   const redFlagGreenFlagOutcome = useMemo(
     () => (isRedFlagGreenFlagGame ? buildRedFlagGreenFlagRoundOutcome(currentRound || {}) : null),
@@ -15052,6 +15739,11 @@ function RoomActiveFrameBase({
     : putYourPointsOutcome.complete
       ? 'Host judgement saved'
       : 'Host judgement needed';
+  const secretAuctionSummaryLabel = !secretAuctionOutcome
+    ? ''
+    : secretAuctionOutcome.complete
+      ? 'Host judgement saved'
+      : 'Host judgement needed';
   const redFlagGreenFlagSummaryLabel = !redFlagGreenFlagOutcome
     ? ''
     : redFlagGreenFlagOutcome.jayCorrect && redFlagGreenFlagOutcome.kimCorrect
@@ -15079,9 +15771,9 @@ function RoomActiveFrameBase({
     : '';
 
   return (
-    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-frame--put-points' : ''} ${isRedFlagGreenFlagGame ? 'room-active-frame--red-flag-green-flag' : ''} ${isCompatibilityMeterGame ? 'room-active-frame--compatibility-meter' : ''} ${isMemoryLaneGame ? 'room-active-frame--memory-lane' : ''}`} aria-label="Active round scoreboard">
+    <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-frame--put-points' : ''} ${isSecretAuctionGame ? 'room-active-frame--secret-auction' : ''} ${isRedFlagGreenFlagGame ? 'room-active-frame--red-flag-green-flag' : ''} ${isCompatibilityMeterGame ? 'room-active-frame--compatibility-meter' : ''} ${isMemoryLaneGame ? 'room-active-frame--memory-lane' : ''}`} aria-label="Active round scoreboard">
       <div className="scoreboard-sheen" aria-hidden="true" />
-      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-stage--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-stage--put-points' : ''} ${isRedFlagGreenFlagGame ? 'room-active-stage--red-flag-green-flag' : ''} ${isCompatibilityMeterGame ? 'room-active-stage--compatibility-meter' : ''} ${isMemoryLaneGame ? 'room-active-stage--memory-lane' : ''}`}>
+      <div className={`room-active-stage room-active-stage--${stage} ${isQuizGame ? 'room-active-stage--quiz' : ''} ${isTrueFalseGame ? 'room-active-stage--true-false' : ''} ${isThisOrThatGame ? 'room-active-stage--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-stage--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-stage--put-points' : ''} ${isSecretAuctionGame ? 'room-active-stage--secret-auction' : ''} ${isRedFlagGreenFlagGame ? 'room-active-stage--red-flag-green-flag' : ''} ${isCompatibilityMeterGame ? 'room-active-stage--compatibility-meter' : ''} ${isMemoryLaneGame ? 'room-active-stage--memory-lane' : ''}`}>
         <header className="room-active-header">
           <div>
             <span className="scoreboard-kicker">{compatibilityFinalReveal ? 'Final Reveal' : revealIsReady ? 'Round Reveal' : 'Live Question'}</span>
@@ -15300,6 +15992,7 @@ function RoomActiveFrameBase({
                 isThisOrThatGame={isThisOrThatGame}
                 isMostLikelyGame={isMostLikelyVoteGame}
                 isPutYourPointsGame={isPutYourPointsGame}
+                isSecretAuctionGame={isSecretAuctionGame}
                 isRedFlagGreenFlagGame={isRedFlagGreenFlagGame}
                 isCompatibilityMeterGame={isCompatibilityMeterGame}
                 totalQuizPoints={quizRevealTotals[currentPlayer]}
@@ -15453,6 +16146,41 @@ function RoomActiveFrameBase({
                       {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
                     </small>
                   </>
+                ) : isSecretAuctionGame ? (
+                  <>
+                    <span>Confidence Stakes</span>
+                    <strong>{`${viewerLabel} ${formatScore(secretAuctionOutcome?.[`${currentPlayer}Bid`] || 0)} · ${oppositeLabel} ${formatScore(secretAuctionOutcome?.[`${otherPlayer}Bid`] || 0)}`}</strong>
+                    <p>
+                      {viewerLabel} +{formatScore(penaltyPreview[currentPlayer])}
+                      {' · '}
+                      {oppositeLabel} +{formatScore(penaltyPreview[otherPlayer])}
+                    </p>
+                    <small>{secretAuctionSummaryLabel}</small>
+                    {role === 'host' ? (
+                      <div className="put-points-inline-host-actions">
+                        <Button className="ghost-button compact" onClick={() => onSetSecretAuctionResult?.(currentPlayer, 'matched')} disabled={isBusy}>
+                          {viewerLabel} Match
+                        </Button>
+                        <Button className="ghost-button compact" onClick={() => onSetSecretAuctionResult?.(currentPlayer, 'missed')} disabled={isBusy}>
+                          {viewerLabel} Miss
+                        </Button>
+                        <Button className="ghost-button compact" onClick={() => onSetSecretAuctionResult?.(otherPlayer, 'matched')} disabled={isBusy}>
+                          {oppositeLabel} Match
+                        </Button>
+                        <Button className="ghost-button compact" onClick={() => onSetSecretAuctionResult?.(otherPlayer, 'missed')} disabled={isBusy}>
+                          {oppositeLabel} Miss
+                        </Button>
+                      </div>
+                    ) : null}
+                    <small>
+                      Each player only risks the stake card they spent on this question.
+                    </small>
+                    <small>
+                      Totals {viewerLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[currentPlayer] ?? liveTotals?.[currentPlayer] ?? baseTotals?.[currentPlayer] ?? 0)}
+                      {' · '}
+                      {oppositeLabel} {formatScore(previewRoundResult?.totalsAfterRound?.[otherPlayer] ?? liveTotals?.[otherPlayer] ?? baseTotals?.[otherPlayer] ?? 0)}
+                    </small>
+                  </>
                 ) : isRedFlagGreenFlagGame ? (
                   <>
                     <span>Round Result</span>
@@ -15547,6 +16275,7 @@ function RoomActiveFrameBase({
                 isThisOrThatGame={isThisOrThatGame}
                 isMostLikelyGame={isMostLikelyVoteGame}
                 isPutYourPointsGame={isPutYourPointsGame}
+                isSecretAuctionGame={isSecretAuctionGame}
                 isRedFlagGreenFlagGame={isRedFlagGreenFlagGame}
                 isCompatibilityMeterGame={isCompatibilityMeterGame}
                 totalQuizPoints={quizRevealTotals[otherPlayer]}
@@ -15634,6 +16363,7 @@ const RoomActiveFrame = memo(RoomActiveFrameBase, (previous, next) => {
     && JSON.stringify(previous.currentRound?.answers || {}) === JSON.stringify(next.currentRound?.answers || {})
     && JSON.stringify(previous.currentRound?.penalties || {}) === JSON.stringify(next.currentRound?.penalties || {})
     && JSON.stringify(previous.currentRound?.putYourPointsResults || {}) === JSON.stringify(next.currentRound?.putYourPointsResults || {})
+    && JSON.stringify(previous.currentRound?.secretAuctionResults || {}) === JSON.stringify(next.currentRound?.secretAuctionResults || {})
     && Number(previous.baseTotals?.jay || 0) === Number(next.baseTotals?.jay || 0)
     && Number(previous.baseTotals?.kim || 0) === Number(next.baseTotals?.kim || 0)
     && Number(previous.liveTotals?.jay || 0) === Number(next.liveTotals?.jay || 0)
@@ -19212,6 +19942,7 @@ function GameRoomView({
   onLockThisOrThatAnswer,
   onLockMostLikelyAnswer,
   onSetPutYourPointsResult,
+  onSetSecretAuctionResult,
   onMarkReady,
   onAddQuestion,
   onSyncSheet,
@@ -19274,7 +20005,7 @@ function GameRoomView({
       ? { jay: 0, kim: 0 }
       : isQuizGameMode(currentGameMode)
         ? buildQuizRoundScoreMap(currentRound)
-        : buildAutoScoredRoundPenaltyMap(currentGameMode, currentRound, { useStoredPenalties: isPutYourPointsGameMode(currentGameMode) })
+        : buildAutoScoredRoundPenaltyMap(currentGameMode, currentRound, { useStoredPenalties: isPutYourPointsGameMode(currentGameMode) || isSecretAuctionGameMode(currentGameMode) })
         || {
           jay: parseNumber(penaltyDraft.jay || currentRound.penalties?.jay || 0, 0),
           kim: parseNumber(penaltyDraft.kim || currentRound.penalties?.kim || 0, 0),
@@ -19308,6 +20039,7 @@ function GameRoomView({
   const isMostLikelyGame = isMostLikelyGameMode(currentGameMode);
   const isMostLikelyVoteGame = isMostLikelyGame && isMostLikelyVoteRound(currentRound || {});
   const isPutYourPointsGame = isPutYourPointsGameMode(currentGameMode);
+  const isSecretAuctionGame = isSecretAuctionGameMode(currentGameMode);
   const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(currentGameMode);
   const isCompatibilityMeterGame = isCompatibilityMeterGameMode(currentGameMode);
   const isMemoryLaneGame = isMemoryLaneGameMode(currentGameMode);
@@ -19319,6 +20051,8 @@ function GameRoomView({
       ? Boolean(hasCompletedMostLikelyRoundAnswer(currentRound, 'jay') && hasCompletedMostLikelyRoundAnswer(currentRound, 'kim'))
     : isPutYourPointsGame
       ? Boolean(hasCompletedPutYourPointsRoundAnswer(currentRound, 'jay') && hasCompletedPutYourPointsRoundAnswer(currentRound, 'kim'))
+    : isSecretAuctionGame
+      ? Boolean(hasCompletedSecretAuctionRoundAnswer(currentRound, 'jay') && hasCompletedSecretAuctionRoundAnswer(currentRound, 'kim'))
     : isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame
       ? Boolean(
           hasRoundAnswerSubmittedForMode(currentGameMode, currentRound, 'jay')
@@ -19335,6 +20069,8 @@ function GameRoomView({
       ? (hasCompletedMostLikelyRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
     : isPutYourPointsGame
       ? (hasCompletedPutYourPointsRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
+    : isSecretAuctionGame
+      ? (hasCompletedSecretAuctionRoundAnswer(currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
     : isRedFlagGreenFlagGame || isCompatibilityMeterGame || isMemoryLaneGame
       ? (hasRoundAnswerSubmittedForMode(currentGameMode, currentRound, resolvedViewerSeat) ? 'submitted' : 'draft')
       : (currentRound?.answers?.[resolvedViewerSeat]?.ownAnswer ? 'submitted' : 'draft');
@@ -19639,6 +20375,22 @@ function GameRoomView({
           </section>
         );
       }
+      if (isSecretAuctionGame) {
+        return (
+          <section className="mobile-entry-panel mobile-round-panel">
+            <SecretAuctionHostDesk
+              currentRound={currentRound}
+              onSetResult={onSetSecretAuctionResult}
+              onNextQuestion={onNextQuestion}
+              onPauseToggle={onPauseToggle}
+              status={status}
+              isPaused={status === 'paused'}
+              isCompleted={status === 'completed'}
+              isBusy={isBusy}
+            />
+          </section>
+        );
+      }
       if (isTrueFalseGame || isThisOrThatGame || isMostLikelyVoteGame) {
         const modeLabel = isMostLikelyVoteGame ? 'Most Likely To' : isThisOrThatGame ? 'This or That' : 'True or False';
         return (
@@ -19867,6 +20619,7 @@ function GameRoomView({
                     onLockThisOrThatAnswer={onLockThisOrThatAnswer}
                     onLockMostLikelyAnswer={onLockMostLikelyAnswer}
                     onSetPutYourPointsResult={onSetPutYourPointsResult}
+                    onSetSecretAuctionResult={onSetSecretAuctionResult}
 	                  onMarkReady={onMarkReady}
 	                  onRequestQuizOverride={onRequestQuizOverride}
 	                  onRespondQuizOverride={onRespondQuizOverride}
@@ -20124,6 +20877,18 @@ function GameRoomView({
                     isBusy={isBusy}
                   />
                 ) :
+                isSecretAuctionGame ? (
+                  <SecretAuctionHostDesk
+                    currentRound={currentRound}
+                    onSetResult={onSetSecretAuctionResult}
+                    onNextQuestion={onNextQuestion}
+                    onPauseToggle={onPauseToggle}
+                    status={status}
+                    isPaused={status === 'paused'}
+                    isCompleted={status === 'completed'}
+                    isBusy={isBusy}
+                  />
+                ) :
                 isTrueFalseGame || isThisOrThatGame || isMostLikelyVoteGame ? (
                   <section className="panel host-queue-panel host-queue-panel--auto-scoring room-status-panel">
                     <div className="panel-heading">
@@ -20212,6 +20977,7 @@ function GameRoomView({
                   onLockThisOrThatAnswer={onLockThisOrThatAnswer}
                   onLockMostLikelyAnswer={onLockMostLikelyAnswer}
                   onSetPutYourPointsResult={onSetPutYourPointsResult}
+                  onSetSecretAuctionResult={onSetSecretAuctionResult}
                   onMarkReady={onMarkReady}
 	              onRequestQuizOverride={onRequestQuizOverride}
 	              onRespondQuizOverride={onRespondQuizOverride}
@@ -21806,6 +22572,10 @@ function ProductionApp() {
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'putYourPointsGame'),
     [bankQuestions],
   );
+  const secretAuctionBankRecords = useMemo(
+    () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === SECRET_AUCTION_GAME_MODE),
+    [bankQuestions],
+  );
   const trueFalseBankRecords = useMemo(
     () => bankQuestions.filter((question) => normalizeQuestionBankType(question?.bankType) === 'trueFalseGame'),
     [bankQuestions],
@@ -21841,6 +22611,10 @@ function ProductionApp() {
   const putYourPointsBankQuestions = useMemo(
     () => putYourPointsBankRecords.filter(isQuestionActiveInBank),
     [putYourPointsBankRecords],
+  );
+  const secretAuctionBankQuestions = useMemo(
+    () => secretAuctionBankRecords.filter(isQuestionActiveInBank),
+    [secretAuctionBankRecords],
   );
   const trueFalseBankQuestions = useMemo(
     () => trueFalseBankRecords.filter(isQuestionActiveInBank),
@@ -21906,6 +22680,7 @@ function ProductionApp() {
   const thisOrThatBankCount = thisOrThatBankQuestions.length;
   const mostLikelyBankCount = mostLikelySelectableQuestions.length;
   const putYourPointsBankCount = putYourPointsSelectableQuestions.length;
+  const secretAuctionBankCount = secretAuctionBankQuestions.length;
   const trueFalseBankCount = trueFalseBankQuestions.length;
   const redFlagGreenFlagBankCount = redFlagGreenFlagBankQuestions.length;
   const compatibilityMeterBankCount = compatibilityMeterBankQuestions.length;
@@ -21988,6 +22763,14 @@ function ProductionApp() {
   const putYourPointsQuestionRecordIds = useMemo(
     () => new Set(putYourPointsBankRecords.map((question) => question.id).filter(Boolean)),
     [putYourPointsBankRecords],
+  );
+  const secretAuctionQuestionIds = useMemo(
+    () => new Set(secretAuctionBankQuestions.map((question) => question.id).filter(Boolean)),
+    [secretAuctionBankQuestions],
+  );
+  const secretAuctionQuestionRecordIds = useMemo(
+    () => new Set(secretAuctionBankRecords.map((question) => question.id).filter(Boolean)),
+    [secretAuctionBankRecords],
   );
   const trueFalseQuestionIds = useMemo(
     () => new Set(trueFalseBankQuestions.map((question) => question.id).filter(Boolean)),
@@ -22132,6 +22915,14 @@ function ProductionApp() {
     if (!putYourPointsQuestionIds.size) return new Set(trackedIds);
     return new Set(trackedIds.filter((questionId) => putYourPointsQuestionIds.has(questionId)));
   }, [pairPlayedQuestionIds, trackedGameEntries, putYourPointsQuestionIds]);
+  const trackedUsedSecretAuctionQuestionIds = useMemo(() => {
+    const trackedIds = mergeUniqueIds(
+      pairPlayedQuestionIds,
+      ...trackedGameEntries.map((entry) => getRetiredQuestionIdsForGame(entry)),
+    );
+    if (!secretAuctionQuestionIds.size) return new Set(trackedIds);
+    return new Set(trackedIds.filter((questionId) => secretAuctionQuestionIds.has(questionId)));
+  }, [pairPlayedQuestionIds, trackedGameEntries, secretAuctionQuestionIds]);
   const makePlayedQuestionIdsForBank = (targetBankType, bankRecords, recordIds, activeIds) => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -22194,6 +22985,16 @@ function ProductionApp() {
   );
   const usedPutYourPointsQuestionCount = playedPutYourPointsQuestionIds.size;
   const remainingPutYourPointsQuestionCount = Math.max(0, putYourPointsBankCount - activePlayedPutYourPointsQuestionIds.size);
+  const playedSecretAuctionQuestionIds = useMemo(
+    () => makePlayedQuestionIdsForBank(SECRET_AUCTION_GAME_MODE, secretAuctionBankRecords, secretAuctionQuestionRecordIds, secretAuctionQuestionIds),
+    [trackedGameEntries, secretAuctionBankRecords, secretAuctionQuestionRecordIds, secretAuctionQuestionIds],
+  );
+  const activePlayedSecretAuctionQuestionIds = useMemo(
+    () => new Set([...playedSecretAuctionQuestionIds].filter((questionId) => secretAuctionQuestionIds.has(questionId))),
+    [playedSecretAuctionQuestionIds, secretAuctionQuestionIds],
+  );
+  const usedSecretAuctionQuestionCount = playedSecretAuctionQuestionIds.size;
+  const remainingSecretAuctionQuestionCount = Math.max(0, secretAuctionBankCount - activePlayedSecretAuctionQuestionIds.size);
   const playedTrueFalseQuestionIds = useMemo(() => {
     const playedIds = mergeUniqueIds(
       ...trackedGameEntries
@@ -22253,8 +23054,8 @@ function ProductionApp() {
   }, [standardSelectableQuestions, effectiveRetiredQuestionIds, usedQuestionIds, reservedQuestionIds]);
   const lastQuestionId = currentRound?.questionId || rounds.at(-1)?.questionId || null;
   const allPlayedQuestionIds = useMemo(
-    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedMostLikelyQuestionIds, ...playedPutYourPointsQuestionIds, ...playedTrueFalseQuestionIds, ...playedRedFlagGreenFlagQuestionIds, ...playedCompatibilityMeterQuestionIds, ...playedMemoryLaneQuestionIds]),
-    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedMostLikelyQuestionIds, playedPutYourPointsQuestionIds, playedTrueFalseQuestionIds, playedRedFlagGreenFlagQuestionIds, playedCompatibilityMeterQuestionIds, playedMemoryLaneQuestionIds],
+    () => new Set([...playedStandardQuestionIds, ...playedQuizQuestionIds, ...playedThisOrThatQuestionIds, ...playedMostLikelyQuestionIds, ...playedPutYourPointsQuestionIds, ...playedSecretAuctionQuestionIds, ...playedTrueFalseQuestionIds, ...playedRedFlagGreenFlagQuestionIds, ...playedCompatibilityMeterQuestionIds, ...playedMemoryLaneQuestionIds]),
+    [playedStandardQuestionIds, playedQuizQuestionIds, playedThisOrThatQuestionIds, playedMostLikelyQuestionIds, playedPutYourPointsQuestionIds, playedSecretAuctionQuestionIds, playedTrueFalseQuestionIds, playedRedFlagGreenFlagQuestionIds, playedCompatibilityMeterQuestionIds, playedMemoryLaneQuestionIds],
   );
   const unusedQuestionCount = Math.max(0, bankCount - displayUsedStandardQuestionIds.size);
   const questionBankExportQuestionsByType = useMemo(() => {
@@ -22272,6 +23073,7 @@ function ProductionApp() {
       [THIS_OR_THAT_GAME_MODE]: onlyRemaining(thisOrThatBankQuestions, activePlayedThisOrThatQuestionIds),
       [MOST_LIKELY_GAME_MODE]: onlyRemaining(mostLikelyBankQuestions, activePlayedMostLikelyQuestionIds),
       [PUT_YOUR_POINTS_GAME_MODE]: onlyRemaining(putYourPointsBankQuestions, activePlayedPutYourPointsQuestionIds),
+      [SECRET_AUCTION_GAME_MODE]: onlyRemaining(secretAuctionBankQuestions, activePlayedSecretAuctionQuestionIds),
       [TRUE_FALSE_GAME_MODE]: onlyRemaining(trueFalseBankQuestions, activePlayedTrueFalseQuestionIds),
       [RED_FLAG_GREEN_FLAG_GAME_MODE]: onlyRemaining(redFlagGreenFlagBankQuestions, activePlayedRedFlagGreenFlagQuestionIds),
       [COMPATIBILITY_METER_GAME_MODE]: onlyRemaining(compatibilityMeterBankQuestions, activePlayedCompatibilityMeterQuestionIds),
@@ -22284,6 +23086,7 @@ function ProductionApp() {
     activePlayedPutYourPointsQuestionIds,
     activePlayedQuizQuestionIds,
     activePlayedRedFlagGreenFlagQuestionIds,
+    activePlayedSecretAuctionQuestionIds,
     activePlayedStandardQuestionIds,
     activePlayedThisOrThatQuestionIds,
     activePlayedTrueFalseQuestionIds,
@@ -22295,6 +23098,7 @@ function ProductionApp() {
     quizBankQuestions,
     redFlagGreenFlagBankQuestions,
     reservedQuestionIds,
+    secretAuctionBankQuestions,
     thisOrThatBankQuestions,
     trueFalseBankQuestions,
   ]);
@@ -22328,6 +23132,7 @@ function ProductionApp() {
       { id: 'thisOrThat', label: 'This or That', remaining: remainingThisOrThatQuestionCount },
       { id: 'mostLikely', label: 'Most Likely To', remaining: remainingMostLikelyQuestionCount },
       { id: 'putYourPoints', label: 'Put Your Points', remaining: remainingPutYourPointsQuestionCount },
+      { id: 'secretAuction', label: HOW_SURE_ARE_YOU_GAME_NAME, remaining: remainingSecretAuctionQuestionCount },
       { id: 'trueFalse', label: 'True or False', remaining: remainingTrueFalseQuestionCount },
       { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag', remaining: remainingRedFlagGreenFlagQuestionCount },
       { id: 'compatibilityMeter', label: 'Compatibility Meter', remaining: remainingCompatibilityMeterQuestionCount },
@@ -22354,6 +23159,7 @@ function ProductionApp() {
     questionBankDataLoaded,
     remainingMostLikelyQuestionCount,
     remainingPutYourPointsQuestionCount,
+    remainingSecretAuctionQuestionCount,
     remainingQuestionCount,
     remainingQuizQuestionCount,
     remainingThisOrThatQuestionCount,
@@ -22428,6 +23234,7 @@ function ProductionApp() {
     if (normalizedTargetBankType === 'putYourPointsGame') {
       return mergeQuestionBankRecords(putYourPointsSelectableQuestions, standardSelectableQuestions);
     }
+    if (normalizedTargetBankType === SECRET_AUCTION_GAME_MODE) return secretAuctionBankQuestions;
     if (normalizedTargetBankType === 'trueFalseGame') return trueFalseBankQuestions;
     if (normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE) return redFlagGreenFlagBankQuestions;
     if (normalizedTargetBankType === COMPATIBILITY_METER_GAME_MODE) return compatibilityMeterBankQuestions;
@@ -22481,6 +23288,7 @@ function ProductionApp() {
     const isThisOrThatQueue = isThisOrThatGameMode(requestedGameMode);
     const isMostLikelyQueue = isMostLikelyGameMode(requestedGameMode);
     const isPutYourPointsQueue = isPutYourPointsGameMode(requestedGameMode);
+    const isSecretAuctionQueue = isSecretAuctionGameMode(requestedGameMode);
     const isRedFlagGreenFlagQueue = isRedFlagGreenFlagGameMode(requestedGameMode);
     const isCompatibilityMeterQueue = isCompatibilityMeterGameMode(requestedGameMode);
     const isMemoryLaneQueue = isMemoryLaneGameMode(requestedGameMode);
@@ -22504,6 +23312,8 @@ function ProductionApp() {
         ? trackedUsedMostLikelyQuestionIds
       : requestedBankType === 'putYourPointsGame'
         ? trackedUsedPutYourPointsQuestionIds
+      : requestedBankType === SECRET_AUCTION_GAME_MODE
+        ? playedSecretAuctionQuestionIds
       : requestedBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
       : requestedBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
@@ -22552,6 +23362,8 @@ function ProductionApp() {
                 ? `Only ${queue.length} Most Likely To questions are available right now.`
               : isPutYourPointsQueue
                 ? `Only ${queue.length} Put Your Points questions are available right now.`
+              : isSecretAuctionQueue
+                ? `Only ${queue.length} How Sure Are You questions are available right now.`
               : isRedFlagGreenFlagQueue
                 ? `Only ${queue.length} Red Flag Green Flag questions are available right now.`
               : isCompatibilityMeterQueue
@@ -22567,6 +23379,8 @@ function ProductionApp() {
                 ? 'No Most Likely To questions are available right now.'
               : isPutYourPointsQueue
                 ? 'No Put Your Points questions are available right now.'
+              : isSecretAuctionQueue
+                ? 'No How Sure Are You questions are available right now.'
               : isRedFlagGreenFlagQueue
                 ? 'No Red Flag Green Flag questions are available right now.'
               : isCompatibilityMeterQueue
@@ -25382,6 +26196,18 @@ function ProductionApp() {
               importedAt: new Date().toISOString(),
               sourceLabel: `${reference.id}:${target.sheetName || 'Put Your Money Where Your Mouth Is'}`,
             })
+        : normalizedTargetBankType === SECRET_AUCTION_GAME_MODE
+          ? parseGoogleSheetModeImport({
+              rawText,
+              existingQuestions: nextExistingQuestions,
+              overwriteExisting,
+              importedAt: new Date().toISOString(),
+              sourceLabel: `${reference.id}:${target.sheetName || 'How Sure Are You'}`,
+              bankType: SECRET_AUCTION_GAME_MODE,
+              source: 'googleSheetSecretAuction',
+              defaultCategory: HOW_SURE_ARE_YOU_GAME_NAME,
+              defaultRoundType: 'text',
+            })
         : normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
           ? parseGoogleSheetModeImport({
               rawText,
@@ -26684,6 +27510,7 @@ function ProductionApp() {
       const isThisOrThatGame = isThisOrThatGameMode(gameMode);
       const isMostLikelyGame = isMostLikelyGameMode(gameMode);
       const isPutYourPointsGame = isPutYourPointsGameMode(gameMode);
+      const isSecretAuctionGame = isSecretAuctionGameMode(gameMode);
       const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(gameMode);
       const isCompatibilityMeterGame = isCompatibilityMeterGameMode(gameMode);
       const isMemoryLaneGame = isMemoryLaneGameMode(gameMode);
@@ -26696,6 +27523,7 @@ function ProductionApp() {
         if (isThisOrThatGame) return 'This or That';
         if (isMostLikelyGame) return 'Most Likely To';
         if (isPutYourPointsGame) return 'Put Your Points Where Your Mouth Is';
+        if (isSecretAuctionGame) return HOW_SURE_ARE_YOU_GAME_NAME;
         if (isRedFlagGreenFlagGame) return 'Red Flag Green Flag';
         if (isCompatibilityMeterGame) return 'Compatibility Meter';
         if (isMemoryLaneGame) return 'Memory Lane';
@@ -26709,6 +27537,7 @@ function ProductionApp() {
       const queueIsThisOrThatGame = isThisOrThatGameMode(queueGameMode);
       const queueIsMostLikelyGame = isMostLikelyGameMode(queueGameMode);
       const queueIsPutYourPointsGame = isPutYourPointsGameMode(queueGameMode);
+      const queueIsSecretAuctionGame = isSecretAuctionGameMode(queueGameMode);
       const queueIsRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(queueGameMode);
       const queueIsCompatibilityMeterGame = isCompatibilityMeterGameMode(queueGameMode);
       const queueIsMemoryLaneGame = isMemoryLaneGameMode(queueGameMode);
@@ -26767,12 +27596,14 @@ function ProductionApp() {
           warning = queueResult.warning;
           actualCount = queueResult.actualCount;
           if (!queue.length) {
-            throw new Error(queueIsPutYourPointsGame
+            throw new Error(queueIsSecretAuctionGame
+              ? 'No How Sure Are You questions are available. Add questions to the How Sure Are You bank, then try again.'
+              : queueIsPutYourPointsGame
               ? 'No Put Your Points questions are available. Add questions to the Put Your Money Where Your Mouth Is sheet, then sync the Put Your Points bank.'
               : selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
             if (actualCount < requestedQuestionCount) {
-              if (queueIsThisOrThatGame || queueIsMostLikelyGame || queueIsPutYourPointsGame || queueIsRedFlagGreenFlagGame || queueIsCompatibilityMeterGame || queueIsMemoryLaneGame || isSurpriseMeGame) {
+              if (queueIsThisOrThatGame || queueIsMostLikelyGame || queueIsPutYourPointsGame || queueIsSecretAuctionGame || queueIsRedFlagGreenFlagGame || queueIsCompatibilityMeterGame || queueIsMemoryLaneGame || isSurpriseMeGame) {
                 console.debug(`${queueGameName} local game auto-accepting shorter queue`, {
                   requestedQuestionCount,
                   actualCount,
@@ -26786,6 +27617,9 @@ function ProductionApp() {
               }
             }
         }
+        const localSecretAuctionStakeDeck = queueIsSecretAuctionGame
+          ? buildSecretAuctionStakeDeck(actualCount || requestedQuestionCount)
+          : [];
         const initialHoldemState = isHoldemGame
           ? initializeHoldemSessionState(creatorSeat, true)
           : null;
@@ -26839,6 +27673,8 @@ function ProductionApp() {
           retiredQuestionIds: isSurpriseMeGame ? [] : queue.map((question) => question.id),
           requestedQuestionCount,
           actualQuestionCount: isSurpriseMeGame ? 0 : actualCount,
+          secretAuctionStakeDeck: !isSurpriseMeGame && queueIsSecretAuctionGame ? localSecretAuctionStakeDeck : [],
+          secretAuctionStakeUsage: !isSurpriseMeGame && queueIsSecretAuctionGame ? { jay: [], kim: [] } : null,
           usedQuestionIds: [],
           roundsPlayed: 0,
           finalScores: { jay: 0, kim: 0 },
@@ -26863,6 +27699,7 @@ function ProductionApp() {
                 requestedQuestionCount,
                 actualQuestionCount: actualCount,
                 questionQueueIds: queue.map((question) => question.id),
+                secretAuctionStakeDeck: queueIsSecretAuctionGame ? localSecretAuctionStakeDeck : [],
                 warning,
                 startedAt: '',
                 resolveAfterAt: '',
@@ -26938,6 +27775,8 @@ function ProductionApp() {
         retiredQuestionIds: [],
         requestedQuestionCount,
         actualQuestionCount: 0,
+        secretAuctionStakeDeck: [],
+        secretAuctionStakeUsage: null,
         usedQuestionIds: [],
         roundsPlayed: 0,
         finalScores: { jay: 0, kim: 0 },
@@ -26960,6 +27799,7 @@ function ProductionApp() {
               requestedQuestionCount,
               actualQuestionCount: 0,
               questionQueueIds: [],
+              secretAuctionStakeDeck: [],
               warning: '',
               startedAt: '',
               resolveAfterAt: '',
@@ -26977,6 +27817,7 @@ function ProductionApp() {
         let queue = [];
         let warning = '';
         let actualCount = 0;
+        let secretAuctionStakeDeck = [];
         if (!isHoldemGame) {
           const readyQuestionPool = await ensureQuestionBankReadyForQueue(targetBankType);
           const queueResult = await buildQuestionQueue(requestedQuestionCount, {
@@ -26990,12 +27831,14 @@ function ProductionApp() {
           warning = queueResult.warning;
           actualCount = queueResult.actualCount;
           if (!queue.length) {
-            throw new Error(queueIsPutYourPointsGame
+            throw new Error(queueIsSecretAuctionGame
+              ? 'No How Sure Are You questions are available. Add questions to the How Sure Are You bank, then try again.'
+              : queueIsPutYourPointsGame
               ? 'No Put Your Points questions are available. Add questions to the Put Your Money Where Your Mouth Is sheet, then sync the Put Your Points bank.'
               : selectionMode === 'custom' ? 'No unused questions match those filters.' : 'No unused questions are available for this pair.');
           }
           if (actualCount < requestedQuestionCount) {
-            if (queueIsThisOrThatGame || queueIsMostLikelyGame || queueIsPutYourPointsGame || queueIsRedFlagGreenFlagGame || queueIsCompatibilityMeterGame || queueIsMemoryLaneGame || isSurpriseMeGame) {
+            if (queueIsThisOrThatGame || queueIsMostLikelyGame || queueIsPutYourPointsGame || queueIsSecretAuctionGame || queueIsRedFlagGreenFlagGame || queueIsCompatibilityMeterGame || queueIsMemoryLaneGame || isSurpriseMeGame) {
               console.debug(`${queueGameName} live game auto-accepting shorter queue`, {
                 requestedQuestionCount,
                 actualCount,
@@ -27008,6 +27851,9 @@ function ProductionApp() {
               }
             }
           }
+          secretAuctionStakeDeck = queueIsSecretAuctionGame
+            ? buildSecretAuctionStakeDeck(actualCount || requestedQuestionCount)
+            : [];
         }
         const joinCode = await makeUniqueJoinCode(requestedCreateCode);
         const createdGameState = isHoldemGame
@@ -27034,6 +27880,8 @@ function ProductionApp() {
               questionQueueIds: isSurpriseMeGame ? [] : queue.map((question) => question.id),
               retiredQuestionIds: isSurpriseMeGame ? [] : queue.map((question) => question.id),
               actualQuestionCount: isSurpriseMeGame ? 0 : actualCount,
+              secretAuctionStakeDeck: !isSurpriseMeGame && queueIsSecretAuctionGame ? secretAuctionStakeDeck : [],
+              secretAuctionStakeUsage: !isSurpriseMeGame && queueIsSecretAuctionGame ? { jay: [], kim: [] } : null,
               pendingSurpriseSelection: isSurpriseMeGame
                 ? {
                     status: 'waiting',
@@ -27045,6 +27893,7 @@ function ProductionApp() {
                     requestedQuestionCount,
                     actualQuestionCount: actualCount,
                     questionQueueIds: queue.map((question) => question.id),
+                    secretAuctionStakeDeck: queueIsSecretAuctionGame ? secretAuctionStakeDeck : [],
                     warning,
                     startedAt: '',
                     resolveAfterAt: '',
@@ -27176,6 +28025,10 @@ function ProductionApp() {
   const buildSurpriseMePromotionPatch = useCallback((selection = null) => {
     const selectedGameMode = resolveGameMode(selection?.selectedGameMode || 'standard');
     const queueIds = Array.isArray(selection?.questionQueueIds) ? selection.questionQueueIds.filter(Boolean) : [];
+    const isSecretAuctionSelection = isSecretAuctionGameMode(selectedGameMode);
+    const secretAuctionStakeDeck = isSecretAuctionSelection
+      ? normalizeSecretAuctionStakeDeck(selection?.secretAuctionStakeDeck || [], Math.max(0, Number(selection?.actualQuestionCount || queueIds.length || 0)))
+      : [];
     return {
       gameName: selection?.selectedGameName || selection?.finalLabel || 'Surprise Me',
       gameMode: selectedGameMode,
@@ -27189,6 +28042,8 @@ function ProductionApp() {
       retiredQuestionIds: queueIds,
       requestedQuestionCount: Math.max(1, Number(selection?.requestedQuestionCount || queueIds.length || 10)),
       actualQuestionCount: Math.max(0, Number(selection?.actualQuestionCount || queueIds.length || 0)),
+      secretAuctionStakeDeck,
+      secretAuctionStakeUsage: isSecretAuctionSelection ? { jay: [], kim: [] } : null,
       quizWagerAgreement: selectedGameMode === 'quiz' ? defaultQuizWagerAgreement() : null,
       quizReadyState: selectedGameMode === 'quiz' ? defaultQuizReadyState('opening') : null,
       pendingSurpriseSelection: null,
@@ -28190,7 +29045,7 @@ function ProductionApp() {
   const trueFalseRevealSettleRef = useRef('');
   const thisOrThatRevealSettleRef = useRef('');
   const mostLikelyRevealSettleRef = useRef('');
-  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isPutYourPointsGame = false, isRedFlagGreenFlagGame = false, startOpen = false } = {}) => {
+  const buildRoundFromQuestion = (nextQuestionItem, nextRoundNumber, { isQuizGame = false, isPutYourPointsGame = false, isSecretAuctionGame = false, isRedFlagGreenFlagGame = false, startOpen = false } = {}) => {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
     const quizRoundKey = sanitizeNoteKey(nextQuestionItem.id || nextQuestionItem.question || 'question') || 'question';
@@ -28208,8 +29063,8 @@ function ProductionApp() {
         roundType,
         bankType: normalizeQuestionBankType(nextQuestionItem.bankType),
       },
-      { isPutYourPointsRound: isPutYourPointsGame },
-    );
+        { isPutYourPointsRound: isPutYourPointsGame || isSecretAuctionGame },
+      );
     return {
       id: isQuizGame ? `round-quiz-${nextRoundNumber}-${quizRoundKey}` : makeId('round'),
       number: nextRoundNumber,
@@ -28245,6 +29100,7 @@ function ProductionApp() {
       quizTimerStartedAt: isQuizGame && startOpen ? nowIso : '',
       quizTimerEndsAt: isQuizGame && startOpen ? new Date(now + (QUIZ_TIMER_SECONDS * 1000)).toISOString() : '',
       ...(isPutYourPointsGame ? { ...buildPutYourPointsStakeSnapshot(), putYourPointsResults: { jay: '', kim: '' } } : {}),
+      ...(isSecretAuctionGame ? { secretAuctionResults: { jay: '', kim: '' }, secretAuctionBids: { jay: 0, kim: 0 }, secretAuctionStakeIds: { jay: '', kim: '' } } : {}),
       createdAt: nowIso,
     };
   };
@@ -28725,8 +29581,85 @@ function ProductionApp() {
       return true;
     }, 'Could not save the Put Your Points result.');
 
+  const setSecretAuctionResult = async (seatToJudge = '', resultValue = '') =>
+    withBusy(async () => {
+      if (!game?.currentRound) throw new Error('No active How Sure Are You round.');
+      if (!isSecretAuctionGameMode(game?.gameMode || 'standard')) {
+        throw new Error('Match judging is only available in How Sure Are You.');
+      }
+      const targetSeat = seatToJudge === 'kim' ? 'kim' : seatToJudge === 'jay' ? 'jay' : '';
+      if (!targetSeat) throw new Error('Choose Jay or Kim to judge.');
+      const result = normalizePutYourPointsResult(resultValue);
+      if (!result) throw new Error('Choose Match or Miss.');
+      const bid = getSecretAuctionBid(game.currentRound, targetSeat);
+      const stakeId = getSecretAuctionStakeId(game.currentRound, targetSeat);
+      const penalty = result === 'missed' ? bid : 0;
+      const nowIso = new Date().toISOString();
+      const roundKeyAtStart = stableRoundIdentityKey(game.currentRound || {});
+      const applyLocalResult = () => {
+        setGame((current) => (
+          current?.currentRound
+          && isSecretAuctionGameMode(current?.gameMode || 'standard')
+          && stableRoundIdentityKey(current.currentRound || {}) === roundKeyAtStart
+            ? {
+                ...current,
+                currentRound: {
+                  ...current.currentRound,
+                  secretAuctionResults: {
+                    ...(current.currentRound.secretAuctionResults || {}),
+                    [targetSeat]: result,
+                  },
+                  secretAuctionBids: {
+                    ...(current.currentRound.secretAuctionBids || {}),
+                    [targetSeat]: bid,
+                  },
+                  secretAuctionStakeIds: {
+                    ...(current.currentRound.secretAuctionStakeIds || {}),
+                    [targetSeat]: stakeId,
+                  },
+                  penalties: {
+                    ...(current.currentRound.penalties || {}),
+                    [targetSeat]: penalty,
+                  },
+                  penaltyAdded: {
+                    ...(current.currentRound.penaltyAdded || {}),
+                    [targetSeat]: penalty,
+                  },
+                  updatedAt: nowIso,
+                },
+                updatedAt: nowIso,
+              }
+            : current
+        ));
+      };
+      setPenaltyDraft((current) => ({
+        jay: targetSeat === 'jay' ? String(penalty) : current.jay,
+        kim: targetSeat === 'kim' ? String(penalty) : current.kim,
+      }));
+
+      if (isCurrentLocalTestGame) {
+        applyLocalResult();
+        return true;
+      }
+
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) throw new Error('Room is missing.');
+      applyLocalResult();
+      await updateDoc(gameRef, {
+        [`currentRound.secretAuctionResults.${targetSeat}`]: result,
+        [`currentRound.secretAuctionBids.${targetSeat}`]: bid,
+        [`currentRound.secretAuctionStakeIds.${targetSeat}`]: stakeId,
+        [`currentRound.penalties.${targetSeat}`]: penalty,
+        [`currentRound.penaltyAdded.${targetSeat}`]: penalty,
+        'currentRound.updatedAt': serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return true;
+    }, 'Could not save the How Sure Are You result.');
+
   const submitAnswer = async (draftOverride = null) => {
     let previousLocalAnswer;
+    let previousSecretAuctionStakeUsage = null;
     let optimisticPayload = null;
     let optimisticRoundKey = '';
     try {
@@ -28736,9 +29669,11 @@ function ProductionApp() {
       const draft = draftOverride || {
         ownAnswer: String(game.currentRound.answers?.[currentSeat]?.ownAnswer ?? ''),
         guessedOther: String(game.currentRound.answers?.[currentSeat]?.guessedOther ?? ''),
+        secretAuctionBid: String(game.currentRound.answers?.[currentSeat]?.secretAuctionBid ?? ''),
       };
       const isQuizGame = (game?.gameMode || 'standard') === 'quiz';
       const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
+      const isSecretAuctionGame = isSecretAuctionGameMode(game?.gameMode || 'standard');
       const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(game?.gameMode || 'standard');
       const isMemoryLaneGame = isMemoryLaneGameMode(game?.gameMode || 'standard');
       const isMemoryLaneRecallGame = isMemoryLaneGame && isMemoryLaneRecallRound(game.currentRound || {});
@@ -28747,17 +29682,28 @@ function ProductionApp() {
         serialiseAnswerForQuestionType(roundType, draft.ownAnswer),
         game,
         game.currentRound,
-        { isPutYourPointsRound: isPutYourPointsGame },
+        { isPutYourPointsRound: isPutYourPointsGame || isSecretAuctionGame },
       );
       const serialisedGuessedOther = isQuizGame ? '' : resolvePlayerChoiceAnswerForRound(
         serialiseAnswerForQuestionType(roundType, draft.guessedOther),
         game,
         game.currentRound,
-        { isPutYourPointsRound: isPutYourPointsGame },
+        { isPutYourPointsRound: isPutYourPointsGame || isSecretAuctionGame },
       );
+      const secretAuctionStakeSelection = isSecretAuctionGame
+        ? resolveSecretAuctionStakeSelection(game, currentSeat, draft)
+        : { stake: null, error: '' };
       if (!normalizeText(serialisedOwnAnswer)) throw new Error('Enter your answer before submitting.');
       if (isPutYourPointsGame && !normalizeText(serialisedGuessedOther)) {
         throw new Error('Enter your guess for the other player before submitting.');
+      }
+      if (isSecretAuctionGame) {
+        if (!normalizeText(serialisedGuessedOther)) {
+          throw new Error('Enter your guess for the other player before submitting.');
+        }
+        if (secretAuctionStakeSelection.error || !secretAuctionStakeSelection.stake) {
+          throw new Error(secretAuctionStakeSelection.error || 'Choose one of your remaining stake cards.');
+        }
       }
       if (isRedFlagGreenFlagGame && !normalizeText(serialisedGuessedOther)) {
         throw new Error('Pick what you think the other player will choose before submitting.');
@@ -28780,6 +29726,10 @@ function ProductionApp() {
         submittedBy: user?.uid || '',
         displayName: profile?.displayName || user?.displayName || '',
         submittedAt: submittedAtIso,
+        ...(isSecretAuctionGame ? {
+          secretAuctionBid: secretAuctionStakeSelection.stake.amount,
+          secretAuctionStakeId: secretAuctionStakeSelection.stake.id,
+        } : {}),
         ...(isQuizGame
           ? {
               wasCorrect: false,
@@ -28798,6 +29748,9 @@ function ProductionApp() {
       if (isCurrentLocalTestGame) {
         const otherSeat = currentSeat === 'jay' ? 'kim' : 'jay';
         const choiceOptions = inferChoiceOptions(game.currentRound);
+        const autoSecretAuctionStake = isSecretAuctionGame
+          ? (getSecretAuctionAvailableStakesForSeat(game, otherSeat)[0] || null)
+          : null;
         const nextAnswers = {
           ...currentAnswers,
           [currentSeat]: baseAnswerPayload,
@@ -28819,6 +29772,10 @@ function ProductionApp() {
             displayName: otherSeat === 'kim' ? TEST_MODE_PLAYER_NAME : 'Jay (Test)',
             submittedAt: new Date().toISOString(),
             autoSubmitted: true,
+            ...(isSecretAuctionGame ? {
+              secretAuctionBid: autoSecretAuctionStake?.amount ?? 50,
+              secretAuctionStakeId: autoSecretAuctionStake?.id || '',
+            } : {}),
             ...(isQuizGame
               ? {
                   wasCorrect: false,
@@ -28843,9 +29800,36 @@ function ProductionApp() {
           current?.currentRound
             ? {
                 ...current,
+                ...(isSecretAuctionGame
+                  ? {
+                      secretAuctionStakeUsage: {
+                        ...(current.secretAuctionStakeUsage || {}),
+                        jay: nextAnswers.jay?.secretAuctionStakeId
+                          ? buildSecretAuctionStakeUsageForSeat({ ...current, currentRound: game.currentRound }, 'jay', nextAnswers.jay.secretAuctionStakeId)
+                          : (current.secretAuctionStakeUsage?.jay || []),
+                        kim: nextAnswers.kim?.secretAuctionStakeId
+                          ? buildSecretAuctionStakeUsageForSeat({ ...current, currentRound: game.currentRound }, 'kim', nextAnswers.kim.secretAuctionStakeId)
+                          : (current.secretAuctionStakeUsage?.kim || []),
+                      },
+                    }
+                  : {}),
                 currentRound: {
                   ...current.currentRound,
                   answers: nextAnswers,
+                  ...(isSecretAuctionGame
+                    ? {
+                        secretAuctionBids: {
+                          ...(current.currentRound.secretAuctionBids || {}),
+                          jay: Number(nextAnswers.jay?.secretAuctionBid ?? current.currentRound.secretAuctionBids?.jay ?? 0),
+                          kim: Number(nextAnswers.kim?.secretAuctionBid ?? current.currentRound.secretAuctionBids?.kim ?? 0),
+                        },
+                        secretAuctionStakeIds: {
+                          ...(current.currentRound.secretAuctionStakeIds || {}),
+                          jay: nextAnswers.jay?.secretAuctionStakeId ?? current.currentRound.secretAuctionStakeIds?.jay ?? '',
+                          kim: nextAnswers.kim?.secretAuctionStakeId ?? current.currentRound.secretAuctionStakeIds?.kim ?? '',
+                        },
+                      }
+                    : {}),
                   status: bothAnswered ? 'reveal' : 'open',
                   updatedAt: new Date().toISOString(),
                 },
@@ -28859,6 +29843,7 @@ function ProductionApp() {
       if (!gameRef || !firestore) throw new Error('Room is missing.');
       const existingLocalAnswer = currentAnswers?.[currentSeat] || {};
       previousLocalAnswer = currentAnswers?.[currentSeat];
+      previousSecretAuctionStakeUsage = isSecretAuctionGame ? game.secretAuctionStakeUsage || null : null;
       optimisticRoundKey = stableRoundIdentityKey(game.currentRound || {});
       const payload = {
         ...baseAnswerPayload,
@@ -28871,6 +29856,12 @@ function ProductionApp() {
         ...currentAnswers,
         [currentSeat]: payload,
       };
+      const nextSecretAuctionStakeUsage = isSecretAuctionGame
+        ? {
+            ...(game.secretAuctionStakeUsage || {}),
+            [currentSeat]: buildSecretAuctionStakeUsageForSeat(game, currentSeat, payload.secretAuctionStakeId),
+          }
+        : null;
       const localRoundForCompletion = { ...game.currentRound, answers: nextLocalAnswers };
       const bothAnsweredLocally = Boolean(
         hasRoundAnswerSubmittedForMode(game?.gameMode || 'standard', localRoundForCompletion, 'jay')
@@ -28884,9 +29875,29 @@ function ProductionApp() {
         };
         return {
           ...current,
+          ...(isSecretAuctionGame
+            ? {
+                secretAuctionStakeUsage: {
+                  ...(current.secretAuctionStakeUsage || {}),
+                  [currentSeat]: buildSecretAuctionStakeUsageForSeat(current, currentSeat, payload.secretAuctionStakeId),
+                },
+              }
+            : {}),
           currentRound: {
             ...current.currentRound,
             answers: nextAnswers,
+            ...(isSecretAuctionGame
+              ? {
+                  secretAuctionBids: {
+                    ...(current.currentRound.secretAuctionBids || {}),
+                    [currentSeat]: payload.secretAuctionBid,
+                  },
+                  secretAuctionStakeIds: {
+                    ...(current.currentRound.secretAuctionStakeIds || {}),
+                    [currentSeat]: payload.secretAuctionStakeId || '',
+                  },
+                }
+              : {}),
             status: isQuizGame
               ? current.currentRound.status
               : (
@@ -28901,6 +29912,13 @@ function ProductionApp() {
       if (!isQuizGame) {
         await updateDoc(gameRef, {
           [`currentRound.answers.${currentSeat}`]: payload,
+          ...(isSecretAuctionGame
+            ? {
+                [`currentRound.secretAuctionBids.${currentSeat}`]: payload.secretAuctionBid,
+                [`currentRound.secretAuctionStakeIds.${currentSeat}`]: payload.secretAuctionStakeId || '',
+                [`secretAuctionStakeUsage.${currentSeat}`]: nextSecretAuctionStakeUsage?.[currentSeat] || [],
+              }
+            : {}),
           ...(bothAnsweredLocally ? { 'currentRound.status': 'reveal' } : {}),
           'currentRound.updatedAt': serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -28951,7 +29969,7 @@ function ProductionApp() {
       }
       return true;
     } catch (error) {
-      if ((game?.gameMode || 'standard') === 'quiz' && game?.currentRound && currentSeat) {
+      if (optimisticPayload && optimisticRoundKey && game?.currentRound && currentSeat) {
         setGame((current) => {
           if (!current?.currentRound || stableRoundIdentityKey(current.currentRound) !== optimisticRoundKey) return current;
           if (!areRoundAnswerSnapshotsEqual(current.currentRound.answers?.[currentSeat], optimisticPayload)) return current;
@@ -28960,9 +29978,24 @@ function ProductionApp() {
           else delete nextAnswers[currentSeat];
           return {
             ...current,
+            ...(previousSecretAuctionStakeUsage
+              ? { secretAuctionStakeUsage: previousSecretAuctionStakeUsage }
+              : {}),
             currentRound: {
               ...current.currentRound,
               answers: nextAnswers,
+              ...(isSecretAuctionGameMode(current?.gameMode || 'standard')
+                ? {
+                    secretAuctionBids: {
+                      ...(current.currentRound.secretAuctionBids || {}),
+                      [currentSeat]: previousLocalAnswer?.secretAuctionBid ?? '',
+                    },
+                    secretAuctionStakeIds: {
+                      ...(current.currentRound.secretAuctionStakeIds || {}),
+                      [currentSeat]: previousLocalAnswer?.secretAuctionStakeId ?? '',
+                    },
+                  }
+                : {}),
             },
           };
         });
@@ -29026,8 +30059,12 @@ function ProductionApp() {
     game?.currentRound?.number,
     game?.currentRound?.answers?.jay?.ownAnswer,
     game?.currentRound?.answers?.jay?.guessedOther,
+    game?.currentRound?.answers?.jay?.secretAuctionBid,
+    game?.currentRound?.answers?.jay?.secretAuctionStakeId,
     game?.currentRound?.answers?.kim?.ownAnswer,
     game?.currentRound?.answers?.kim?.guessedOther,
+    game?.currentRound?.answers?.kim?.secretAuctionBid,
+    game?.currentRound?.answers?.kim?.secretAuctionStakeId,
   ]);
 
   useEffect(() => {
@@ -29277,6 +30314,8 @@ function ProductionApp() {
         ? mostLikelySelectableQuestions
       : sourceBankType === 'putYourPointsGame'
         ? mergeQuestionBankRecords(putYourPointsSelectableQuestions, standardSelectableQuestions)
+      : sourceBankType === SECRET_AUCTION_GAME_MODE
+        ? secretAuctionBankQuestions
       : sourceBankType === 'trueFalseGame'
         ? trueFalseBankQuestions
       : sourceBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
@@ -29294,6 +30333,8 @@ function ProductionApp() {
         ? trackedUsedMostLikelyQuestionIds
       : sourceBankType === 'putYourPointsGame'
         ? trackedUsedPutYourPointsQuestionIds
+      : sourceBankType === SECRET_AUCTION_GAME_MODE
+        ? playedSecretAuctionQuestionIds
       : sourceBankType === 'trueFalseGame'
         ? trackedUsedTrueFalseQuestionIds
       : sourceBankType === RED_FLAG_GREEN_FLAG_GAME_MODE
@@ -29319,7 +30360,7 @@ function ProductionApp() {
         && !reservedQuestionIds.has(question.id)
         && !usedIds.has(question.id),
     );
-    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame' || sourceBankType === 'mostLikelyGame' || sourceBankType === 'putYourPointsGame' || sourceBankType === RED_FLAG_GREEN_FLAG_GAME_MODE || sourceBankType === COMPATIBILITY_METER_GAME_MODE || sourceBankType === MEMORY_LANE_GAME_MODE
+    const starterFallbackPool = sourceBankType === 'quiz' || sourceBankType === 'trueFalseGame' || sourceBankType === 'thisOrThatGame' || sourceBankType === 'mostLikelyGame' || sourceBankType === 'putYourPointsGame' || sourceBankType === SECRET_AUCTION_GAME_MODE || sourceBankType === RED_FLAG_GREEN_FLAG_GAME_MODE || sourceBankType === COMPATIBILITY_METER_GAME_MODE || sourceBankType === MEMORY_LANE_GAME_MODE
       ? []
       : standardSelectableQuestions.filter(
           (question) =>
@@ -29363,6 +30404,7 @@ function ProductionApp() {
       const isThisOrThatGame = isThisOrThatGameMode(game?.gameMode || 'standard');
       const isMostLikelyGame = isMostLikelyGameMode(game?.gameMode || 'standard');
       const isPutYourPointsGame = isPutYourPointsGameMode(game?.gameMode || 'standard');
+      const isSecretAuctionGame = isSecretAuctionGameMode(game?.gameMode || 'standard');
       const isRedFlagGreenFlagGame = isRedFlagGreenFlagGameMode(game?.gameMode || 'standard');
       const isCompatibilityMeterGame = isCompatibilityMeterGameMode(game?.gameMode || 'standard');
       const isCompatibilityFinalReveal = isCompatibilityFinalRevealRound(game?.currentRound || {});
@@ -29410,6 +30452,9 @@ function ProductionApp() {
         throw new Error('Both players must submit their answers before loading the next question.');
       }
       if (game.currentRound && isPutYourPointsGame && !hasCompletedPutYourPointsJudgement(game.currentRound)) {
+        throw new Error('Mark Match or Miss for both players before loading the next question.');
+      }
+      if (game.currentRound && isSecretAuctionGame && !hasCompletedSecretAuctionJudgement(game.currentRound)) {
         throw new Error('Mark Match or Miss for both players before loading the next question.');
       }
       if (game.currentRound && isQuizGame && !hasCompletedQuizJudgement(game.currentRound)) {
@@ -29563,7 +30608,7 @@ function ProductionApp() {
             Number(nextGameState.currentRound?.number || 0) + 1,
             1,
           );
-          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, isRedFlagGreenFlagGame, startOpen: true });
+          const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, isSecretAuctionGame, isRedFlagGreenFlagGame, startOpen: true });
           nextGameState = {
             ...nextGameState,
             totals: nextTotals,
@@ -29797,7 +30842,7 @@ function ProductionApp() {
           Number(game.currentRound?.number || 0) + 1,
           1,
         );
-        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, isRedFlagGreenFlagGame, startOpen: true });
+        const nextRound = buildRoundFromQuestion(nextQuestionItem, nextRoundNumber, { isQuizGame, isPutYourPointsGame, isSecretAuctionGame, isRedFlagGreenFlagGame, startOpen: true });
         const gamePatch = {
           ...(savedCurrentRound
             ? {
@@ -30651,6 +31696,7 @@ function ProductionApp() {
     if (normalizedTargetBankType === 'thisOrThatGame') return playedThisOrThatQuestionIds;
     if (normalizedTargetBankType === 'mostLikelyGame') return playedMostLikelyQuestionIds;
     if (normalizedTargetBankType === 'putYourPointsGame') return playedPutYourPointsQuestionIds;
+    if (normalizedTargetBankType === SECRET_AUCTION_GAME_MODE) return playedSecretAuctionQuestionIds;
     if (normalizedTargetBankType === 'trueFalseGame') return playedTrueFalseQuestionIds;
     if (normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE) return playedRedFlagGreenFlagQuestionIds;
     if (normalizedTargetBankType === COMPATIBILITY_METER_GAME_MODE) return playedCompatibilityMeterQuestionIds;
@@ -31243,6 +32289,9 @@ function ProductionApp() {
         putYourPointsQuestionCount={putYourPointsBankCount}
         usedPutYourPointsQuestionCount={usedPutYourPointsQuestionCount}
         remainingPutYourPointsQuestionCount={remainingPutYourPointsQuestionCount}
+        secretAuctionQuestionCount={secretAuctionBankCount}
+        usedSecretAuctionQuestionCount={usedSecretAuctionQuestionCount}
+        remainingSecretAuctionQuestionCount={remainingSecretAuctionQuestionCount}
         trueFalseQuestionCount={trueFalseBankCount}
         usedTrueFalseQuestionCount={usedTrueFalseQuestionCount}
         remainingTrueFalseQuestionCount={remainingTrueFalseQuestionCount}
@@ -31334,7 +32383,8 @@ function ProductionApp() {
       onLockThisOrThatAnswer={lockThisOrThatAnswerField}
       onLockMostLikelyAnswer={lockMostLikelyAnswerField}
       onSetPutYourPointsResult={setPutYourPointsResult}
-	      onMarkReady={markReady}
+      onSetSecretAuctionResult={setSecretAuctionResult}
+      onMarkReady={markReady}
 	      onAddQuestion={addQuestion}
       onSyncSheet={syncSheet}
       onImportSheet={importSheet}
