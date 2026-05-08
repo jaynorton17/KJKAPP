@@ -1610,7 +1610,8 @@ button:disabled {
 }
 
 .question-bank-upload-controls .field input,
-.question-bank-upload-controls .field select {
+.question-bank-upload-controls .field select,
+.question-bank-upload-controls .field textarea {
   width: 100%;
   min-height: 42px;
   border-color: rgba(255, 255, 255, 0.34);
@@ -1622,6 +1623,14 @@ button:disabled {
     inset 0 0 0 1px rgba(255, 255, 255, 0.58);
 }
 
+.question-bank-upload-controls .field textarea {
+  min-height: 180px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
 .question-bank-upload-controls .field input::placeholder {
   color: rgba(7, 17, 34, 0.56);
 }
@@ -1631,10 +1640,19 @@ button:disabled {
 }
 
 .question-bank-upload-controls .field input:focus,
-.question-bank-upload-controls .field select:focus {
+.question-bank-upload-controls .field select:focus,
+.question-bank-upload-controls .field textarea:focus {
   border-color: rgba(255, 255, 255, 0.9);
   background: #fff;
   color: #071122;
+}
+
+.question-bank-upload-controls--manual .compact {
+  min-height: 42px;
+}
+
+.question-bank-upload-prompt-field {
+  grid-column: 1 / -1;
 }
 
 .question-bank-upload-controls .field select option {

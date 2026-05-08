@@ -7651,6 +7651,7 @@ function LobbyScreen({
   const [lobbyTileImagesEnabled, setLobbyTileImagesEnabled] = useState(false);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
+  const [questionUploadBankType, setQuestionUploadBankType] = useState('game');
   const [questionUploadMode, setQuestionUploadMode] = useState('add');
   const [questionUploadDraft, setQuestionUploadDraft] = useState(null);
   const [questionUploadReport, setQuestionUploadReport] = useState(null);
@@ -8716,57 +8717,6 @@ function LobbyScreen({
     [activeGames, previousGames],
   );
 
-  const questionBankLoadedCount = questionBankSegment === 'quiz'
-    ? quizQuestionCount
-    : questionBankSegment === 'thisOrThat'
-      ? thisOrThatQuestionCount
-    : questionBankSegment === 'mostLikely'
-      ? mostLikelyQuestionCount
-    : questionBankSegment === 'putYourPoints'
-      ? putYourPointsQuestionCount
-    : questionBankSegment === 'trueFalse'
-      ? trueFalseQuestionCount
-    : questionBankSegment === 'redFlagGreenFlag'
-      ? redFlagGreenFlagQuestionCount
-    : questionBankSegment === 'compatibilityMeter'
-      ? compatibilityMeterQuestionCount
-    : questionBankSegment === 'memoryLane'
-      ? memoryLaneQuestionCount
-      : questionCount;
-  const questionBankUsedTotal = questionBankSegment === 'quiz'
-    ? usedQuizQuestionCount
-    : questionBankSegment === 'thisOrThat'
-      ? usedThisOrThatQuestionCount
-    : questionBankSegment === 'mostLikely'
-      ? usedMostLikelyQuestionCount
-    : questionBankSegment === 'putYourPoints'
-      ? usedPutYourPointsQuestionCount
-    : questionBankSegment === 'trueFalse'
-      ? usedTrueFalseQuestionCount
-    : questionBankSegment === 'redFlagGreenFlag'
-      ? usedRedFlagGreenFlagQuestionCount
-    : questionBankSegment === 'compatibilityMeter'
-      ? usedCompatibilityMeterQuestionCount
-    : questionBankSegment === 'memoryLane'
-      ? usedMemoryLaneQuestionCount
-      : usedQuestionCount;
-  const questionBankRemainingTotal = questionBankSegment === 'quiz'
-    ? remainingQuizQuestionCount
-    : questionBankSegment === 'thisOrThat'
-      ? remainingThisOrThatQuestionCount
-    : questionBankSegment === 'mostLikely'
-      ? remainingMostLikelyQuestionCount
-    : questionBankSegment === 'putYourPoints'
-      ? remainingPutYourPointsQuestionCount
-    : questionBankSegment === 'trueFalse'
-      ? remainingTrueFalseQuestionCount
-    : questionBankSegment === 'redFlagGreenFlag'
-      ? remainingRedFlagGreenFlagQuestionCount
-    : questionBankSegment === 'compatibilityMeter'
-      ? remainingCompatibilityMeterQuestionCount
-    : questionBankSegment === 'memoryLane'
-      ? remainingMemoryLaneQuestionCount
-      : remainingQuestionCount;
   const questionBankSegmentBankType = questionBankSegment === 'quiz'
     ? 'quiz'
     : questionBankSegment === 'thisOrThat'
@@ -8784,7 +8734,47 @@ function LobbyScreen({
     : questionBankSegment === 'memoryLane'
       ? MEMORY_LANE_GAME_MODE
       : 'game';
-  const questionBankTarget = getQuestionBankSyncTarget(questionBankSegmentBankType);
+  const questionBankActiveBankType = questionBankSegment === 'upload'
+    ? questionUploadBankType
+    : questionBankSegmentBankType;
+  const questionBankTarget = getQuestionBankSyncTarget(questionBankActiveBankType);
+  const normalizedQuestionBankTargetType = normalizeQuestionBankType(questionBankTarget.bankType);
+  const questionBankLoadedCountByType = {
+    game: questionCount,
+    quiz: quizQuestionCount,
+    [THIS_OR_THAT_GAME_MODE]: thisOrThatQuestionCount,
+    [MOST_LIKELY_GAME_MODE]: mostLikelyQuestionCount,
+    [PUT_YOUR_POINTS_GAME_MODE]: putYourPointsQuestionCount,
+    [TRUE_FALSE_GAME_MODE]: trueFalseQuestionCount,
+    [RED_FLAG_GREEN_FLAG_GAME_MODE]: redFlagGreenFlagQuestionCount,
+    [COMPATIBILITY_METER_GAME_MODE]: compatibilityMeterQuestionCount,
+    [MEMORY_LANE_GAME_MODE]: memoryLaneQuestionCount,
+  };
+  const questionBankUsedCountByType = {
+    game: usedQuestionCount,
+    quiz: usedQuizQuestionCount,
+    [THIS_OR_THAT_GAME_MODE]: usedThisOrThatQuestionCount,
+    [MOST_LIKELY_GAME_MODE]: usedMostLikelyQuestionCount,
+    [PUT_YOUR_POINTS_GAME_MODE]: usedPutYourPointsQuestionCount,
+    [TRUE_FALSE_GAME_MODE]: usedTrueFalseQuestionCount,
+    [RED_FLAG_GREEN_FLAG_GAME_MODE]: usedRedFlagGreenFlagQuestionCount,
+    [COMPATIBILITY_METER_GAME_MODE]: usedCompatibilityMeterQuestionCount,
+    [MEMORY_LANE_GAME_MODE]: usedMemoryLaneQuestionCount,
+  };
+  const questionBankRemainingCountByType = {
+    game: remainingQuestionCount,
+    quiz: remainingQuizQuestionCount,
+    [THIS_OR_THAT_GAME_MODE]: remainingThisOrThatQuestionCount,
+    [MOST_LIKELY_GAME_MODE]: remainingMostLikelyQuestionCount,
+    [PUT_YOUR_POINTS_GAME_MODE]: remainingPutYourPointsQuestionCount,
+    [TRUE_FALSE_GAME_MODE]: remainingTrueFalseQuestionCount,
+    [RED_FLAG_GREEN_FLAG_GAME_MODE]: remainingRedFlagGreenFlagQuestionCount,
+    [COMPATIBILITY_METER_GAME_MODE]: remainingCompatibilityMeterQuestionCount,
+    [MEMORY_LANE_GAME_MODE]: remainingMemoryLaneQuestionCount,
+  };
+  const questionBankLoadedCount = questionBankLoadedCountByType[normalizedQuestionBankTargetType] ?? questionCount;
+  const questionBankUsedTotal = questionBankUsedCountByType[normalizedQuestionBankTargetType] ?? usedQuestionCount;
+  const questionBankRemainingTotal = questionBankRemainingCountByType[normalizedQuestionBankTargetType] ?? remainingQuestionCount;
   const questionUploadTarget = questionBankTarget;
   const questionGenerationProfile = QUESTION_BANK_GENERATION_PROFILES[normalizeQuestionBankType(questionUploadTarget.bankType)]
     || QUESTION_BANK_GENERATION_PROFILES.game;
@@ -8796,6 +8786,18 @@ function LobbyScreen({
     toneMode: questionGenerationTone === 'surprise' || questionGenerationTone === 'mixed' ? questionGenerationTone : 'single',
     intensityMode: questionGenerationIntensity === 'surprise' || questionGenerationIntensity === 'mixed' ? questionGenerationIntensity : 'single',
   };
+  const questionUploadPromptText = useMemo(() => [
+    buildQuestionBankGenerationPrompt(questionUploadTarget, {
+      questionCount: 50,
+      questionType: 'all',
+      category: 'all',
+      tone: 'mixed',
+      intensity: 'mixed',
+      extraBrief: `Create upload-ready questions for ${questionUploadTarget.gameName}. Use the downloaded current questions as an avoid list if one is provided.`,
+    }),
+    '',
+    'When I give you a current-questions CSV, treat every existing Question and Options set as forbidden. Return only fresh rows that are ready to upload.',
+  ].join('\n'), [questionUploadTarget]);
   const clearQuestionUploadSelection = () => {
     setQuestionUploadDraft(null);
     setQuestionUploadReport(null);
@@ -8803,10 +8805,40 @@ function LobbyScreen({
     setQuestionUploadOutcomeQuestions([]);
   };
   const handleQuestionBankSegmentChange = (segment) => {
+    if (segment === 'upload') {
+      setQuestionUploadBankType(questionBankTarget.bankType);
+    }
     setQuestionBankSegment(segment);
     setQuestionGenerationType('surprise');
     setQuestionGenerationCategory('surprise');
     clearQuestionUploadSelection();
+  };
+  const handleQuestionUploadTargetChange = (event) => {
+    setQuestionUploadBankType(event.target.value);
+    setQuestionGenerationType('surprise');
+    setQuestionGenerationCategory('surprise');
+    clearQuestionUploadSelection();
+  };
+  const handleCopyQuestionUploadPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(questionUploadPromptText);
+      setQuestionUploadProgress({
+        status: 'ready',
+        percent: 100,
+        message: `${questionUploadTarget.gameName} prompt copied to clipboard.`,
+      });
+    } catch (error) {
+      downloadTextFile(
+        `${String(questionUploadTarget.sheetName || questionUploadTarget.gameName || 'question-bank').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}-prompt.txt`,
+        questionUploadPromptText,
+        'text/plain;charset=utf-8',
+      );
+      setQuestionUploadProgress({
+        status: 'ready',
+        percent: 100,
+        message: `${questionUploadTarget.gameName} prompt downloaded because clipboard access was blocked.`,
+      });
+    }
   };
   const buildQuestionUploadReport = ({
     rawText,
@@ -10928,6 +10960,9 @@ function LobbyScreen({
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'memoryLane' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('memoryLane')}>
                   Memory Lane
                 </button>
+                <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'upload' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('upload')}>
+                  Upload
+                </button>
               </div>
 
               <div className="question-bank-status-grid">
@@ -10953,91 +10988,147 @@ function LobbyScreen({
                 </article>
               </div>
 
-              <div className="question-bank-upload-panel" aria-label="AI question generator">
-                <div className="question-bank-upload-copy">
-                  <p className="eyebrow">AI Question Generator</p>
-                  <h3>{questionUploadTarget.gameName}</h3>
-                  <span>Generate questions with Gemini, then the app checks, repairs once if needed, and adds valid new rows straight into Firebase.</span>
-                </div>
-                <div className="question-bank-upload-controls">
-                  <label className="field question-bank-generator-count">
-                    <span>Number</span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="50"
-                      step="1"
-                      value={questionGenerationCountDraft}
-                      onChange={(event) => setQuestionGenerationCountDraft(event.target.value)}
-                      disabled={questionBankGenerationBusy}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Type</span>
-                    <select value={questionGenerationType} onChange={(event) => setQuestionGenerationType(event.target.value)} disabled={questionBankGenerationBusy}>
-                      <option value="surprise">Surprise me</option>
-                      <option value="all">All allowed types</option>
-                      {(questionGenerationProfile.questionTypes || []).map((type) => (
-                        <option key={type} value={type}>{type}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Category</span>
-                    <select value={questionGenerationCategory} onChange={(event) => setQuestionGenerationCategory(event.target.value)} disabled={questionBankGenerationBusy}>
-                      <option value="surprise">Surprise me</option>
-                      <option value="all">All categories</option>
-                      {(questionGenerationProfile.categories || []).map((category) => (
-                        <option key={category} value={category}>{category}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Tone</span>
-                    <select value={questionGenerationTone} onChange={(event) => setQuestionGenerationTone(event.target.value)} disabled={questionBankGenerationBusy}>
-                      <option value="surprise">Surprise me</option>
-                      <option value="mixed">Mixed</option>
-                      {QUESTION_BANK_GENERATION_TONE_OPTIONS.map((tone) => (
-                        <option key={tone} value={tone}>{tone}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Intensity</span>
-                    <select value={questionGenerationIntensity} onChange={(event) => setQuestionGenerationIntensity(event.target.value)} disabled={questionBankGenerationBusy}>
-                      <option value="surprise">Surprise me</option>
-                      <option value="mixed">Mixed</option>
-                      <option value="1">1 Gentle</option>
-                      <option value="2">2 Warm</option>
-                      <option value="3">3 Playful</option>
-                      <option value="4">4 Cheeky</option>
-                      <option value="5">5 Spicy</option>
-                    </select>
-                  </label>
-                  <label className="field field-wide">
-                    <span>Brief</span>
-                    <input
-                      type="text"
-                      value={questionGenerationBrief}
-                      onChange={(event) => setQuestionGenerationBrief(event.target.value)}
-                      placeholder="Surprise me, or add a theme to steer this batch"
-                      disabled={questionBankGenerationBusy}
-                    />
-                  </label>
-                  <Button className="primary-button compact question-bank-generate-button" onClick={handleGenerateQuestionBankQuestions} disabled={questionBankGenerationBusy}>
-                    Create Questions
-                  </Button>
-                  {questionUploadDraft?.generatedBy === 'gemini' && questionUploadReport && !questionUploadReport.canUpload ? (
-                    <Button className="ghost-button compact question-bank-repair-button" onClick={handleRepairGeneratedQuestionBankDraft} disabled={questionBankGenerationBusy}>
-                      Repair Draft
-                    </Button>
-                  ) : null}
-                </div>
+              <div className="question-bank-upload-panel" aria-label={questionBankSegment === 'upload' ? 'Question upload tools' : 'AI question generator'}>
+                {questionBankSegment === 'upload' ? (
+                  <>
+                    <div className="question-bank-upload-copy">
+                      <p className="eyebrow">Manual Upload</p>
+                      <h3>{questionUploadTarget.gameName}</h3>
+                      <span>Choose the game, download the matching files, copy the matching prompt, then check and upload a CSV into Firebase.</span>
+                    </div>
+                    <div className="question-bank-upload-controls question-bank-upload-controls--manual">
+                      <label className="field">
+                        <span>Game</span>
+                        <select value={questionUploadTarget.bankType} onChange={handleQuestionUploadTargetChange} disabled={questionBankGenerationBusy}>
+                          {QUESTION_BANK_SYNC_TARGETS.map((target) => (
+                            <option key={target.bankType} value={target.bankType}>{target.gameName}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Upload Mode</span>
+                        <select value={questionUploadMode} onChange={handleQuestionUploadModeChange} disabled={questionBankGenerationBusy}>
+                          <option value="add">Add new questions only</option>
+                          <option value="upsert">Add new + update matches</option>
+                          <option value="replace">Replace active bank</option>
+                        </select>
+                      </label>
+                      <Button className="ghost-button compact" onClick={handleDownloadQuestionUploadTemplate} disabled={questionBankGenerationBusy}>
+                        Download Blank Sheet
+                      </Button>
+                      <Button className="ghost-button compact" onClick={handleDownloadRemainingQuestions} disabled={questionBankGenerationBusy || !questionBankRemainingExportQuestions.length}>
+                        Download Current Questions
+                      </Button>
+                      <Button className="ghost-button compact" onClick={handleCopyQuestionUploadPrompt} disabled={questionBankGenerationBusy}>
+                        Copy Prompt
+                      </Button>
+                      <input
+                        ref={questionUploadInputRef}
+                        className="question-bank-upload-input"
+                        type="file"
+                        accept=".csv,text/csv"
+                        onChange={handleQuestionUploadFileChange}
+                      />
+                      <Button className="ghost-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={questionBankGenerationBusy}>
+                        Choose CSV
+                      </Button>
+                      <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={questionBankGenerationBusy || !questionUploadDraft?.rawText || !questionUploadReport?.canUpload}>
+                        Submit Upload
+                      </Button>
+                      <label className="field field-wide question-bank-upload-prompt-field">
+                        <span>Prompt</span>
+                        <textarea readOnly value={questionUploadPromptText} rows={8} />
+                      </label>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="question-bank-upload-copy">
+                      <p className="eyebrow">AI Question Generator</p>
+                      <h3>{questionUploadTarget.gameName}</h3>
+                      <span>Generate questions with Gemini, then the app checks, repairs once if needed, and adds valid new rows straight into Firebase.</span>
+                    </div>
+                    <div className="question-bank-upload-controls">
+                      <label className="field question-bank-generator-count">
+                        <span>Number</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="50"
+                          step="1"
+                          value={questionGenerationCountDraft}
+                          onChange={(event) => setQuestionGenerationCountDraft(event.target.value)}
+                          disabled={questionBankGenerationBusy}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Type</span>
+                        <select value={questionGenerationType} onChange={(event) => setQuestionGenerationType(event.target.value)} disabled={questionBankGenerationBusy}>
+                          <option value="surprise">Surprise me</option>
+                          <option value="all">All allowed types</option>
+                          {(questionGenerationProfile.questionTypes || []).map((type) => (
+                            <option key={type} value={type}>{type}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Category</span>
+                        <select value={questionGenerationCategory} onChange={(event) => setQuestionGenerationCategory(event.target.value)} disabled={questionBankGenerationBusy}>
+                          <option value="surprise">Surprise me</option>
+                          <option value="all">All categories</option>
+                          {(questionGenerationProfile.categories || []).map((category) => (
+                            <option key={category} value={category}>{category}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Tone</span>
+                        <select value={questionGenerationTone} onChange={(event) => setQuestionGenerationTone(event.target.value)} disabled={questionBankGenerationBusy}>
+                          <option value="surprise">Surprise me</option>
+                          <option value="mixed">Mixed</option>
+                          {QUESTION_BANK_GENERATION_TONE_OPTIONS.map((tone) => (
+                            <option key={tone} value={tone}>{tone}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Intensity</span>
+                        <select value={questionGenerationIntensity} onChange={(event) => setQuestionGenerationIntensity(event.target.value)} disabled={questionBankGenerationBusy}>
+                          <option value="surprise">Surprise me</option>
+                          <option value="mixed">Mixed</option>
+                          <option value="1">1 Gentle</option>
+                          <option value="2">2 Warm</option>
+                          <option value="3">3 Playful</option>
+                          <option value="4">4 Cheeky</option>
+                          <option value="5">5 Spicy</option>
+                        </select>
+                      </label>
+                      <label className="field field-wide">
+                        <span>Brief</span>
+                        <input
+                          type="text"
+                          value={questionGenerationBrief}
+                          onChange={(event) => setQuestionGenerationBrief(event.target.value)}
+                          placeholder="Surprise me, or add a theme to steer this batch"
+                          disabled={questionBankGenerationBusy}
+                        />
+                      </label>
+                      <Button className="primary-button compact question-bank-generate-button" onClick={handleGenerateQuestionBankQuestions} disabled={questionBankGenerationBusy}>
+                        Create Questions
+                      </Button>
+                      {questionUploadDraft?.generatedBy === 'gemini' && questionUploadReport && !questionUploadReport.canUpload ? (
+                        <Button className="ghost-button compact question-bank-repair-button" onClick={handleRepairGeneratedQuestionBankDraft} disabled={questionBankGenerationBusy}>
+                          Repair Draft
+                        </Button>
+                      ) : null}
+                    </div>
+                  </>
+                )}
                 {questionUploadProgress.status !== 'idle' ? (
                   <div className={`question-bank-upload-progress is-${questionUploadProgress.status}`}>
                     <div className="question-bank-upload-progress-head">
                       <strong>
-                        {questionUploadDraft?.fileName || (questionUploadProgress.status === 'done' ? 'Questions added' : 'Question generation')}
+                        {questionUploadDraft?.fileName || (questionUploadProgress.status === 'done' ? 'Questions added' : questionBankSegment === 'upload' ? 'Upload tools' : 'Question generation')}
                       </strong>
                       {questionUploadDraft ? (
                         <button type="button" onClick={handleClearQuestionUploadDraft} disabled={questionBankGenerationBusy}>
