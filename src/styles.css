@@ -5902,6 +5902,22 @@ button:disabled {
   gap: 8px;
 }
 
+.chat-panel-actions,
+.compact-chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.compact-chat-head {
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .room-panel {
   align-content: start;
 }

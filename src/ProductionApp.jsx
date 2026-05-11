@@ -2024,6 +2024,8 @@ const defaultAmaAnswerDraft = () => ({ answer: '', story: '', media: [], related
 const activeGameKey = 'kjk-active-game-id';
 const pendingDeletedGamesKey = 'kjk-pending-deleted-game-ids';
 const editingModeKey = 'kjk-editing-mode';
+const lobbyChatMutedKey = 'kjk-lobby-chat-muted';
+const roomChatMutedKey = 'kjk-room-chat-muted';
 const questionBankMetaId = 'question-bank-source';
 const EDITING_MODE_PIN = '0000';
 const QUESTION_BANK_PIN = '0000';
@@ -2037,6 +2039,16 @@ const fixedPlayerUids = {
 const getSafeInitialDashboardTab = (value) => {
   const nextTab = normalizeText(value) || 'gameLobby';
   return nextTab === 'questionBank' ? 'gameLobby' : nextTab;
+};
+const readStoredBoolean = (key = '', fallbackValue = false) => {
+  if (!key || typeof window === 'undefined') return fallbackValue;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return fallbackValue;
+    return raw === 'true';
+  } catch {
+    return fallbackValue;
+  }
 };
 const normalizeIdentity = (value) => normalizeText(value).toLowerCase();
 const seatFromPlayerRef = (value) => {
@@ -7323,6 +7335,69 @@ function useChatUnreadCount(messages, isOpen, currentUserId = '', resetKey = '')
   return unreadCount;
 }
 
+let chatNotificationAudioContext = null;
+
+const playChatNotificationTone = async () => {
+  if (typeof window === 'undefined') return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  if (!chatNotificationAudioContext) {
+    chatNotificationAudioContext = new AudioContextClass();
+  }
+  const context = chatNotificationAudioContext;
+  if (!context) return;
+  if (context.state === 'suspended') {
+    try {
+      await context.resume();
+    } catch {
+      return;
+    }
+  }
+  const now = context.currentTime;
+  const oscillator = context.createOscillator();
+  const gainNode = context.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.setValueAtTime(880, now);
+  oscillator.frequency.exponentialRampToValueAtTime(660, now + 0.12);
+  gainNode.gain.setValueAtTime(0.0001, now);
+  gainNode.gain.exponentialRampToValueAtTime(0.045, now + 0.01);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+  oscillator.connect(gainNode);
+  gainNode.connect(context.destination);
+  oscillator.start(now);
+  oscillator.stop(now + 0.17);
+};
+
+function useChatNotificationSound(messages, currentUserId = '', muted = false, resetKey = '') {
+  const lastObservedMessageIdRef = useRef('');
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    lastObservedMessageIdRef.current = '';
+    initializedRef.current = false;
+  }, [resetKey]);
+
+  useEffect(() => {
+    const lastMessageId = messages.at(-1)?.id || '';
+    if (!initializedRef.current) {
+      lastObservedMessageIdRef.current = lastMessageId;
+      initializedRef.current = true;
+      return;
+    }
+    if (!lastMessageId || lastMessageId === lastObservedMessageIdRef.current) return;
+
+    const previousMessageId = lastObservedMessageIdRef.current;
+    const previousMessageIndex = previousMessageId
+      ? messages.findIndex((message) => message.id === previousMessageId)
+      : -1;
+    const newMessages = previousMessageIndex >= 0 ? messages.slice(previousMessageIndex + 1) : messages;
+    const hasIncomingMessage = newMessages.some((message) => String(message?.uid || '') !== String(currentUserId || ''));
+    lastObservedMessageIdRef.current = lastMessageId;
+    if (!hasIncomingMessage || muted) return;
+    playChatNotificationTone().catch(() => null);
+  }, [currentUserId, messages, muted]);
+}
+
 function MobileChatLauncher({
   title = 'Chat',
   isOpen,
@@ -7336,6 +7411,8 @@ function MobileChatLauncher({
   isBusy,
   seat,
   displayName,
+  soundMuted = false,
+  onToggleSound,
 }) {
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -7409,6 +7486,9 @@ function MobileChatLauncher({
               isBusy={isBusy}
               seat={seat}
               displayName={displayName}
+              title={title}
+              soundMuted={soundMuted}
+              onToggleSound={onToggleSound}
             />
           </section>
         </div>
@@ -7784,6 +7864,8 @@ function LobbyScreen({
   isLobbyChatSending,
   setLobbyChatDraft,
   sendLobbyChat,
+  lobbyChatMuted = false,
+  onToggleLobbyChatMuted,
 
   onEndGame,
   onDeleteGame,
@@ -7981,6 +8063,12 @@ function LobbyScreen({
     lobbyChatMessages,
     mobileLobbyChatOpen,
     user?.uid || '',
+    `${activeTab}:${user?.uid || ''}`,
+  );
+  useChatNotificationSound(
+    lobbyChatMessages,
+    user?.uid || '',
+    lobbyChatMuted,
     `${activeTab}:${user?.uid || ''}`,
   );
 
@@ -11298,6 +11386,9 @@ function LobbyScreen({
                       onSend={sendLobbyChat}
                       isBusy={isLobbyChatSending}
                       displayName={lobbyChatDisplayName}
+                      title="Lobby Chat"
+                      soundMuted={lobbyChatMuted}
+                      onToggleSound={onToggleLobbyChatMuted}
                     />
                   </section>
                 ) : null}
@@ -13012,6 +13103,8 @@ function LobbyScreen({
           onSend={sendLobbyChat}
           isBusy={isLobbyChatSending}
           displayName={lobbyChatDisplayName}
+          soundMuted={lobbyChatMuted}
+          onToggleSound={onToggleLobbyChatMuted}
         />
       ) : null}
 
@@ -14153,6 +14246,8 @@ function QuizSetupStagePanel({
   onMarkReady,
   isBusy,
   chatIsBusy = false,
+  roomChatMuted = false,
+  onToggleRoomChatMuted,
 }) {
   const [nowMs, setNowMs] = useState(Date.now());
   const [optimisticWheelRequesterId, setOptimisticWheelRequesterId] = useState('');
@@ -14512,6 +14607,9 @@ function QuizSetupStagePanel({
                     isBusy={chatIsBusy}
                     seat={currentPlayer}
                     displayName={chatDisplayName}
+                    title="Room Chat"
+                    soundMuted={roomChatMuted}
+                    onToggleSound={onToggleRoomChatMuted}
                   />
                 </div>
               </div>
@@ -15585,6 +15683,8 @@ function RoomActiveFrameBase({
   chatDisplayName = '',
   isBusy,
   chatIsBusy = false,
+  roomChatMuted = false,
+  onToggleRoomChatMuted,
 }) {
   const compatibilityFinalReveal = isCompatibilityFinalRevealRound(currentRound || {});
   const compatibilityRevealRounds = compatibilityFinalReveal ? (currentRound?.compatibilityRevealRounds || []) : [];
@@ -16299,6 +16399,9 @@ function RoomActiveFrameBase({
                   isBusy={chatIsBusy}
                   seat={chatSeat || currentPlayer}
                   displayName={chatDisplayName || viewerLabel}
+                  title="Room Chat"
+                  soundMuted={roomChatMuted}
+                  onToggleSound={onToggleRoomChatMuted}
                 />
               </section>
             ) : null}
@@ -16430,6 +16533,11 @@ function ChatPanel({
   emptyCopy = 'No chat yet. Send a message to the other player here.',
   placeholderText = '',
   sendLabel = 'Send',
+  title = 'Room Chat',
+  subtitle = 'Both Players',
+  statusLabel = '',
+  soundMuted = false,
+  onToggleSound,
 }) {
   const chatLogRef = useRef(null);
   const composerInputRef = useRef(null);
@@ -16441,6 +16549,7 @@ function ChatPanel({
   const chatScrollRafRef = useRef(null);
   // Guard to prevent double-send when Enter is pressed rapidly or key events fire multiple times
   const sendLockRef = useRef(false);
+  const effectiveStatusLabel = statusLabel || (seat ? (seat === 'jay' ? 'Host chat' : 'Player chat') : '');
 
   const syncChatScrollState = (node, lastMessageId = chatScrollStateRef.current.lastMessageId) => {
     const maxScrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
@@ -16533,10 +16642,27 @@ function ChatPanel({
       {!compact ? (
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Room Chat</p>
-            <h2>Both Players</h2>
+            <p className="eyebrow">{title}</p>
+            <h2>{subtitle}</h2>
           </div>
-          <span className="status-pill">{seat === 'jay' ? 'Host chat' : 'Player chat'}</span>
+          <div className="chat-panel-actions">
+            {effectiveStatusLabel ? <span className="status-pill">{effectiveStatusLabel}</span> : null}
+            {typeof onToggleSound === 'function' ? (
+              <Button type="button" className={`ghost-button compact ${!soundMuted ? 'is-on' : ''}`} onClick={onToggleSound}>
+                {soundMuted ? 'Unmute' : 'Mute'}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {compact && (title || typeof onToggleSound === 'function') ? (
+        <div className="compact-chat-head">
+          <strong>{title || 'Chat'}</strong>
+          {typeof onToggleSound === 'function' ? (
+            <Button type="button" className={`ghost-button compact ${!soundMuted ? 'is-on' : ''}`} onClick={onToggleSound}>
+              {soundMuted ? 'Unmute' : 'Mute'}
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
@@ -16548,7 +16674,7 @@ function ChatPanel({
         aria-relevant="additions"
         onScroll={(event) => syncChatScrollState(event.currentTarget)}
       >
-        {messages.length ? (
+      {messages.length ? (
           messages.map((message) => (
             <article className={`chat-message ${message.seat || 'neutral'}`} key={message.id}>
               <div className="chat-message-head">
@@ -17036,6 +17162,8 @@ function HoldemGameRoom({
   setChatDraft,
   onSendChat,
   chatIsBusy,
+  roomChatMuted = false,
+  onToggleRoomChatMuted,
   confirmAction,
   onConfirmAction,
   onCancelAction,
@@ -17226,6 +17354,11 @@ function HoldemGameRoom({
               emptyCopy="No Hold’em chat yet. Send a message to the other player here."
               placeholderText="Message at the poker table"
               sendLabel="Send"
+              title="Table Chat"
+              subtitle="Both Players"
+              statusLabel={resolvedViewerSeat === 'jay' ? 'Host chat' : 'Player chat'}
+              soundMuted={roomChatMuted}
+              onToggleSound={onToggleRoomChatMuted}
             />
           </div>
         </section>
@@ -19968,6 +20101,8 @@ function GameRoomView({
   setChatDraft,
   onSendChat,
   chatIsBusy = false,
+  roomChatMuted = false,
+  onToggleRoomChatMuted,
   onReconnectLiveRoom,
   onSaveQuestionNote,
   onSaveQuestionFeedback,
@@ -20164,6 +20299,12 @@ function GameRoomView({
     chatMessages,
     mobileRoomChatOpen,
     user?.uid || '',
+    `${game?.id || ''}:${resolvedViewerSeat}`,
+  );
+  useChatNotificationSound(
+    chatMessages,
+    user?.uid || '',
+    roomChatMuted,
     `${game?.id || ''}:${resolvedViewerSeat}`,
   );
   const currentFeedbackValue = useMemo(() => {
@@ -20511,6 +20652,8 @@ function GameRoomView({
         setChatDraft={setChatDraft}
         onSendChat={onSendChat}
         chatIsBusy={chatIsBusy}
+        roomChatMuted={roomChatMuted}
+        onToggleRoomChatMuted={() => setRoomChatMuted((current) => !current)}
         confirmAction={confirmAction}
         onConfirmAction={onConfirmAction}
         onCancelAction={onCancelAction}
@@ -20638,11 +20781,13 @@ function GameRoomView({
                   chatMessages={chatMessages}
                   chatDraft={chatDraft}
                   onChatDraftChange={setChatDraft}
-                  onSendChat={onSendChat}
-                  chatSeat={seat}
-                  chatDisplayName={roomChatDisplayName}
+	                  onSendChat={onSendChat}
+	                  chatSeat={seat}
+	                  chatDisplayName={roomChatDisplayName}
 	                  isBusy={isBusy}
                     chatIsBusy={chatIsBusy}
+                    roomChatMuted={roomChatMuted}
+                    onToggleRoomChatMuted={() => setRoomChatMuted((current) => !current)}
 	                />
 	              ) : showQuizSetupPanel ? (
 	                <QuizSetupStagePanel
@@ -20664,6 +20809,8 @@ function GameRoomView({
                     onMarkReady={onMarkReady}
                     isBusy={isBusy}
                     chatIsBusy={chatIsBusy}
+                    roomChatMuted={roomChatMuted}
+                    onToggleRoomChatMuted={() => setRoomChatMuted((current) => !current)}
                   />
 	              ) : (
                 <MainScoreboard16x9 rounds={rounds} selectedQuestion={currentQuestion} form={boardForm} editingRound={null} liveTotals={liveTotals} joinedSeats={game?.seats || {}} />
@@ -20719,6 +20866,8 @@ function GameRoomView({
             isBusy={chatIsBusy}
             seat={resolvedViewerSeat}
             displayName={roomChatDisplayName}
+            soundMuted={roomChatMuted}
+            onToggleSound={() => setRoomChatMuted((current) => !current)}
           />
         ) : null}
         {role === 'host' && !gameEnded ? (
@@ -21001,6 +21150,8 @@ function GameRoomView({
               chatDisplayName={roomChatDisplayName}
 	              isBusy={isBusy}
               chatIsBusy={chatIsBusy}
+              roomChatMuted={roomChatMuted}
+              onToggleRoomChatMuted={() => setRoomChatMuted((current) => !current)}
 	            />
 	          ) : showQuizSetupPanel ? (
             <QuizSetupStagePanel
@@ -21022,6 +21173,8 @@ function GameRoomView({
               onMarkReady={onMarkReady}
               isBusy={isBusy}
               chatIsBusy={chatIsBusy}
+              roomChatMuted={roomChatMuted}
+              onToggleRoomChatMuted={() => setRoomChatMuted((current) => !current)}
             />
 	          ) : (
             <MainScoreboard16x9 rounds={rounds} selectedQuestion={currentQuestion} form={boardForm} editingRound={null} liveTotals={liveTotals} joinedSeats={game?.seats || {}} />
@@ -21049,6 +21202,9 @@ function GameRoomView({
             isBusy={chatIsBusy}
             seat={seat}
             displayName={roomChatDisplayName}
+            title="Room Chat"
+            soundMuted={roomChatMuted}
+            onToggleSound={() => setRoomChatMuted((current) => !current)}
           />
         </section>
         ) : null}
@@ -21144,6 +21300,8 @@ function ProductionApp() {
   const [chatDraft, setChatDraft] = useState(defaultChatDraft);
   const [lobbyChatMessages, setLobbyChatMessages] = useState([]);
   const [lobbyChatDraft, setLobbyChatDraft] = useState(defaultChatDraft);
+  const [lobbyChatMuted, setLobbyChatMuted] = useState(() => readStoredBoolean(lobbyChatMutedKey, false));
+  const [roomChatMuted, setRoomChatMuted] = useState(() => readStoredBoolean(roomChatMutedKey, false));
   const [aiChatMessages, setAiChatMessages] = useState([]);
   const [aiChatSessions, setAiChatSessions] = useState([]);
   const [optimisticAiChatMessages, setOptimisticAiChatMessages] = useState([]);
@@ -21170,6 +21328,12 @@ function ProductionApp() {
   const lowQuestionBankWarningShownRef = useRef('');
   const surpriseRevealStartRef = useRef('');
   const surpriseRevealFinalizeRef = useRef('');
+  useEffect(() => {
+    safeLocalStorageSet(lobbyChatMutedKey, lobbyChatMuted ? 'true' : 'false');
+  }, [lobbyChatMuted]);
+  useEffect(() => {
+    safeLocalStorageSet(roomChatMutedKey, roomChatMuted ? 'true' : 'false');
+  }, [roomChatMuted]);
   const [surpriseRevealNowMs, setSurpriseRevealNowMs] = useState(() => Date.now());
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
@@ -32262,6 +32426,8 @@ function ProductionApp() {
         onImportMemoryLaneQuestions={importMemoryLaneSheet}
         onResumeGame={resumeGame}
         onViewSummary={setSelectedGameId}
+        lobbyChatMuted={lobbyChatMuted}
+        onToggleLobbyChatMuted={() => setLobbyChatMuted((current) => !current)}
         onEndGame={requestEndGame}
         onDeleteGame={requestDeleteGame}
         onResetBalances={resetLifetimeBalancesAction}
