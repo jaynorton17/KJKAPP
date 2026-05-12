@@ -7870,6 +7870,7 @@ function LobbyScreen({
   isLobbyChatSending,
   setLobbyChatDraft,
   sendLobbyChat,
+  clearLobbyChat,
   lobbyChatMuted = false,
   onToggleLobbyChatMuted,
 
@@ -32567,6 +32568,7 @@ function ProductionApp() {
         isLobbyChatSending={isLobbyChatSending}
         setLobbyChatDraft={setLobbyChatDraft}
         sendLobbyChat={sendLobbyChat}
+        clearLobbyChat={clearLobbyChat}
       />
     );
   }
