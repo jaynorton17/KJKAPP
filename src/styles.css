@@ -322,12 +322,14 @@ button:disabled {
 
 .lobby-browser-card-main--compact-art {
   align-content: end;
+  justify-items: end;
   padding: 14px;
 }
 
 .lobby-browser-card-actions {
-  width: 100%;
-  justify-content: center;
+  width: auto;
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .lobby-browser-card-actions .compact {

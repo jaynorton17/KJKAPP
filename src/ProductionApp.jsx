@@ -10489,10 +10489,10 @@ function LobbyScreen({
                     <Button
                       type="button"
                       className="ghost-button compact"
-                      onClick={() => actionHandlers?.create ? actionHandlers.create() : focusLobbyCard(card.id)}
+                      onClick={() => focusLobbyCard(card.id)}
                       disabled={isBusy}
                     >
-                      Create
+                      Details
                     </Button>
                     <Button
                       type="button"
@@ -10500,7 +10500,7 @@ function LobbyScreen({
                       onClick={() => actionHandlers?.invite ? actionHandlers.invite() : focusLobbyCard(card.id)}
                       disabled={isBusy}
                     >
-                      Invite
+                      Create + Invite
                     </Button>
                   </div>
                 </div>
