@@ -321,13 +321,15 @@ button:disabled {
 }
 
 .lobby-browser-card-main--compact-art {
-  align-content: end;
-  justify-items: end;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
   padding: 14px;
 }
 
 .lobby-browser-card-actions {
   width: auto;
+  align-items: flex-end;
   justify-content: flex-end;
   margin-left: auto;
 }
