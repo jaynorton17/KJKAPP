@@ -2055,7 +2055,7 @@ const getSafeInitialActivityTab = (value, dashboardValue) => {
 };
 const getSafeInitialLobbyShowcaseSection = (value) => {
   const nextSection = normalizeText(value);
-  if (['friends', 'trending', 'featured', 'all', 'favourites'].includes(nextSection)) return nextSection;
+  if (['trending', 'featured', 'all', 'favourites'].includes(nextSection)) return nextSection;
   return 'featured';
 };
 const readStoredLobbyFavouriteIds = () => {
@@ -10744,10 +10744,19 @@ function LobbyScreen({
 	    <main className={`app production-app ${isMobileDashboardNav ? 'mobile-app' : ''}`}>
 	      <header className="top-bar top-bar--shell">
         {!isMobileDashboardNav ? (
-          <div className="top-bar-left">
+          <div className="top-bar-left top-bar-left--profile-stack">
             <Button className="ghost-button compact" onClick={() => setIsProfileOpen(true)}>
               My Profile
             </Button>
+            <button
+              type="button"
+              className="top-profile-shortcut top-profile-shortcut--friend"
+              onClick={() => setIsProfileOpen(true)}
+              aria-label="Add friend"
+              title="Add friend"
+            >
+              {renderDashboardIcon('personPlus')}
+            </button>
           </div>
         ) : null}
         <div className="brand-lockup">
@@ -10893,7 +10902,6 @@ function LobbyScreen({
             <section className="dashboard-subnav-shell dashboard-subnav-shell--lobby-menu lobby-showcase-menu-shell">
               <div className="dashboard-subnav lobby-showcase-menu" role="tablist" aria-label="Lobby sections">
                 {[
-                  { id: 'friends', label: 'Add Friend', icon: 'personPlus' },
                   { id: 'trending', label: 'Trending Games', icon: 'trend' },
                   { id: 'featured', label: 'Featured Games', icon: 'spark' },
                   { id: 'all', label: 'All Games', icon: 'controller' },
@@ -10911,59 +10919,6 @@ function LobbyScreen({
                 ))}
               </div>
             </section>
-            {lobbyShowcaseSection === 'friends' ? (
-              <section className="panel lobby-panel lobby-panel--lobby lobby-friends-panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">Friends</p>
-                    <h2>Add Friend</h2>
-                  </div>
-                  <span className="status-pill">{friendProfiles.length}</span>
-                </div>
-                <p className="panel-copy">Add Kim or another player here by username or email. Once added, `Invite Friend` becomes the main way to start games.</p>
-                <div className="lobby-friends-grid">
-                  <label className="field lobby-friends-field">
-                    <span>Username or email</span>
-                    <input
-                      value={friendLookupDraft}
-                      onChange={(event) => setFriendLookupDraft(event.target.value)}
-                      placeholder="kim or kim@example.com"
-                    />
-                  </label>
-                  <div className="button-row lobby-friends-actions">
-                    <Button
-                      className="primary-button compact"
-                      onClick={async () => {
-                        const added = await onAddFriend?.(friendLookupDraft);
-                        if (added !== false) setFriendLookupDraft('');
-                      }}
-                      disabled={isBusy || !normalizeText(friendLookupDraft)}
-                    >
-                      Add Friend
-                    </Button>
-                    <Button
-                      className="ghost-button compact"
-                      onClick={() => setIsProfileOpen(true)}
-                      disabled={isBusy}
-                    >
-                      Manage Friends
-                    </Button>
-                  </div>
-                </div>
-                <div className="mini-list">
-                  {friendProfiles.length ? (
-                    friendProfiles.slice(0, 4).map((friend) => (
-                      <article className="mini-list-row" key={`lobby-friend-${friend.uid}`}>
-                        <strong>{friend.displayName || friend.email || 'Friend'}</strong>
-                        <small>{friend.email || friend.uid}</small>
-                      </article>
-                    ))
-                  ) : (
-                    <p className="empty-copy">No friends added yet.</p>
-                  )}
-                </div>
-              </section>
-            ) : null}
             {lobbyShowcaseSection === 'trending' ? renderLobbyGameBrowser({
               eyebrow: 'Trending Games',
               title: 'Most Played Right Now',

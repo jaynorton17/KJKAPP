@@ -12972,6 +12972,35 @@ select:focus-visible {
   align-self: start;
 }
 
+.top-bar-left--profile-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.top-profile-shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
+  min-height: 46px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgba(255, 53, 93, 0.18), rgba(45, 91, 255, 0.18)),
+    rgba(7, 17, 35, 0.86);
+  color: #fff;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.top-profile-shortcut .dashboard-pill-icon {
+  width: 20px;
+  height: 20px;
+}
+
 .brand-lockup {
   grid-area: brand;
   display: flex;
