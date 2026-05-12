@@ -398,7 +398,7 @@ button:disabled {
   display: grid;
   gap: 14px;
   min-width: 0;
-  width: 100%;
+  width: min(1480px, 100%);
   align-content: start;
   margin-inline: auto;
 }
@@ -406,6 +406,7 @@ button:disabled {
 .lobby-carousel-stage {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: 1fr;
   gap: 14px;
   align-items: stretch;
 }
@@ -420,6 +421,7 @@ button:disabled {
 
 .lobby-carousel-slide--center {
   grid-column: 2;
+  grid-row: 1;
   opacity: 1;
   transform: scale(1);
   pointer-events: auto;
@@ -434,11 +436,13 @@ button:disabled {
 
 .lobby-carousel-slide--left {
   grid-column: 1;
+  grid-row: 1;
   transform: scale(0.98);
 }
 
 .lobby-carousel-slide--right {
   grid-column: 3;
+  grid-row: 1;
   transform: scale(0.98);
 }
 
@@ -896,6 +900,7 @@ button:disabled {
   }
   .lobby-carousel-stage {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: 1fr;
     gap: 12px;
   }
   .lobby-carousel-slide {
@@ -957,6 +962,7 @@ button:disabled {
 
   .lobby-carousel-stage {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: 1fr;
     gap: 10px;
   }
 
