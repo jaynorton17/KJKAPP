@@ -7504,7 +7504,7 @@ function MobileChatLauncher({
           >
             <div className="mobile-chat-sheet__head">
               <div>
-                <p className="eyebrow">Mobile Chat</p>
+                <p className="eyebrow">Chat</p>
                 <h2>{title}</h2>
               </div>
               <Button className="ghost-button compact" onClick={onClose}>
@@ -11834,25 +11834,6 @@ function LobbyScreen({
               </section>
 
 
-                {!isMobileDashboardNav ? (
-                  <section className="panel lobby-panel lobby-panel--lobby lobby-chat-card">
-                    <ChatPanel
-                      compact
-                      messages={lobbyChatMessages}
-                      draft={lobbyChatDraft}
-                      onDraftChange={setLobbyChatDraft}
-                      onSend={sendLobbyChat}
-                      isBusy={isLobbyChatSending}
-                      displayName={lobbyChatDisplayName}
-                      title="Lobby Chat"
-                      soundMuted={lobbyChatMuted}
-                      onToggleSound={onToggleLobbyChatMuted}
-                      clearLabel="Clear Chat"
-                      onClear={clearLobbyChat}
-                      clearDisabled={isLobbyChatSending || !lobbyChatMessages.length}
-                    />
-                  </section>
-                ) : null}
 </div>
 
           </section>
@@ -13641,7 +13622,7 @@ function LobbyScreen({
         </section>
       ) : null}
 
-      {isMobileDashboardNav && activeTab === 'gameLobby' ? (
+      {activeTab === 'gameLobby' ? (
         <MobileChatLauncher
           title="Lobby Chat"
           isOpen={mobileLobbyChatOpen}

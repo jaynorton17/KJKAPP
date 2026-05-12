@@ -6266,12 +6266,8 @@ button:disabled {
   resize: none;
 }
 
-.mobile-chat-fab,
-.mobile-host-tab {
-  display: none;
-}
-
 .mobile-chat-fab {
+  display: inline-flex;
   position: fixed;
   right: calc(env(safe-area-inset-right, 0px) + 12px);
   bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
@@ -6292,6 +6288,9 @@ button:disabled {
 
 .mobile-chat-fab.has-unread {
   border-color: rgba(255, 98, 98, 0.82);
+  background:
+    linear-gradient(135deg, rgba(255, 86, 108, 0.98), rgba(179, 18, 44, 0.96)),
+    rgba(8, 12, 24, 0.96);
   animation: mobile-chat-fab-pulse 1.35s ease-in-out infinite;
 }
 
@@ -6449,6 +6448,7 @@ button:disabled {
 }
 
 .mobile-host-tab {
+  display: none;
   position: fixed;
   left: 0;
   top: 50%;
