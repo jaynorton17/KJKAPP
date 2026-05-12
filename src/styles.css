@@ -203,6 +203,10 @@ button:disabled {
   --section-accent: #ff355d;
 }
 
+.lobby-showcase-menu-shell::before {
+  display: none;
+}
+
 .lobby-quick-actions-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
