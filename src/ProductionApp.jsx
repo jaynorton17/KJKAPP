@@ -2028,6 +2028,8 @@ const lobbyChatMutedKey = 'kjk-lobby-chat-muted';
 const roomChatMutedKey = 'kjk-room-chat-muted';
 const questionBankMetaId = 'question-bank-source';
 const ADMIN_EMAIL = 'admin@kjkapp.com';
+const FEATURED_LOBBY_CARD_COUNT = 3;
+const FEATURED_LOBBY_OFFSET_STORAGE_KEY = 'kjk-featured-lobby-offset';
 const TEST_GAME_PREFIX = 'test-game-';
 const TEST_MODE_PLAYER_UID = 'editing-mode-kim';
 const TEST_MODE_PLAYER_NAME = 'Kim (Test)';
@@ -8002,6 +8004,7 @@ function LobbyScreen({
   const [randomLobbyPickerState, setRandomLobbyPickerState] = useState(null);
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
   const [lobbyTileImagesEnabled, setLobbyTileImagesEnabled] = useState(false);
+  const [featuredLobbyCardStartIndex, setFeaturedLobbyCardStartIndex] = useState(0);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [questionUploadBankType, setQuestionUploadBankType] = useState('game');
@@ -8033,6 +8036,7 @@ function LobbyScreen({
   const questionUploadInputRef = useRef(null);
   const lobbyCarouselTouchStartXRef = useRef(null);
   const lobbyCarouselTouchInteractiveRef = useRef(false);
+  const featuredLobbyRotationAppliedRef = useRef(false);
   const isMobileDashboardNav = useMediaQuery('(max-width: 900px)');
   const pendingInviteCount = useMemo(() => {
     if (!Array.isArray(gameInvites)) return 0;
@@ -9934,27 +9938,64 @@ function LobbyScreen({
     { id: 'compatibilityMeter', label: 'Compatibility Meter', image: compatibilityTileImage },
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
-
+  const lobbyAccessibleCards = lobbyCarouselCards.filter((card) => card.id !== 'holdem');
+  const featuredLobbyCards = Array.from({ length: Math.min(FEATURED_LOBBY_CARD_COUNT, lobbyAccessibleCards.length) }, (_, index) => (
+    lobbyAccessibleCards[(featuredLobbyCardStartIndex + index) % lobbyAccessibleCards.length]
+  )).filter(Boolean);
   const getLobbyCarouselCardIndex = (cardId) =>
-    Math.max(0, lobbyCarouselCards.findIndex((card) => card.id === cardId));
-  const lobbyCarouselCount = lobbyCarouselCards.length;
+    featuredLobbyCards.findIndex((card) => card.id === cardId);
+  const lobbyCarouselCount = featuredLobbyCards.length;
   const moveLobbyCarousel = (direction) => {
     setOpenLobbyTileInfoId('');
+    if (!lobbyCarouselCount) return;
     setLobbyCarouselIndex((current) => (current + direction + lobbyCarouselCount) % lobbyCarouselCount);
   };
   const focusLobbyCard = (cardId) => {
     setOpenLobbyTileInfoId('');
+    const nextFeaturedIndex = getLobbyCarouselCardIndex(cardId);
+    const accessibleIndex = lobbyAccessibleCards.findIndex((card) => card.id === cardId);
+    if (accessibleIndex < 0) return;
     setLobbyBrowseMode('featured');
-    setLobbyCarouselIndex(getLobbyCarouselCardIndex(cardId));
+    if (nextFeaturedIndex >= 0) {
+      setLobbyCarouselIndex(nextFeaturedIndex);
+      return;
+    }
+    setFeaturedLobbyCardStartIndex(accessibleIndex);
+    setLobbyCarouselIndex(0);
   };
 
   const getLobbyCarouselPosition = (index) => {
+    if (index < 0 || !lobbyCarouselCount) return 'hidden';
     const offset = (index - lobbyCarouselIndex + lobbyCarouselCount) % lobbyCarouselCount;
     if (offset === 0) return 'center';
     if (offset === 1) return 'right';
     if (offset === lobbyCarouselCount - 1) return 'left';
     return 'hidden';
   };
+
+  useEffect(() => {
+    if (!lobbyAccessibleCards.length) return;
+    if (featuredLobbyRotationAppliedRef.current) return;
+    featuredLobbyRotationAppliedRef.current = true;
+    let nextStartIndex = 0;
+    try {
+      const storedRaw = Number.parseInt(window.localStorage.getItem(FEATURED_LOBBY_OFFSET_STORAGE_KEY) || '0', 10);
+      nextStartIndex = Number.isFinite(storedRaw) ? Math.max(0, storedRaw) % lobbyAccessibleCards.length : 0;
+      window.localStorage.setItem(
+        FEATURED_LOBBY_OFFSET_STORAGE_KEY,
+        String((nextStartIndex + FEATURED_LOBBY_CARD_COUNT) % lobbyAccessibleCards.length),
+      );
+    } catch {
+      nextStartIndex = 0;
+    }
+    setFeaturedLobbyCardStartIndex(nextStartIndex);
+    setLobbyCarouselIndex(0);
+  }, []);
+
+  useEffect(() => {
+    if (!lobbyCarouselCount) return;
+    setLobbyCarouselIndex((current) => Math.min(current, lobbyCarouselCount - 1));
+  }, [lobbyCarouselCount]);
 
   const handleLobbyCarouselTouchStart = (event) => {
     const touch = event.touches?.[0];
@@ -10283,23 +10324,24 @@ function LobbyScreen({
           <p className="eyebrow">All Games</p>
           <h2>Scan Every Mode</h2>
         </div>
-        <span className="status-pill">{lobbyCarouselCards.length} modes</span>
+        <span className="status-pill">{lobbyAccessibleCards.length} modes</span>
       </div>
-      <p className="panel-copy">Pick a game to jump straight to its setup card without swiping through the full carousel.</p>
+      <p className="panel-copy">Pick a game to jump straight to its setup card without swiping through the full featured rotation.</p>
       <div className="lobby-browser-grid">
-        {lobbyCarouselCards.map((card) => {
+        {lobbyAccessibleCards.map((card) => {
           const details = lobbyGameDetails?.[card.id];
-          const isActive = lobbyCarouselCards[lobbyCarouselIndex]?.id === card.id;
+          const isActive = featuredLobbyCards[lobbyCarouselIndex]?.id === card.id;
           return (
             <button
               key={card.id}
               type="button"
               className={`lobby-browser-card ${isActive ? 'is-active' : ''}`}
               onClick={() => focusLobbyCard(card.id)}
+              style={{ '--lobby-browser-image': `url("${card.image}")` }}
             >
               <strong>{card.label}</strong>
               <span>{lobbyCardReadyMeta[card.id] || 'Ready'}</span>
-              <small>{details?.howItWorks || 'Open setup'}</small>
+              <small>{details?.name || 'Open setup'}</small>
             </button>
           );
         })}
@@ -11567,7 +11609,7 @@ function LobbyScreen({
                 </div>
 
                 <div className="lobby-carousel-dots" role="tablist" aria-label="Game modes">
-                  {lobbyCarouselCards.map((card, index) => (
+                  {featuredLobbyCards.map((card, index) => (
                     <button
                       key={card.id}
                       type="button"
@@ -13199,6 +13241,7 @@ function LobbyScreen({
                 </div>
                 <span className="status-pill">{friendProfiles.length}</span>
               </div>
+              <p className="panel-copy">Add Kim here once by username or email. After that, every lobby game can use Invite Friend first, with private code left as the fallback.</p>
               <label className="field">
                 <span>Add by username or email</span>
                 <input
@@ -13216,7 +13259,7 @@ function LobbyScreen({
                   }}
                   disabled={isBusy || !normalizeText(friendLookupDraft)}
                 >
-                  Add Friend
+                  Add Friend To Invites
                 </Button>
               </div>
               <div className="mini-list">
