@@ -190,9 +190,9 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   min-height: 0;
-  width: min(100%, 980px);
+  width: min(1480px, 100%);
   margin-inline: auto;
-  justify-items: center;
+  justify-items: stretch;
 }
 
 .lobby-quick-actions-panel,
