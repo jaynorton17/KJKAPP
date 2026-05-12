@@ -10874,8 +10874,8 @@ function LobbyScreen({
       <section className="lobby-dashboard">
         {activeTab === 'gameLobby' ? (
           <section className="lobby-tab-panel lobby-tab-panel--game-lobby">
-            <section className="dashboard-subnav-shell dashboard-subnav-shell--lobby-menu lobby-showcase-menu-shell">
-              <div className="dashboard-subnav lobby-showcase-menu" role="tablist" aria-label="Lobby sections">
+            <section className="dashboard-subnav-shell dashboard-subnav-shell--activity dashboard-subnav-shell--lobby-menu lobby-showcase-menu-shell">
+              <div className="dashboard-subnav activity-subnav lobby-showcase-menu" role="tablist" aria-label="Lobby sections">
                 {[
                   { id: 'trending', label: 'Trending Games', icon: 'trend' },
                   { id: 'featured', label: 'Featured Games', icon: 'spark' },
