@@ -7413,6 +7413,9 @@ function MobileChatLauncher({
   displayName,
   soundMuted = false,
   onToggleSound,
+  clearLabel = '',
+  onClear,
+  clearDisabled = false,
 }) {
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -7489,6 +7492,9 @@ function MobileChatLauncher({
               title={title}
               soundMuted={soundMuted}
               onToggleSound={onToggleSound}
+              clearLabel={clearLabel}
+              onClear={onClear}
+              clearDisabled={clearDisabled}
             />
           </section>
         </div>
@@ -11389,6 +11395,9 @@ function LobbyScreen({
                       title="Lobby Chat"
                       soundMuted={lobbyChatMuted}
                       onToggleSound={onToggleLobbyChatMuted}
+                      clearLabel="Clear Chat"
+                      onClear={clearLobbyChat}
+                      clearDisabled={isLobbyChatSending || !lobbyChatMessages.length}
                     />
                   </section>
                 ) : null}
@@ -13105,6 +13114,9 @@ function LobbyScreen({
           displayName={lobbyChatDisplayName}
           soundMuted={lobbyChatMuted}
           onToggleSound={onToggleLobbyChatMuted}
+          clearLabel="Clear Chat"
+          onClear={clearLobbyChat}
+          clearDisabled={isLobbyChatSending || !lobbyChatMessages.length}
         />
       ) : null}
 
@@ -16538,6 +16550,9 @@ function ChatPanel({
   statusLabel = '',
   soundMuted = false,
   onToggleSound,
+  clearLabel = '',
+  onClear,
+  clearDisabled = false,
 }) {
   const chatLogRef = useRef(null);
   const composerInputRef = useRef(null);
@@ -16647,6 +16662,11 @@ function ChatPanel({
           </div>
           <div className="chat-panel-actions">
             {effectiveStatusLabel ? <span className="status-pill">{effectiveStatusLabel}</span> : null}
+            {typeof onClear === 'function' ? (
+              <Button type="button" className="ghost-button compact" onClick={onClear} disabled={clearDisabled}>
+                {clearLabel || 'Clear Chat'}
+              </Button>
+            ) : null}
             {typeof onToggleSound === 'function' ? (
               <Button type="button" className={`ghost-button compact ${!soundMuted ? 'is-on' : ''}`} onClick={onToggleSound}>
                 {soundMuted ? 'Unmute' : 'Mute'}
@@ -16658,11 +16678,18 @@ function ChatPanel({
       {compact && (title || typeof onToggleSound === 'function') ? (
         <div className="compact-chat-head">
           <strong>{title || 'Chat'}</strong>
-          {typeof onToggleSound === 'function' ? (
-            <Button type="button" className={`ghost-button compact ${!soundMuted ? 'is-on' : ''}`} onClick={onToggleSound}>
-              {soundMuted ? 'Unmute' : 'Mute'}
-            </Button>
-          ) : null}
+          <div className="chat-panel-actions">
+            {typeof onClear === 'function' ? (
+              <Button type="button" className="ghost-button compact" onClick={onClear} disabled={clearDisabled}>
+                {clearLabel || 'Clear Chat'}
+              </Button>
+            ) : null}
+            {typeof onToggleSound === 'function' ? (
+              <Button type="button" className={`ghost-button compact ${!soundMuted ? 'is-on' : ''}`} onClick={onToggleSound}>
+                {soundMuted ? 'Unmute' : 'Mute'}
+              </Button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -31520,6 +31547,38 @@ function ProductionApp() {
     } catch (error) {
       setLobbyChatDraft((current) => current || text);
       setNotice(String(error?.message || 'Could not send lobby chat message.'));
+      return null;
+    } finally {
+      setIsLobbyChatSending(false);
+    }
+  };
+
+  const clearLobbyChat = async () => {
+    if (!firestore || !user) {
+      setNotice('Firebase is not configured.');
+      return null;
+    }
+    if (!lobbyChatMessages.length) {
+      setNotice('There is no lobby chat to clear.');
+      return null;
+    }
+    if (typeof window !== 'undefined' && !window.confirm('Clear all lobby chat messages?')) {
+      return null;
+    }
+    setIsLobbyChatSending(true);
+    try {
+      const lobbyChatSnap = await getDocs(collection(firestore, 'lobbyChat'));
+      for (const chunk of chunkArray(lobbyChatSnap.docs, 400)) {
+        const batch = writeBatch(firestore);
+        chunk.forEach((entry) => batch.delete(entry.ref));
+        await batch.commit();
+      }
+      setLobbyChatMessages([]);
+      setLobbyChatDraft('');
+      setNotice('Lobby chat cleared.');
+      return true;
+    } catch (error) {
+      setNotice(String(error?.message || 'Could not clear lobby chat.'));
       return null;
     } finally {
       setIsLobbyChatSending(false);
