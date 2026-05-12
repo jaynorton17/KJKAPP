@@ -310,9 +310,14 @@ button:disabled {
   isolation: isolate;
   background:
     linear-gradient(180deg, rgba(6, 10, 18, 0.2), rgba(6, 10, 18, 0.86)),
-    var(--lobby-browser-image, none) center / cover no-repeat,
+    var(--lobby-browser-image, none) var(--lobby-browser-image-position, center) / var(--lobby-browser-image-size, cover) no-repeat,
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
     rgba(6, 14, 28, 0.7);
+}
+
+.lobby-browser-card--compact-art {
+  --lobby-browser-image-size: min(72%, 240px) auto;
+  --lobby-browser-image-position: center 38%;
 }
 
 .lobby-browser-card::before {

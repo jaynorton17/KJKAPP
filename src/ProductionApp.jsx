@@ -37,6 +37,16 @@ import {
 import AnalyticsPanel from './components/AnalyticsPanel.jsx';
 import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
 import questionMakerAgentRules from '../docs/question-maker-agent.md?raw';
+import allGamesCompatibilityTileImage from './assets/all-games-compatibility.png';
+import allGamesHowSureTileImage from './assets/all-games-how-sure.png';
+import allGamesMemoryTileImage from './assets/all-games-memory.png';
+import allGamesMostLikelyTileImage from './assets/all-games-most-likely.png';
+import allGamesNormalTileImage from './assets/all-games-normal.png';
+import allGamesPutPointsTileImage from './assets/all-games-put-points.png';
+import allGamesQuickFireTileImage from './assets/all-games-quick-fire.png';
+import allGamesRedFlagTileImage from './assets/all-games-red-flag.png';
+import allGamesThisOrThatTileImage from './assets/all-games-this-or-that.png';
+import allGamesTrueOrFalseTileImage from './assets/all-games-true-or-false.png';
 import normalGameTileImage from './assets/lobby-normal-game.webp';
 import compatibilityTileImage from './assets/lobby-compatability.png';
 import howSureAreYouTileImage from './assets/lobby-how-sure-are-you.png';
@@ -2030,7 +2040,6 @@ const questionBankMetaId = 'question-bank-source';
 const ADMIN_EMAIL = 'admin@kjkapp.com';
 const FEATURED_LOBBY_CARD_COUNT = 3;
 const FEATURED_LOBBY_SIDE_CARD_COUNT = 2;
-const FEATURED_LOBBY_ROTATION_INTERVAL_MS = 5000;
 const FEATURED_LOBBY_OFFSET_STORAGE_KEY = 'kjk-featured-lobby-offset';
 const FEATURED_LOBBY_PAIR_STORAGE_KEY = 'kjk-featured-lobby-pair';
 const LOBBY_SHOWCASE_SECTION_STORAGE_KEY = 'kjk-lobby-showcase-section';
@@ -9976,6 +9985,18 @@ function LobbyScreen({
     { id: 'compatibilityMeter', label: 'Compatibility Meter', image: compatibilityTileImage },
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
+  const allGamesTileImages = {
+    standard: allGamesNormalTileImage,
+    compatibilityMeter: allGamesCompatibilityTileImage,
+    secretAuction: allGamesHowSureTileImage,
+    memoryLane: allGamesMemoryTileImage,
+    mostLikely: allGamesMostLikelyTileImage,
+    putYourPoints: allGamesPutPointsTileImage,
+    quiz: allGamesQuickFireTileImage,
+    redFlagGreenFlag: allGamesRedFlagTileImage,
+    thisOrThat: allGamesThisOrThatTileImage,
+    trueFalse: allGamesTrueOrFalseTileImage,
+  };
   const lobbyAccessibleCards = lobbyCarouselCards.filter((card) => card.id !== 'holdem');
   const randomLobbyCard = lobbyAccessibleCards.find((card) => card.id === 'random') || null;
   const rotatingLobbyCards = lobbyAccessibleCards.filter((card) => card.id !== 'random');
@@ -10100,22 +10121,6 @@ function LobbyScreen({
     }
     setFeaturedLobbyCardIds(nextFeaturedIds);
   }, [buildFeaturedLobbyCardIds, lobbyAccessibleCards.length, randomLobbyCard, rotatingLobbyCards]);
-
-  useEffect(() => {
-    if (lobbyShowcaseSection !== 'featured' || rotatingLobbyCards.length <= FEATURED_LOBBY_SIDE_CARD_COUNT) return undefined;
-    const rotationTimer = window.setInterval(() => {
-      setFeaturedLobbyCardIds((current) => {
-        const currentSideIds = current.filter((cardId) => cardId !== 'random');
-        const anchorCardId = currentSideIds[1] || currentSideIds[0] || '';
-        const currentStartIndex = rotatingLobbyCards.findIndex((card) => card.id === anchorCardId);
-        const nextStartIndex = currentStartIndex >= 0
-          ? (currentStartIndex + 1) % rotatingLobbyCards.length
-          : 0;
-        return buildFeaturedLobbyCardIds(nextStartIndex);
-      });
-    }, FEATURED_LOBBY_ROTATION_INTERVAL_MS);
-    return () => window.clearInterval(rotationTimer);
-  }, [buildFeaturedLobbyCardIds, lobbyShowcaseSection, rotatingLobbyCards]);
 
   useEffect(() => {
     try {
@@ -10440,6 +10445,8 @@ function LobbyScreen({
     cards = lobbyAccessibleCards,
     emptyTitle = 'No games here yet',
     emptyCopy = 'Games will appear here once they match this view.',
+    imageOverrides = null,
+    compactArtwork = false,
   } = {}) => (
     <section className="panel lobby-panel lobby-panel--lobby lobby-browser-panel">
       <div className="panel-heading">
@@ -10455,11 +10462,12 @@ function LobbyScreen({
           const details = lobbyGameDetails?.[card.id];
           const isActive = featuredLobbyCards.some((featuredCard) => featuredCard.id === card.id);
           const isFavourite = favouriteLobbyCardIds.includes(card.id);
+          const imageUrl = imageOverrides?.[card.id] || card.image;
           return (
             <article
               key={card.id}
-              className={`lobby-browser-card ${isActive ? 'is-active' : ''}`}
-              style={{ '--lobby-browser-image': `url("${card.image}")` }}
+              className={`lobby-browser-card ${isActive ? 'is-active' : ''} ${compactArtwork ? 'lobby-browser-card--compact-art' : ''}`}
+              style={{ '--lobby-browser-image': `url("${imageUrl}")` }}
             >
               <button
                 type="button"
@@ -10944,6 +10952,8 @@ function LobbyScreen({
               eyebrow: 'All Games',
               title: 'Scan Every Mode',
               copy: 'Pick a game to jump straight to its setup card. Use the star on any tile to add it to Favourites.',
+              imageOverrides: allGamesTileImages,
+              compactArtwork: true,
             }) : null}
             {lobbyShowcaseSection === 'favourites' ? renderLobbyGameBrowser({
               eyebrow: 'Favourites',
