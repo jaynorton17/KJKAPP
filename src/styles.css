@@ -892,22 +892,16 @@ button:disabled {
     grid-template-columns: 1fr;
   }
   .lobby-carousel-shell {
-    --lobby-carousel-card-height: clamp(520px, 70svh, 660px);
+    --lobby-carousel-card-height: clamp(360px, 52vw, 520px);
   }
   .lobby-carousel-stage {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
   }
-  .lobby-carousel-slide--left,
-  .lobby-carousel-slide--center,
-  .lobby-carousel-slide--right {
-    grid-column: 1;
-    transform: none;
-  }
   .lobby-carousel-slide {
-    aspect-ratio: auto;
-    min-height: var(--lobby-carousel-card-height);
-    height: var(--lobby-carousel-card-height);
+    aspect-ratio: 0.84 / 1;
+    min-height: 0;
+    height: auto;
   }
   .lobby-image-tile-front-actions {
     align-items: stretch;
@@ -957,16 +951,18 @@ button:disabled {
   }
 
   .lobby-carousel-shell {
-    --lobby-carousel-card-height: clamp(430px, 62svh, 560px);
+    --lobby-carousel-card-height: clamp(260px, 48vw, 360px);
     gap: 10px;
   }
 
   .lobby-carousel-stage {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
   }
 
   .lobby-carousel-slide {
     width: 100%;
+    aspect-ratio: 0.82 / 1;
   }
 
   .lobby-image-tile-face {
