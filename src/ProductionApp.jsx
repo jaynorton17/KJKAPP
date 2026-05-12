@@ -8047,7 +8047,7 @@ function LobbyScreen({
   }));
   const [randomLobbyPickerState, setRandomLobbyPickerState] = useState(null);
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
-  const [lobbyTileImagesEnabled, setLobbyTileImagesEnabled] = useState(false);
+  const [lobbyTileImagesEnabled] = useState(true);
   const [featuredLobbyCardIds, setFeaturedLobbyCardIds] = useState([]);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
@@ -9938,32 +9938,6 @@ function LobbyScreen({
     if (isMobileDashboardNav && activeTab === 'gameLobby') return;
     setMobileLobbyChatOpen(false);
   }, [activeTab, isMobileDashboardNav]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let frameId = 0;
-    let timeoutId = 0;
-    let idleId = null;
-    const enableLobbyTileImages = () => {
-      if (!cancelled) setLobbyTileImagesEnabled(true);
-    };
-    // Defer decorative tile art until after first paint so the lobby becomes interactive sooner.
-    frameId = window.requestAnimationFrame(() => {
-      if (typeof window.requestIdleCallback === 'function') {
-        idleId = window.requestIdleCallback(enableLobbyTileImages, { timeout: 250 });
-        return;
-      }
-      timeoutId = window.setTimeout(enableLobbyTileImages, 120);
-    });
-    return () => {
-      cancelled = true;
-      if (frameId) window.cancelAnimationFrame(frameId);
-      if (idleId !== null && typeof window.cancelIdleCallback === 'function') {
-        window.cancelIdleCallback(idleId);
-      }
-      if (timeoutId) window.clearTimeout(timeoutId);
-    };
-  }, []);
 
   useEffect(() => {
     if (!randomLobbyPickerState?.labels?.length) return undefined;
