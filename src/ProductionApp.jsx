@@ -8047,7 +8047,7 @@ function LobbyScreen({
   const [randomLobbyPickerState, setRandomLobbyPickerState] = useState(null);
   const [openLobbyTileInfoId, setOpenLobbyTileInfoId] = useState('');
   const [lobbyTileImagesEnabled, setLobbyTileImagesEnabled] = useState(false);
-  const [featuredLobbyCardStartIndex, setFeaturedLobbyCardStartIndex] = useState(0);
+  const [featuredLobbyCardIds, setFeaturedLobbyCardIds] = useState([]);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [questionUploadBankType, setQuestionUploadBankType] = useState('game');
@@ -10003,9 +10003,20 @@ function LobbyScreen({
     { id: 'holdem', label: "Texas Hold'em", image: pokerTileImage },
   ];
   const lobbyAccessibleCards = lobbyCarouselCards.filter((card) => card.id !== 'holdem');
-  const featuredLobbyCards = Array.from({ length: Math.min(FEATURED_LOBBY_CARD_COUNT, lobbyAccessibleCards.length) }, (_, index) => (
-    lobbyAccessibleCards[(featuredLobbyCardStartIndex + index) % lobbyAccessibleCards.length]
-  )).filter(Boolean);
+  const randomLobbyCard = lobbyAccessibleCards.find((card) => card.id === 'random') || null;
+  const rotatingLobbyCards = lobbyAccessibleCards.filter((card) => card.id !== 'random');
+  const featuredLobbyCards = useMemo(() => {
+    if (!lobbyAccessibleCards.length) return [];
+    const cardMap = new Map(lobbyAccessibleCards.map((card) => [card.id, card]));
+    const selectedCards = featuredLobbyCardIds
+      .map((cardId) => cardMap.get(cardId))
+      .filter(Boolean);
+    if (selectedCards.length) return selectedCards.slice(0, FEATURED_LOBBY_CARD_COUNT);
+    const fallbackCards = randomLobbyCard
+      ? [randomLobbyCard, ...rotatingLobbyCards.slice(0, FEATURED_LOBBY_CARD_COUNT - 1)]
+      : rotatingLobbyCards.slice(0, FEATURED_LOBBY_CARD_COUNT);
+    return fallbackCards.filter(Boolean);
+  }, [featuredLobbyCardIds, lobbyAccessibleCards, randomLobbyCard, rotatingLobbyCards]);
   const favouriteLobbyCards = lobbyAccessibleCards.filter((card) => favouriteLobbyCardIds.includes(card.id));
   const trendingLobbyCards = useMemo(() => {
     const weightedCounts = new Map();
@@ -10042,15 +10053,22 @@ function LobbyScreen({
   const focusLobbyCard = (cardId) => {
     setOpenLobbyTileInfoId('');
     const nextFeaturedIndex = getLobbyCarouselCardIndex(cardId);
-    const accessibleIndex = lobbyAccessibleCards.findIndex((card) => card.id === cardId);
-    if (accessibleIndex < 0) return;
+    if (!lobbyAccessibleCards.some((card) => card.id === cardId)) return;
     setLobbyShowcaseSection('featured');
     if (nextFeaturedIndex >= 0) {
       setLobbyCarouselIndex(nextFeaturedIndex);
       return;
     }
-    setFeaturedLobbyCardStartIndex(accessibleIndex);
-    setLobbyCarouselIndex(0);
+    const nextFeaturedIds = [];
+    if (randomLobbyCard?.id) nextFeaturedIds.push(randomLobbyCard.id);
+    if (cardId !== randomLobbyCard?.id) nextFeaturedIds.push(cardId);
+    rotatingLobbyCards.forEach((card) => {
+      if (nextFeaturedIds.length >= FEATURED_LOBBY_CARD_COUNT) return;
+      if (!nextFeaturedIds.includes(card.id)) nextFeaturedIds.push(card.id);
+    });
+    const limitedIds = nextFeaturedIds.slice(0, FEATURED_LOBBY_CARD_COUNT);
+    setFeaturedLobbyCardIds(limitedIds);
+    setLobbyCarouselIndex(Math.max(0, limitedIds.indexOf(cardId)));
   };
 
   const getLobbyCarouselPosition = (index) => {
@@ -10066,18 +10084,28 @@ function LobbyScreen({
     if (!lobbyAccessibleCards.length) return;
     if (featuredLobbyRotationAppliedRef.current) return;
     featuredLobbyRotationAppliedRef.current = true;
-    let nextStartIndex = 0;
-    try {
-      const storedRaw = Number.parseInt(window.localStorage.getItem(FEATURED_LOBBY_OFFSET_STORAGE_KEY) || '0', 10);
-      nextStartIndex = Number.isFinite(storedRaw) ? Math.max(0, storedRaw) % lobbyAccessibleCards.length : 0;
-      window.localStorage.setItem(
-        FEATURED_LOBBY_OFFSET_STORAGE_KEY,
-        String((nextStartIndex + FEATURED_LOBBY_CARD_COUNT) % lobbyAccessibleCards.length),
-      );
-    } catch {
-      nextStartIndex = 0;
+    const nextFeaturedIds = [];
+    if (randomLobbyCard?.id) nextFeaturedIds.push(randomLobbyCard.id);
+    if (rotatingLobbyCards.length) {
+      let nextStartIndex = 0;
+      try {
+        const storedRaw = Number.parseInt(window.localStorage.getItem(FEATURED_LOBBY_OFFSET_STORAGE_KEY) || '0', 10);
+        nextStartIndex = Number.isFinite(storedRaw) ? Math.max(0, storedRaw) % rotatingLobbyCards.length : 0;
+        window.localStorage.setItem(
+          FEATURED_LOBBY_OFFSET_STORAGE_KEY,
+          String((nextStartIndex + 2) % rotatingLobbyCards.length),
+        );
+      } catch {
+        nextStartIndex = 0;
+      }
+      for (let index = 0; index < Math.min(FEATURED_LOBBY_CARD_COUNT - nextFeaturedIds.length, rotatingLobbyCards.length); index += 1) {
+        nextFeaturedIds.push(rotatingLobbyCards[(nextStartIndex + index) % rotatingLobbyCards.length].id);
+      }
     }
-    setFeaturedLobbyCardStartIndex(nextStartIndex);
+    if (!nextFeaturedIds.length) {
+      nextFeaturedIds.push(...lobbyAccessibleCards.slice(0, FEATURED_LOBBY_CARD_COUNT).map((card) => card.id));
+    }
+    setFeaturedLobbyCardIds(nextFeaturedIds);
     setLobbyCarouselIndex(0);
   }, []);
 
