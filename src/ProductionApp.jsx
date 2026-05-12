@@ -5693,6 +5693,11 @@ const normalizeComparableAnswer = (value = '') =>
 const COMPATIBILITY_FINAL_REVEAL_STATUS = 'compatibilityFinalReveal';
 const isCompatibilityFinalRevealRound = (round = {}) =>
   normalizeText(round?.status || '') === COMPATIBILITY_FINAL_REVEAL_STATUS;
+const clampCompatibilityScore = (value = 0) => {
+  const numericValue = Math.round(Number(value || 0));
+  if (!Number.isFinite(numericValue)) return 0;
+  return Math.max(0, Math.min(100, numericValue));
+};
 const calculateCompatibilityScore = (round = {}) => {
   const jayAnswer = normalizeComparableAnswer(round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '');
   const kimAnswer = normalizeComparableAnswer(round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '');
@@ -5720,7 +5725,8 @@ const buildCompatibilitySessionOutcome = (rounds = []) => {
     .filter((round) => !isCompatibilityFinalRevealRound(round));
   const scoredRounds = normalizedRounds.map((round) => ({
     ...round,
-    compatibilityScore: getStoredPenaltyOverride(round?.compatibilityScore) ?? calculateCompatibilityScore(round),
+    compatibilityAutoScore: getStoredPenaltyOverride(round?.compatibilityAutoScore) ?? calculateCompatibilityScore(round),
+    compatibilityScore: getStoredPenaltyOverride(round?.compatibilityScore) ?? getStoredPenaltyOverride(round?.compatibilityAutoScore) ?? calculateCompatibilityScore(round),
   }));
   const totalScore = scoredRounds.reduce((sum, round) => sum + Number(round?.compatibilityScore || 0), 0);
   const averageScore = scoredRounds.length ? Math.round(totalScore / scoredRounds.length) : 0;
@@ -5745,7 +5751,12 @@ const buildCompatibilityFinalRevealRound = (archivedRounds = []) => {
     question: round?.question || `Question ${index + 1}`,
     roundType: round?.roundType || 'text',
     category: round?.category || '',
-    compatibilityScore: Number(round?.compatibilityScore || 0),
+    compatibilityAutoScore: clampCompatibilityScore(getStoredPenaltyOverride(round?.compatibilityAutoScore, calculateCompatibilityScore(round)) ?? 0),
+    compatibilityScore: clampCompatibilityScore(getStoredPenaltyOverride(round?.compatibilityScore, round?.compatibilityAutoScore, calculateCompatibilityScore(round)) ?? 0),
+    compatibilityScoreOverridden: Boolean(round?.compatibilityScoreOverridden),
+    compatibilityScoreEditedAt: round?.compatibilityScoreEditedAt || null,
+    compatibilityScoreEditedBy: round?.compatibilityScoreEditedBy || '',
+    compatibilityScoreEditedBySeat: round?.compatibilityScoreEditedBySeat || '',
     actualAnswers: {
       jay: round?.actualAnswers?.jay ?? round?.answers?.jay?.ownAnswer ?? '',
       kim: round?.actualAnswers?.kim ?? round?.answers?.kim?.ownAnswer ?? '',
@@ -16150,6 +16161,7 @@ function RoomActiveFrameBase({
   onLockMostLikelyAnswer,
   onSetPutYourPointsResult,
   onSetSecretAuctionResult,
+  onSetCompatibilityRevealScore,
   onMarkReady,
   onRequestQuizOverride,
   onRespondQuizOverride,
@@ -16359,6 +16371,27 @@ function RoomActiveFrameBase({
       ? 'Overall result'
       : `Question ${compatibilityRevealIndex + 1} of ${compatibilityRevealRounds.length}`
     : '';
+  const compatibilityAutoScore = compatibilityFinalReveal && !compatibilityOverallRevealStep
+    ? clampCompatibilityScore(getStoredPenaltyOverride(compatibilityRevealRound?.compatibilityAutoScore, calculateCompatibilityScore(compatibilityRevealRound || {})) ?? 0)
+    : clampCompatibilityScore(Number(compatibilityOutcome?.score || 0));
+  const compatibilityScoreIsOverridden = compatibilityFinalReveal
+    && !compatibilityOverallRevealStep
+    && (
+      Boolean(compatibilityRevealRound?.compatibilityScoreOverridden)
+      || compatibilityRevealScore !== compatibilityAutoScore
+    );
+  const [compatibilityOverrideDraft, setCompatibilityOverrideDraft] = useState(() => String(clampCompatibilityScore(compatibilityRevealScore)));
+
+  useEffect(() => {
+    if (!isCompatibilityMeterGame) return;
+    setCompatibilityOverrideDraft(String(clampCompatibilityScore(compatibilityRevealScore)));
+  }, [
+    compatibilityRevealIndex,
+    compatibilityRevealScore,
+    compatibilityOverallRevealStep,
+    currentRound?.id,
+    isCompatibilityMeterGame,
+  ]);
 
   return (
     <section className={`room-active-frame room-active-frame--${stage} ${isQuizGame ? 'room-active-frame--quiz' : ''} ${isTrueFalseGame ? 'room-active-frame--true-false' : ''} ${isThisOrThatGame ? 'room-active-frame--this-or-that' : ''} ${isMostLikelyGame ? 'room-active-frame--most-likely' : ''} ${isPutYourPointsGame ? 'room-active-frame--put-points' : ''} ${isSecretAuctionGame ? 'room-active-frame--secret-auction' : ''} ${isRedFlagGreenFlagGame ? 'room-active-frame--red-flag-green-flag' : ''} ${isCompatibilityMeterGame ? 'room-active-frame--compatibility-meter' : ''} ${isMemoryLaneGame ? 'room-active-frame--memory-lane' : ''}`} aria-label="Active round scoreboard">
@@ -16810,6 +16843,65 @@ function RoomActiveFrameBase({
                         {compatibilityRevealProgressLabel}
                       </small>
                     ) : null}
+                    {compatibilityFinalReveal && !compatibilityOverallRevealStep ? (
+                      <>
+                        <small>
+                          {compatibilityScoreIsOverridden
+                            ? `Host override active. Auto detected ${compatibilityAutoScore}%.`
+                            : `Auto detected ${compatibilityAutoScore}%.`}
+                        </small>
+                        {role === 'host' ? (
+                          <div className="compatibility-host-override">
+                            <div className="compatibility-host-override-preset-row">
+                              {[100, 95, 85, 70, 50, 0].map((preset) => (
+                                <Button
+                                  key={`compatibility-preset-${preset}`}
+                                  className={`ghost-button compact ${compatibilityRevealScore === preset ? 'is-on' : ''}`}
+                                  onClick={() => {
+                                    setCompatibilityOverrideDraft(String(preset));
+                                    onSetCompatibilityRevealScore?.(preset);
+                                  }}
+                                  disabled={isBusy}
+                                >
+                                  {preset}%
+                                </Button>
+                              ))}
+                              <Button
+                                className={`ghost-button compact ${!compatibilityScoreIsOverridden ? 'is-on' : ''}`}
+                                onClick={() => {
+                                  setCompatibilityOverrideDraft(String(compatibilityAutoScore));
+                                  onSetCompatibilityRevealScore?.(compatibilityAutoScore);
+                                }}
+                                disabled={isBusy}
+                              >
+                                Auto
+                              </Button>
+                            </div>
+                            <div className="compatibility-host-override-input-row">
+                              <label className="field">
+                                <span>Host percentage</span>
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min="0"
+                                  max="100"
+                                  value={compatibilityOverrideDraft}
+                                  onChange={(event) => setCompatibilityOverrideDraft(event.target.value)}
+                                  placeholder="0-100"
+                                />
+                              </label>
+                              <Button
+                                className="primary-button compact"
+                                onClick={() => onSetCompatibilityRevealScore?.(compatibilityOverrideDraft)}
+                                disabled={isBusy || compatibilityOverrideDraft === ''}
+                              >
+                                Apply
+                              </Button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
                     {compatibilityOverallRevealStep || !compatibilityFinalReveal ? (
                       <>
                         <small>95%+ adds 0. 85-94 adds +100 each. 70-84 adds +250 each. 0-69 adds +500 each.</small>
@@ -16947,6 +17039,7 @@ const RoomActiveFrame = memo(RoomActiveFrameBase, (previous, next) => {
     && Number(previous.currentRound?.compatibilityFinalScore || 0) === Number(next.currentRound?.compatibilityFinalScore || 0)
     && Number(previous.currentRound?.compatibilityFinalPenalty || 0) === Number(next.currentRound?.compatibilityFinalPenalty || 0)
     && Number(previous.currentRound?.compatibilityRevealIndex || 0) === Number(next.currentRound?.compatibilityRevealIndex || 0)
+    && JSON.stringify(previous.currentRound?.compatibilityRevealRounds || []) === JSON.stringify(next.currentRound?.compatibilityRevealRounds || [])
     && previous.currentRound?.quizTimerEndsAt === next.currentRound?.quizTimerEndsAt
     && Number(previous.currentRound?.putYourPointsStake || 0) === Number(next.currentRound?.putYourPointsStake || 0)
     && JSON.stringify(previous.currentRound?.multipleChoiceOptions || []) === JSON.stringify(next.currentRound?.multipleChoiceOptions || [])
@@ -20588,6 +20681,7 @@ function GameRoomView({
   onLockMostLikelyAnswer,
   onSetPutYourPointsResult,
   onSetSecretAuctionResult,
+  onSetCompatibilityRevealScore,
   onMarkReady,
   onAddQuestion,
   onSyncSheet,
@@ -21281,8 +21375,9 @@ function GameRoomView({
 	                  onLockTrueFalseAnswer={onLockTrueFalseAnswer}
                     onLockThisOrThatAnswer={onLockThisOrThatAnswer}
                     onLockMostLikelyAnswer={onLockMostLikelyAnswer}
-                    onSetPutYourPointsResult={onSetPutYourPointsResult}
-                    onSetSecretAuctionResult={onSetSecretAuctionResult}
+                  onSetPutYourPointsResult={onSetPutYourPointsResult}
+                  onSetSecretAuctionResult={onSetSecretAuctionResult}
+                  onSetCompatibilityRevealScore={onSetCompatibilityRevealScore}
 	                  onMarkReady={onMarkReady}
 	                  onRequestQuizOverride={onRequestQuizOverride}
 	                  onRespondQuizOverride={onRespondQuizOverride}
@@ -21647,6 +21742,7 @@ function GameRoomView({
                   onLockMostLikelyAnswer={onLockMostLikelyAnswer}
                   onSetPutYourPointsResult={onSetPutYourPointsResult}
                   onSetSecretAuctionResult={onSetSecretAuctionResult}
+                  onSetCompatibilityRevealScore={onSetCompatibilityRevealScore}
                   onMarkReady={onMarkReady}
 	              onRequestQuizOverride={onRequestQuizOverride}
 	              onRespondQuizOverride={onRespondQuizOverride}
@@ -25156,7 +25252,10 @@ function ProductionApp() {
             },
             manualScores: isQuizGame,
             ...(isCompatibilityMeterGameMode(gameMode)
-              ? { compatibilityScore: calculateCompatibilityScore(effectivePendingRound) }
+              ? {
+                  compatibilityAutoScore: calculateCompatibilityScore(effectivePendingRound),
+                  compatibilityScore: getStoredPenaltyOverride(effectivePendingRound?.compatibilityScore, calculateCompatibilityScore(effectivePendingRound)) ?? 0,
+                }
               : {}),
           },
           effectivePendingRound.number || (loadedSummary?.roundsPlayed || gameDoc.roundsPlayed || 0) + 1,
@@ -30418,6 +30517,117 @@ function ProductionApp() {
       return true;
     }, 'Could not save the How Sure Are You result.');
 
+  const setCompatibilityRevealScore = async (scoreValue = '') =>
+    withBusy(async () => {
+      if (!game?.currentRound || !isCompatibilityMeterGameMode(game?.gameMode || 'standard')) {
+        throw new Error('Compatibility Meter reveal is not active.');
+      }
+      if (!isCompatibilityFinalRevealRound(game.currentRound || {})) {
+        throw new Error('Compatibility reveal is not ready yet.');
+      }
+      const revealRounds = game.currentRound?.compatibilityRevealRounds || [];
+      const revealIndex = Math.max(0, Number(game.currentRound?.compatibilityRevealIndex || 0));
+      const revealRound = revealRounds[revealIndex] || null;
+      if (!revealRound) {
+        throw new Error('There is no Compatibility reveal question to edit right now.');
+      }
+
+      const nextScore = clampCompatibilityScore(scoreValue);
+      const autoScore = clampCompatibilityScore(getStoredPenaltyOverride(revealRound?.compatibilityAutoScore, calculateCompatibilityScore(revealRound)) ?? 0);
+      const nowIso = new Date().toISOString();
+      const nextRevealRound = {
+        ...revealRound,
+        compatibilityAutoScore: autoScore,
+        compatibilityScore: nextScore,
+        compatibilityScoreOverridden: nextScore !== autoScore,
+        compatibilityScoreEditedAt: nowIso,
+        compatibilityScoreEditedBy: user?.uid || '',
+        compatibilityScoreEditedBySeat: currentSeat || '',
+      };
+      const nextRevealRounds = revealRounds.map((round, index) => (
+        index === revealIndex ? nextRevealRound : round
+      ));
+      const compatibilityOutcome = buildCompatibilitySessionOutcome(nextRevealRounds);
+      const nextCurrentRound = {
+        ...game.currentRound,
+        compatibilityRevealRounds: nextRevealRounds,
+        compatibilityScore: compatibilityOutcome.averageScore,
+        compatibilityFinalScore: compatibilityOutcome.averageScore,
+        compatibilityFinalPenalty: compatibilityOutcome.finalPenalty,
+        penalties: {
+          jay: compatibilityOutcome.finalPenalty,
+          kim: compatibilityOutcome.finalPenalty,
+        },
+        updatedAt: nowIso,
+      };
+      const nextCompatibilitySummary = {
+        averageScore: compatibilityOutcome.averageScore,
+        finalPenalty: compatibilityOutcome.finalPenalty,
+        totalQuestions: compatibilityOutcome.totalQuestions,
+      };
+
+      setRounds((current) => normalizeStoredRounds(current.map((round) => (
+        normalizeText(round?.id) === normalizeText(nextRevealRound.id)
+          ? {
+              ...round,
+              compatibilityAutoScore: autoScore,
+              compatibilityScore: nextScore,
+              compatibilityScoreOverridden: nextScore !== autoScore,
+              compatibilityScoreEditedAt: nowIso,
+              compatibilityScoreEditedBy: user?.uid || '',
+              compatibilityScoreEditedBySeat: currentSeat || '',
+            }
+          : round
+      ))));
+      setGame((current) => (
+        current && normalizeText(current?.id) === normalizeText(game?.id)
+          ? {
+              ...current,
+              currentRound: nextCurrentRound,
+              finalScores: compatibilityOutcome.totals,
+              compatibilitySessionSummary: nextCompatibilitySummary,
+              updatedAt: nowIso,
+            }
+          : current
+      ));
+
+      if (isCurrentLocalTestGame) {
+        setNotice(`Compatibility reveal updated to ${nextScore}%.`);
+        return true;
+      }
+
+      const gameRef = makeGameRef();
+      if (!gameRef || !firestore) throw new Error('Room is missing.');
+      await Promise.all([
+        revealRound?.id
+          ? setDoc(
+              doc(firestore, 'games', game.id, 'rounds', revealRound.id),
+              {
+                compatibilityAutoScore: autoScore,
+                compatibilityScore: nextScore,
+                compatibilityScoreOverridden: nextScore !== autoScore,
+                compatibilityScoreEditedAt: serverTimestamp(),
+                compatibilityScoreEditedBy: user?.uid || '',
+                compatibilityScoreEditedBySeat: currentSeat || '',
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true },
+            )
+          : Promise.resolve(),
+        setDoc(gameRef, {
+          currentRound: {
+            ...nextCurrentRound,
+            updatedAt: serverTimestamp(),
+          },
+          finalScores: compatibilityOutcome.totals,
+          compatibilitySessionSummary: nextCompatibilitySummary,
+          updatedAt: serverTimestamp(),
+        }, { merge: true }),
+      ]);
+      setNotice(`Compatibility reveal updated to ${nextScore}%.`);
+      return true;
+    }, 'Could not update the Compatibility Meter score.');
+
   const submitAnswer = async (draftOverride = null) => {
     let previousLocalAnswer;
     let previousSecretAuctionStakeUsage = null;
@@ -31274,7 +31484,10 @@ function ProductionApp() {
               quizPoints,
               manualScores: isQuizGame,
               ...(isCompatibilityMeterGameMode(game?.gameMode || 'standard')
-                ? { compatibilityScore: calculateCompatibilityScore(game.currentRound) }
+                ? {
+                    compatibilityAutoScore: calculateCompatibilityScore(game.currentRound),
+                    compatibilityScore: getStoredPenaltyOverride(game.currentRound?.compatibilityScore, calculateCompatibilityScore(game.currentRound)) ?? 0,
+                  }
                 : {}),
             },
             game.currentRound.number || rounds.length + 1,
@@ -31443,7 +31656,10 @@ function ProductionApp() {
             quizPoints,
             manualScores: isQuizGame,
             ...(isCompatibilityMeterGameMode(game?.gameMode || 'standard')
-              ? { compatibilityScore: calculateCompatibilityScore(game.currentRound) }
+              ? {
+                  compatibilityAutoScore: calculateCompatibilityScore(game.currentRound),
+                  compatibilityScore: getStoredPenaltyOverride(game.currentRound?.compatibilityScore, calculateCompatibilityScore(game.currentRound)) ?? 0,
+                }
               : {}),
           },
           game.currentRound.number || rounds.length + 1,
@@ -31554,7 +31770,8 @@ function ProductionApp() {
                   jay: parseAnswerList(game.currentRound.answers?.jay?.guessedOther || ''),
                   kim: parseAnswerList(game.currentRound.answers?.kim?.guessedOther || ''),
                 },
-                compatibilityScore: calculateCompatibilityScore(game.currentRound),
+                compatibilityAutoScore: calculateCompatibilityScore(game.currentRound),
+                compatibilityScore: getStoredPenaltyOverride(game.currentRound?.compatibilityScore, calculateCompatibilityScore(game.currentRound)) ?? 0,
               },
               game.currentRound.number || rounds.length + 1,
               totalsBefore,
@@ -33184,6 +33401,7 @@ function ProductionApp() {
       onLockMostLikelyAnswer={lockMostLikelyAnswerField}
       onSetPutYourPointsResult={setPutYourPointsResult}
       onSetSecretAuctionResult={setSecretAuctionResult}
+      onSetCompatibilityRevealScore={setCompatibilityRevealScore}
       onMarkReady={markReady}
 	      onAddQuestion={addQuestion}
       onSyncSheet={syncSheet}

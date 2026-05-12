@@ -9531,6 +9531,37 @@ button:disabled {
   margin-top: 6px;
 }
 
+.compatibility-host-override {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 360px);
+}
+
+.compatibility-host-override-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.compatibility-host-override-preset-row .ghost-button.is-on {
+  border-color: rgba(91, 255, 177, 0.42);
+  background: rgba(91, 255, 177, 0.14);
+  color: #e5fff2;
+}
+
+.compatibility-host-override-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.compatibility-host-override-input-row .field {
+  margin: 0;
+  text-align: left;
+}
+
 .room-reveal-layout--quiz .room-reveal-center-card {
   overflow: hidden;
 }
