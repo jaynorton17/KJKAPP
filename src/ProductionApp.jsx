@@ -2027,8 +2027,7 @@ const editingModeKey = 'kjk-editing-mode';
 const lobbyChatMutedKey = 'kjk-lobby-chat-muted';
 const roomChatMutedKey = 'kjk-room-chat-muted';
 const questionBankMetaId = 'question-bank-source';
-const EDITING_MODE_PIN = '0000';
-const QUESTION_BANK_PIN = '0000';
+const ADMIN_EMAIL = 'admin@kjkapp.com';
 const TEST_GAME_PREFIX = 'test-game-';
 const TEST_MODE_PLAYER_UID = 'editing-mode-kim';
 const TEST_MODE_PLAYER_NAME = 'Kim (Test)';
@@ -2051,6 +2050,7 @@ const readStoredBoolean = (key = '', fallbackValue = false) => {
   }
 };
 const normalizeIdentity = (value) => normalizeText(value).toLowerCase();
+const isAdminEmail = (value) => normalizeIdentity(value) === ADMIN_EMAIL;
 const seatFromPlayerRef = (value) => {
   const normalized = normalizeIdentity(value);
   if (!normalized) return null;
@@ -7802,6 +7802,7 @@ function AiAssistantPanel({
 function LobbyScreen({
   user,
   profile,
+  isAdmin = false,
   connectionState,
   questionNotes,
   questionFeedback,
@@ -7959,6 +7960,7 @@ function LobbyScreen({
 }) {
   const [activeTab, setActiveTab] = useState(() => getSafeInitialDashboardTab(localStorage.getItem('kjk-dashboard-tab')));
   const [activityTab, setActivityTab] = useState(() => localStorage.getItem('kjk-activity-tab') || 'activeGames');
+  const [lobbyBrowseMode, setLobbyBrowseMode] = useState(() => (typeof window !== 'undefined' && window.innerWidth <= 900 ? 'all' : 'featured'));
   const [createMode, setCreateMode] = useState('random');
   const [quizCreateCodeDraft, setQuizCreateCodeDraft] = useState('');
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
@@ -8032,6 +8034,7 @@ function LobbyScreen({
     if (!Array.isArray(gameInvites)) return 0;
     return gameInvites.filter((invite) => (invite?.displayStatus || invite?.status) === 'pending').length;
   }, [gameInvites]);
+  const featuredActiveGame = activeGames?.[0] || null;
   const dashboardPills = [
     { id: 'gameLobby', label: 'Game Lobby', tone: 'lobby', icon: 'home' },
     { id: 'activity', label: 'Activity', tone: 'activity', icon: 'activity' },
@@ -8065,6 +8068,20 @@ function LobbyScreen({
     Number(compatibilityMeterQuestionCount || 0),
     Number(memoryLaneQuestionCount || 0),
   );
+  const lobbyCardReadyMeta = {
+    random: `${randomReadyCount} ready`,
+    putYourPoints: `${putYourPointsReadyCount} ready`,
+    secretAuction: `${secretAuctionReadyCount} ready`,
+    standard: `${questionCount} ready`,
+    quiz: `${quizQuestionCount} ready`,
+    thisOrThat: `${thisOrThatReadyCount} ready`,
+    memoryLane: `${memoryLaneReadyCount} ready`,
+    trueFalse: `${trueFalseQuestionCount} ready`,
+    mostLikely: `${mostLikelyReadyCount} ready`,
+    redFlagGreenFlag: `${redFlagGreenFlagReadyCount} ready`,
+    compatibilityMeter: `${compatibilityMeterReadyCount} ready`,
+    holdem: `${formatScore(HOLDEM_SMALL_BLIND)} / ${formatScore(HOLDEM_BIG_BLIND)}`,
+  };
   const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
   const lobbyChatUnreadCount = useChatUnreadCount(
     lobbyChatMessages,
@@ -8390,10 +8407,8 @@ function LobbyScreen({
 
   const handleEditBalancesFromMenu = () => {
     closeDashboardMenu();
-    const pin = window.prompt('Enter PIN to edit balances.');
-    if (pin === null) return;
-    if (String(pin).trim() !== '0000') {
-      window.alert('Incorrect PIN.');
+    if (!isAdmin) {
+      window.alert('Only the admin account can edit balances.');
       return;
     }
     setBalanceDrafts(currentBalanceDrafts);
@@ -8425,10 +8440,8 @@ function LobbyScreen({
   };
 
   const requestQuestionBankAccess = () => {
-    const pin = window.prompt('Enter PIN for Question Bank.');
-    if (pin === null) return false;
-    if (String(pin).trim() !== QUESTION_BANK_PIN) {
-      window.alert('Incorrect PIN.');
+    if (!isAdmin) {
+      window.alert('Question Bank tools are only available to the admin account.');
       return false;
     }
     return true;
@@ -9748,6 +9761,11 @@ function LobbyScreen({
   useEffect(() => {
     setProfileNameDraft(normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   }, [profile?.displayName, user?.displayName, user?.email]);
+  useEffect(() => {
+    if (!isAdmin && activeTab === 'questionBank') {
+      setActiveTab('gameLobby');
+    }
+  }, [activeTab, isAdmin]);
 
   useEffect(() => {
     if (isMobileDashboardNav && activeTab === 'gameLobby') return;
@@ -9825,6 +9843,11 @@ function LobbyScreen({
   const moveLobbyCarousel = (direction) => {
     setOpenLobbyTileInfoId('');
     setLobbyCarouselIndex((current) => (current + direction + lobbyCarouselCount) % lobbyCarouselCount);
+  };
+  const focusLobbyCard = (cardId) => {
+    setOpenLobbyTileInfoId('');
+    setLobbyBrowseMode('featured');
+    setLobbyCarouselIndex(getLobbyCarouselCardIndex(cardId));
   };
 
   const getLobbyCarouselPosition = (index) => {
@@ -10155,6 +10178,37 @@ function LobbyScreen({
     </div>
   );
 
+  const renderLobbyGameBrowser = () => (
+    <section className="panel lobby-panel lobby-panel--lobby lobby-browser-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">All Games</p>
+          <h2>Scan Every Mode</h2>
+        </div>
+        <span className="status-pill">{lobbyCarouselCards.length} modes</span>
+      </div>
+      <p className="panel-copy">Pick a game to jump straight to its setup card without swiping through the full carousel.</p>
+      <div className="lobby-browser-grid">
+        {lobbyCarouselCards.map((card) => {
+          const details = lobbyGameDetails?.[card.id];
+          const isActive = lobbyCarouselCards[lobbyCarouselIndex]?.id === card.id;
+          return (
+            <button
+              key={card.id}
+              type="button"
+              className={`lobby-browser-card ${isActive ? 'is-active' : ''}`}
+              onClick={() => focusLobbyCard(card.id)}
+            >
+              <strong>{card.label}</strong>
+              <span>{lobbyCardReadyMeta[card.id] || 'Ready'}</span>
+              <small>{details?.howItWorks || 'Open setup'}</small>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+
   const renderChoiceGuessAnalyticsPanel = ({ analytics, modeLabel, questionCount = 0, emptyCopy = 'No rounds have been recorded yet.' }) => (
     <section className="analytics-questions-panel">
       <div className="question-bank-status-grid">
@@ -10448,9 +10502,9 @@ function LobbyScreen({
 	              <span className="sr-only">Account menu</span>
 	            </summary>
 	            <div className="top-menu-panel settings-menu-panel dashboard-settings-menu-panel">
-	              {isMobileDashboardNav ? (
-	                <section className="settings-menu-section dashboard-menu-section">
-	                  <span className="settings-section-label">Navigate</span>
+              {isMobileDashboardNav ? null : (
+                <section className="settings-menu-section dashboard-menu-section">
+                  <span className="settings-section-label">Navigate</span>
                   <div className="dashboard-menu-pill-list">
                     {dashboardPills.map((pill) => (
                       <button
@@ -10467,25 +10521,30 @@ function LobbyScreen({
 	                    ))}
 	                  </div>
 	                </section>
-              ) : null}
+              )}
               <section className="settings-menu-section">
                 <span className="settings-section-label">Account</span>
-                <Button className="ghost-button compact" onClick={handleQuestionBankTabSelect} disabled={isBusy}>
-                  Question Bank
-                </Button>
                 <Button className="ghost-button compact" onClick={() => { closeDashboardMenu(); setIsProfileOpen(true); }} disabled={isBusy}>
                   My Profile
-                </Button>
-                <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromMenu} disabled={isBusy}>
-                  {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
-                </Button>
-                <Button className="ghost-button compact" onClick={handleEditBalancesFromMenu} disabled={isBusy}>
-                  Edit balances
                 </Button>
                 <Button className="ghost-button compact" onClick={handleSignOutFromMenu}>
                   Sign out
                 </Button>
               </section>
+              {isAdmin ? (
+                <section className="settings-menu-section">
+                  <span className="settings-section-label">Admin</span>
+                  <Button className="ghost-button compact" onClick={handleQuestionBankTabSelect} disabled={isBusy}>
+                    Question Bank
+                  </Button>
+                  <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromMenu} disabled={isBusy}>
+                    {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
+                  </Button>
+                  <Button className="ghost-button compact" onClick={handleEditBalancesFromMenu} disabled={isBusy}>
+                    Edit balances
+                  </Button>
+                </section>
+              ) : null}
             </div>
           </details>
         </div>
@@ -10494,23 +10553,21 @@ function LobbyScreen({
           one position on every tab. The row below is just the nav rail inside
           that shared shell.
         */}
-        {!isMobileDashboardNav ? (
-          <nav className="dashboard-pill-nav dashboard-pill-nav--embedded" aria-label="Dashboard sections">
-	              {dashboardPills.map((pill) => (
-	                <button
-	                  key={pill.id}
-	                  type="button"
-	                  className={`dashboard-pill tab-button dashboard-pill--${pill.tone} ${activeTab === pill.id ? 'is-active' : ''}`}
-	                  onClick={() => handleDashboardTabSelect(pill.id)}
-	                >
-	                  {renderDashboardIcon(pill.icon)}
-	                  {pill.label}
-	                  {pill.id === 'gameLobby' && pendingInviteCount > 0 ? <span className="dashboard-pill-count" aria-hidden="true">{pendingInviteCount}</span> : null}
-	                  {pill.id === 'activity' && pendingActivityCount > 0 ? <span className="dashboard-pill-dot" aria-hidden="true" /> : null}
-	                </button>
-	              ))}
-          </nav>
-        ) : null}
+        <nav className="dashboard-pill-nav dashboard-pill-nav--embedded" aria-label="Dashboard sections">
+	          {dashboardPills.map((pill) => (
+	            <button
+	              key={pill.id}
+	              type="button"
+	              className={`dashboard-pill tab-button dashboard-pill--${pill.tone} ${activeTab === pill.id ? 'is-active' : ''}`}
+	              onClick={() => handleDashboardTabSelect(pill.id)}
+	            >
+	              {renderDashboardIcon(pill.icon)}
+	              {pill.label}
+	              {pill.id === 'gameLobby' && pendingInviteCount > 0 ? <span className="dashboard-pill-count" aria-hidden="true">{pendingInviteCount}</span> : null}
+	              {pill.id === 'activity' && pendingActivityCount > 0 ? <span className="dashboard-pill-dot" aria-hidden="true" /> : null}
+	            </button>
+	          ))}
+        </nav>
       </header>
 
       {editingModeEnabled ? (
@@ -10523,6 +10580,43 @@ function LobbyScreen({
       <section className="lobby-dashboard">
         {activeTab === 'gameLobby' ? (
           <section className="lobby-tab-panel lobby-tab-panel--game-lobby">
+            <section className="panel lobby-panel lobby-panel--lobby lobby-quick-actions-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Play Faster</p>
+                  <h2>Quick Start</h2>
+                </div>
+                {featuredActiveGame ? <span className="status-pill">{activeGames.length} active</span> : <span className="status-pill">Lobby ready</span>}
+              </div>
+              <div className="lobby-quick-actions-grid">
+                <div className="lobby-quick-action-card">
+                  <strong>Join by code</strong>
+                  <span>Fast fallback if the invite panel is not open.</span>
+                  <div className="lobby-quick-action-row">
+                    <input value={joinCode} onChange={(event) => onJoinCodeChange(normalizeJoinCode(event.target.value))} placeholder="ABCD12" />
+                    <Button className="primary-button compact" onClick={onJoinGame} disabled={isBusy || !joinCode.length}>
+                      Join Game
+                    </Button>
+                  </div>
+                </div>
+                <div className="lobby-quick-action-card">
+                  <strong>{featuredActiveGame ? 'Resume latest game' : 'No active game yet'}</strong>
+                  <span>
+                    {featuredActiveGame
+                      ? `${featuredActiveGame.gameName || featuredActiveGame.name || featuredActiveGame.joinCode} is ready to jump back into.`
+                      : 'Create a new game or accept an invite to see resume shortcuts here.'}
+                  </span>
+                  <div className="lobby-quick-action-row">
+                    <Button className="ghost-button compact" onClick={() => { setActiveTab('activity'); setActivityTab('activeGames'); }}>
+                      View Active Games
+                    </Button>
+                    <Button className="primary-button compact" onClick={() => onResumeGame(featuredActiveGame.id)} disabled={!featuredActiveGame}>
+                      Resume Game
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </section>
             {gameInvites.length ? (
               <section className="lobby-invite-top">
                 <GameInvitesPanel
@@ -10534,6 +10628,24 @@ function LobbyScreen({
                 />
               </section>
             ) : null}
+            <section className="panel lobby-panel lobby-panel--lobby lobby-browse-toggle-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Browse Games</p>
+                  <h2>Featured Or All</h2>
+                </div>
+                <span className="status-pill">{lobbyBrowseMode === 'featured' ? 'Featured' : 'All Games'}</span>
+              </div>
+              <div className="create-mode-row lobby-browse-toggle-row">
+                <Button className={`ghost-button compact ${lobbyBrowseMode === 'featured' ? 'is-on' : ''}`} onClick={() => setLobbyBrowseMode('featured')}>
+                  Featured Carousel
+                </Button>
+                <Button className={`ghost-button compact ${lobbyBrowseMode === 'all' ? 'is-on' : ''}`} onClick={() => setLobbyBrowseMode('all')}>
+                  All Games Grid
+                </Button>
+              </div>
+            </section>
+            {lobbyBrowseMode === 'all' ? renderLobbyGameBrowser() : null}
             <div className="game-lobby-grid">
               <section className="lobby-carousel-shell" aria-label="Game mode carousel">
                 <div
@@ -11407,7 +11519,7 @@ function LobbyScreen({
           </section>
         ) : null}
 
-        {activeTab === 'questionBank' ? (
+        {isAdmin && activeTab === 'questionBank' ? (
           <section className="lobby-tab-panel" aria-label="Question Bank" id="dashboard-question-bank">
             <section className="panel lobby-panel lobby-panel--lobby question-bank-card dashboard-page-card">
               <div className="panel-heading">
@@ -11980,6 +12092,22 @@ function LobbyScreen({
                 <span className="analytics-control-badge">
                   {lobbyAnalytics.totalGamesPlayed} {lobbyAnalytics.totalGamesPlayed === 1 ? 'game' : 'games'}
                 </span>
+              </div>
+              <div className="analytics-summary-panel analytics-summary-panel--hero">
+                <article className="analytics-summary-card">
+                  <div className="analytics-summary-head">
+                    <span className="analytics-summary-label">Current Lead</span>
+                    <strong className="analytics-summary-value">{lobbyAnalytics.leaderLabel || 'Level'}</strong>
+                  </div>
+                  <p className="analytics-summary-note">Start here for the headline view, then jump into the deeper mode tabs below.</p>
+                </article>
+                <article className="analytics-summary-card">
+                  <div className="analytics-summary-head">
+                    <span className="analytics-summary-label">Streak</span>
+                    <strong className="analytics-summary-value">{lobbyAnalytics.currentStreakLabel || 'No streak yet'}</strong>
+                  </div>
+                  <p className="analytics-summary-note">Quick way to see momentum without opening a detailed breakdown first.</p>
+                </article>
               </div>
               <div className="dashboard-subnav analytics-subnav" role="tablist" aria-label="Analytics segments">
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'facts' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('facts')}>
@@ -17176,6 +17304,7 @@ function HoldemGameRoom({
   profile,
   game,
   playerAccounts,
+  isAdmin = false,
   editingModeEnabled,
   onToggleEditingMode,
   role,
@@ -17303,13 +17432,18 @@ function HoldemGameRoom({
             <div className="top-menu-panel settings-menu-panel room-settings-menu-panel">
               <section className="settings-menu-section">
                 <span className="settings-section-label">Room Actions</span>
-                <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromRoomMenu} disabled={isBusy}>
-                  {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
-                </Button>
                 <Button className="ghost-button compact" onClick={handleSignOutFromRoomMenu}>
                   Sign out
                 </Button>
               </section>
+              {isAdmin ? (
+                <section className="settings-menu-section">
+                  <span className="settings-section-label">Admin</span>
+                  <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromRoomMenu} disabled={isBusy}>
+                    {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
+                  </Button>
+                </section>
+              ) : null}
             </div>
           </details>
         </div>
@@ -20088,6 +20222,7 @@ function GameRoomView({
   questionReplays,
   playerAccounts,
   bankQuestions,
+  isAdmin = false,
   editingModeEnabled,
   onToggleEditingMode,
   role,
@@ -20429,13 +20564,18 @@ function GameRoomView({
           <Button className="ghost-button compact" onClick={onReconnectLiveRoom} disabled={isBusy}>
             Reconnect
           </Button>
-          <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromRoomMenu} disabled={isBusy}>
-            {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
-          </Button>
           <Button className="ghost-button compact" onClick={handleSignOutFromRoomMenu}>
             Sign out
           </Button>
         </section>
+        {isAdmin ? (
+          <section className="settings-menu-section">
+            <span className="settings-section-label">Admin</span>
+            <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromRoomMenu} disabled={isBusy}>
+              {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
+            </Button>
+          </section>
+        ) : null}
       </div>
     </details>
   );
@@ -20508,18 +20648,20 @@ function GameRoomView({
     return (
       <>
         {renderMobileHostControls()}
-        <details className="panel mobile-host-drawer__details">
-          <summary>Question Bank</summary>
-          <QuestionBankMini
-            questions={bankQuestions}
-            draft={bankDraft}
-            setDraft={setBankDraft}
-            onAddQuestion={onAddQuestion}
-            onSyncSheet={onSyncSheet}
-            onImportSheet={onImportSheet}
-            syncNotice={syncNotice}
-          />
-        </details>
+        {isAdmin ? (
+          <details className="panel mobile-host-drawer__details">
+            <summary>Question Bank</summary>
+            <QuestionBankMini
+              questions={bankQuestions}
+              draft={bankDraft}
+              setDraft={setBankDraft}
+              onAddQuestion={onAddQuestion}
+              onSyncSheet={onSyncSheet}
+              onImportSheet={onImportSheet}
+              syncNotice={syncNotice}
+            />
+          </details>
+        ) : null}
       </>
     );
   };
@@ -20666,6 +20808,7 @@ function GameRoomView({
         profile={profile}
         game={game}
         playerAccounts={playerAccounts}
+        isAdmin={isAdmin}
         editingModeEnabled={editingModeEnabled}
         onToggleEditingMode={onToggleEditingMode}
         role={role}
@@ -21355,6 +21498,7 @@ function ProductionApp() {
     safeLocalStorageSet(roomChatMutedKey, roomChatMuted ? 'true' : 'false');
   }, [roomChatMuted]);
   const [surpriseRevealNowMs, setSurpriseRevealNowMs] = useState(() => Date.now());
+  const isAdminUser = isAdminEmail(user?.email);
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
   const hiddenGameIdSet = useMemo(() => new Set(pendingDeletedGameIds), [pendingDeletedGameIds]);
@@ -21414,6 +21558,7 @@ function ProductionApp() {
   const shouldAutoTopUpQuestionBanks = Boolean(
     user
     && firestore
+    && isAdminUser
     && deferredLobbyDataReady
     && !hasOpenRoomSession
     && dashboardTabState === 'questionBank',
@@ -26298,13 +26443,11 @@ function ProductionApp() {
   };
 
   const toggleEditingMode = () => {
+    if (!isAdminUser) {
+      setNotice('Editing Mode is only available to the admin account.');
+      return;
+    }
     if (!editingModeEnabled) {
-      const pin = window.prompt('Enter PIN for Editing Mode.');
-      if (pin === null) return;
-      if (String(pin).trim() !== EDITING_MODE_PIN) {
-        window.alert('Incorrect PIN.');
-        return;
-      }
       setEditingModeEnabled(true);
       setNotice('Editing Mode enabled. Test games stay local and do not save.');
       return;
@@ -32414,6 +32557,7 @@ function ProductionApp() {
 	      <LobbyScreen
 	        user={user}
 	        profile={profile}
+        isAdmin={isAdminUser}
 	        connectionState={connectionState}
 	        questionNotes={questionNotes}
 	        questionFeedback={questionFeedback}
@@ -32585,6 +32729,7 @@ function ProductionApp() {
       questionReplays={questionReplays}
       playerAccounts={playerAccounts}
       bankQuestions={bankQuestions}
+      isAdmin={isAdminUser}
       editingModeEnabled={editingModeEnabled}
       onToggleEditingMode={toggleEditingMode}
       role={inferredRole}
