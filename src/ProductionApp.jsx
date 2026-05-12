@@ -2030,6 +2030,8 @@ const questionBankMetaId = 'question-bank-source';
 const ADMIN_EMAIL = 'admin@kjkapp.com';
 const FEATURED_LOBBY_CARD_COUNT = 3;
 const FEATURED_LOBBY_OFFSET_STORAGE_KEY = 'kjk-featured-lobby-offset';
+const LOBBY_SHOWCASE_SECTION_STORAGE_KEY = 'kjk-lobby-showcase-section';
+const LOBBY_FAVOURITE_GAMES_STORAGE_KEY = 'kjk-lobby-favourite-games';
 const TEST_GAME_PREFIX = 'test-game-';
 const TEST_MODE_PLAYER_UID = 'editing-mode-kim';
 const TEST_MODE_PLAYER_NAME = 'Kim (Test)';
@@ -2050,6 +2052,23 @@ const getSafeInitialActivityTab = (value, dashboardValue) => {
   if (nextDashboardTab === 'ai') return 'ai';
   if (nextDashboardTab === 'diary') return 'diary';
   return 'activeGames';
+};
+const getSafeInitialLobbyShowcaseSection = (value) => {
+  const nextSection = normalizeText(value);
+  if (['friends', 'trending', 'featured', 'all', 'favourites'].includes(nextSection)) return nextSection;
+  return 'featured';
+};
+const readStoredLobbyFavouriteIds = () => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(LOBBY_FAVOURITE_GAMES_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.map((value) => normalizeText(value)).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
 };
 const readStoredBoolean = (key = '', fallbackValue = false) => {
   if (!key || typeof window === 'undefined') return fallbackValue;
@@ -7977,7 +7996,7 @@ function LobbyScreen({
     localStorage.getItem('kjk-activity-tab'),
     localStorage.getItem('kjk-dashboard-tab'),
   ));
-  const [lobbyBrowseMode, setLobbyBrowseMode] = useState(() => (typeof window !== 'undefined' && window.innerWidth <= 900 ? 'all' : 'featured'));
+  const [lobbyShowcaseSection, setLobbyShowcaseSection] = useState(() => getSafeInitialLobbyShowcaseSection(localStorage.getItem(LOBBY_SHOWCASE_SECTION_STORAGE_KEY)));
   const [createMode, setCreateMode] = useState('random');
   const [quizCreateCodeDraft, setQuizCreateCodeDraft] = useState('');
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
@@ -8041,6 +8060,7 @@ function LobbyScreen({
   const [balanceDrafts, setBalanceDrafts] = useState({ jay: '0', kim: '0' });
   const [profileNameDraft, setProfileNameDraft] = useState(() => normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   const [friendLookupDraft, setFriendLookupDraft] = useState('');
+  const [favouriteLobbyCardIds, setFavouriteLobbyCardIds] = useState(() => readStoredLobbyFavouriteIds());
   const [invitePickerConfig, setInvitePickerConfig] = useState(null);
   const [editingNoteId, setEditingNoteId] = useState('');
   const [editingNoteDraft, setEditingNoteDraft] = useState('');
@@ -8670,6 +8690,28 @@ function LobbyScreen({
           <svg {...sharedProps}>
             <path d="m12 4 1.7 4.3L18 10l-4.3 1.7L12 16l-1.7-4.3L6 10l4.3-1.7L12 4Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
             <path d="m18.5 4 .7 1.8L21 6.5l-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8ZM6 16.5l.9 2.2L9 19.5l-2.1.8L6 22.5l-.9-2.2L3 19.5l2.1-.8.9-2.2Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+          </svg>
+        );
+      case 'personPlus':
+        return (
+          <svg {...sharedProps}>
+            <circle cx="9" cy="9" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M4.8 18.5c.8-2.6 2.7-4 5.2-4s4.4 1.4 5.2 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M18 8.5h4M20 6.5v4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        );
+      case 'trend':
+        return (
+          <svg {...sharedProps}>
+            <path d="M4 17.5h16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="m6.5 14.5 3.4-3.4 2.8 2.8 5-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M16.8 7.9H18.9V10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        );
+      case 'star':
+        return (
+          <svg {...sharedProps}>
+            <path d="m12 4 2.1 4.3 4.7.7-3.4 3.3.8 4.7-4.2-2.2-4.2 2.2.8-4.7L5.2 9l4.7-.7L12 4Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
           </svg>
         );
       default:
@@ -9953,6 +9995,31 @@ function LobbyScreen({
   const featuredLobbyCards = Array.from({ length: Math.min(FEATURED_LOBBY_CARD_COUNT, lobbyAccessibleCards.length) }, (_, index) => (
     lobbyAccessibleCards[(featuredLobbyCardStartIndex + index) % lobbyAccessibleCards.length]
   )).filter(Boolean);
+  const favouriteLobbyCards = lobbyAccessibleCards.filter((card) => favouriteLobbyCardIds.includes(card.id));
+  const trendingLobbyCards = useMemo(() => {
+    const weightedCounts = new Map();
+    activeGames.forEach((game) => {
+      const modeId = normalizeText(game?.gameMode);
+      if (!modeId || modeId === 'holdem' || modeId === 'random') return;
+      weightedCounts.set(modeId, (weightedCounts.get(modeId) || 0) + 2);
+    });
+    previousGames.forEach((game) => {
+      const modeId = normalizeText(game?.gameMode);
+      if (!modeId || modeId === 'holdem' || modeId === 'random') return;
+      weightedCounts.set(modeId, (weightedCounts.get(modeId) || 0) + 1);
+    });
+    const sorted = lobbyAccessibleCards
+      .filter((card) => card.id !== 'random')
+      .map((card, index) => ({ card, score: weightedCounts.get(card.id) || 0, index }))
+      .sort((left, right) => {
+        if (right.score !== left.score) return right.score - left.score;
+        return left.index - right.index;
+      })
+      .map((entry) => entry.card);
+    const cardsWithHistory = sorted.filter((card) => (weightedCounts.get(card.id) || 0) > 0);
+    if (cardsWithHistory.length) return cardsWithHistory.slice(0, 4);
+    return featuredLobbyCards.length ? featuredLobbyCards : sorted.slice(0, 4);
+  }, [activeGames, previousGames, lobbyAccessibleCards, featuredLobbyCards]);
   const getLobbyCarouselCardIndex = (cardId) =>
     featuredLobbyCards.findIndex((card) => card.id === cardId);
   const lobbyCarouselCount = featuredLobbyCards.length;
@@ -9966,7 +10033,7 @@ function LobbyScreen({
     const nextFeaturedIndex = getLobbyCarouselCardIndex(cardId);
     const accessibleIndex = lobbyAccessibleCards.findIndex((card) => card.id === cardId);
     if (accessibleIndex < 0) return;
-    setLobbyBrowseMode('featured');
+    setLobbyShowcaseSection('featured');
     if (nextFeaturedIndex >= 0) {
       setLobbyCarouselIndex(nextFeaturedIndex);
       return;
@@ -10007,6 +10074,31 @@ function LobbyScreen({
     if (!lobbyCarouselCount) return;
     setLobbyCarouselIndex((current) => Math.min(current, lobbyCarouselCount - 1));
   }, [lobbyCarouselCount]);
+
+  useEffect(() => {
+    try {
+      safeLocalStorageSet(LOBBY_SHOWCASE_SECTION_STORAGE_KEY, lobbyShowcaseSection);
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [lobbyShowcaseSection]);
+
+  useEffect(() => {
+    try {
+      safeLocalStorageSet(LOBBY_FAVOURITE_GAMES_STORAGE_KEY, JSON.stringify(favouriteLobbyCardIds));
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [favouriteLobbyCardIds]);
+
+  const toggleLobbyFavourite = (cardId) => {
+    if (!cardId) return;
+    setFavouriteLobbyCardIds((current) => (
+      current.includes(cardId)
+        ? current.filter((value) => value !== cardId)
+        : [...current, cardId]
+    ));
+  };
 
   const handleLobbyCarouselTouchStart = (event) => {
     const touch = event.touches?.[0];
@@ -10328,34 +10420,65 @@ function LobbyScreen({
     </div>
   );
 
-  const renderLobbyGameBrowser = () => (
+  const renderLobbyGameBrowser = ({
+    eyebrow = 'All Games',
+    title = 'Scan Every Mode',
+    copy = 'Pick a game to jump straight to its setup card without swiping through the full featured rotation.',
+    cards = lobbyAccessibleCards,
+    emptyTitle = 'No games here yet',
+    emptyCopy = 'Games will appear here once they match this view.',
+  } = {}) => (
     <section className="panel lobby-panel lobby-panel--lobby lobby-browser-panel">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">All Games</p>
-          <h2>Scan Every Mode</h2>
+          <p className="eyebrow">{eyebrow}</p>
+          <h2>{title}</h2>
         </div>
-        <span className="status-pill">{lobbyAccessibleCards.length} modes</span>
+        <span className="status-pill">{cards.length} {cards.length === 1 ? 'mode' : 'modes'}</span>
       </div>
-      <p className="panel-copy">Pick a game to jump straight to its setup card without swiping through the full featured rotation.</p>
+      <p className="panel-copy">{copy}</p>
       <div className="lobby-browser-grid">
-        {lobbyAccessibleCards.map((card) => {
+        {cards.length ? cards.map((card) => {
           const details = lobbyGameDetails?.[card.id];
           const isActive = featuredLobbyCards[lobbyCarouselIndex]?.id === card.id;
+          const isFavourite = favouriteLobbyCardIds.includes(card.id);
           return (
-            <button
+            <article
               key={card.id}
-              type="button"
               className={`lobby-browser-card ${isActive ? 'is-active' : ''}`}
-              onClick={() => focusLobbyCard(card.id)}
               style={{ '--lobby-browser-image': `url("${card.image}")` }}
             >
-              <strong>{card.label}</strong>
-              <span>{lobbyCardReadyMeta[card.id] || 'Ready'}</span>
-              <small>{details?.name || 'Open setup'}</small>
-            </button>
+              <button
+                type="button"
+                className="lobby-browser-card-main"
+                onClick={() => focusLobbyCard(card.id)}
+              >
+                <strong>{card.label}</strong>
+                <span>{lobbyCardReadyMeta[card.id] || 'Ready'}</span>
+                <small>{details?.name || 'Open setup'}</small>
+              </button>
+              <button
+                type="button"
+                className={`ghost-button compact lobby-browser-favourite ${isFavourite ? 'is-on' : ''}`}
+                aria-pressed={isFavourite}
+                aria-label={isFavourite ? `Remove ${card.label} from favourites` : `Add ${card.label} to favourites`}
+                onClick={() => toggleLobbyFavourite(card.id)}
+              >
+                {renderDashboardIcon('star')}
+              </button>
+            </article>
           );
-        })}
+        }) : (
+          <div className="activity-empty-state activity-empty-state--pending lobby-browser-empty">
+            <h3>{emptyTitle}</h3>
+            <p className="empty-copy">{emptyCopy}</p>
+            {eyebrow === 'Favourites' ? (
+              <Button className="ghost-button compact" onClick={() => setLobbyShowcaseSection('all')}>
+                Browse All Games
+              </Button>
+            ) : null}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -10756,57 +10879,6 @@ function LobbyScreen({
               </div>
             </section>
             ) : null}
-            <section className="panel lobby-panel lobby-panel--lobby lobby-friends-panel">
-              <div className="panel-heading">
-                <div>
-                  <p className="eyebrow">Friends</p>
-                  <h2>Add Friend</h2>
-                </div>
-                <span className="status-pill">{friendProfiles.length}</span>
-              </div>
-              <p className="panel-copy">Add Kim or another player here by username or email. Once added, `Invite Friend` becomes the main way to start games.</p>
-              <div className="lobby-friends-grid">
-                <label className="field lobby-friends-field">
-                  <span>Username or email</span>
-                  <input
-                    value={friendLookupDraft}
-                    onChange={(event) => setFriendLookupDraft(event.target.value)}
-                    placeholder="kim or kim@example.com"
-                  />
-                </label>
-                <div className="button-row lobby-friends-actions">
-                  <Button
-                    className="primary-button compact"
-                    onClick={async () => {
-                      const added = await onAddFriend?.(friendLookupDraft);
-                      if (added !== false) setFriendLookupDraft('');
-                    }}
-                    disabled={isBusy || !normalizeText(friendLookupDraft)}
-                  >
-                    Add Friend
-                  </Button>
-                  <Button
-                    className="ghost-button compact"
-                    onClick={() => setIsProfileOpen(true)}
-                    disabled={isBusy}
-                  >
-                    Manage Friends
-                  </Button>
-                </div>
-              </div>
-              <div className="mini-list">
-                {friendProfiles.length ? (
-                  friendProfiles.slice(0, 4).map((friend) => (
-                    <article className="mini-list-row" key={`lobby-friend-${friend.uid}`}>
-                      <strong>{friend.displayName || friend.email || 'Friend'}</strong>
-                      <small>{friend.email || friend.uid}</small>
-                    </article>
-                  ))
-                ) : (
-                  <p className="empty-copy">No friends added yet.</p>
-                )}
-              </div>
-            </section>
             {gameInvites.length ? (
               <section className="lobby-invite-top">
                 <GameInvitesPanel
@@ -10818,28 +10890,103 @@ function LobbyScreen({
                 />
               </section>
             ) : null}
-            {featuredActiveGame ? (
-              <section className="panel lobby-panel lobby-panel--lobby lobby-browse-toggle-panel">
+            <section className="dashboard-subnav-shell dashboard-subnav-shell--lobby-menu lobby-showcase-menu-shell">
+              <div className="dashboard-subnav lobby-showcase-menu" role="tablist" aria-label="Lobby sections">
+                {[
+                  { id: 'friends', label: 'Add Friend', icon: 'personPlus' },
+                  { id: 'trending', label: 'Trending Games', icon: 'trend' },
+                  { id: 'featured', label: 'Featured Games', icon: 'spark' },
+                  { id: 'all', label: 'All Games', icon: 'controller' },
+                  { id: 'favourites', label: 'Favourites', icon: 'star' },
+                ].map((pill) => (
+                  <button
+                    key={pill.id}
+                    type="button"
+                    className={`dashboard-pill tab-button dashboard-pill--activity-sub lobby-showcase-pill ${lobbyShowcaseSection === pill.id ? 'is-active' : ''}`}
+                    onClick={() => setLobbyShowcaseSection(pill.id)}
+                  >
+                    {renderDashboardIcon(pill.icon)}
+                    {pill.label}
+                  </button>
+                ))}
+              </div>
+            </section>
+            {lobbyShowcaseSection === 'friends' ? (
+              <section className="panel lobby-panel lobby-panel--lobby lobby-friends-panel">
                 <div className="panel-heading">
                   <div>
-                    <p className="eyebrow">Browse Games</p>
-                    <h2>Featured Or All</h2>
+                    <p className="eyebrow">Friends</p>
+                    <h2>Add Friend</h2>
                   </div>
-                  <span className="status-pill">{lobbyBrowseMode === 'featured' ? 'Featured' : 'All Games'}</span>
+                  <span className="status-pill">{friendProfiles.length}</span>
                 </div>
-                <div className="create-mode-row lobby-browse-toggle-row">
-                  <Button className={`ghost-button compact ${lobbyBrowseMode === 'featured' ? 'is-on' : ''}`} onClick={() => setLobbyBrowseMode('featured')}>
-                    Featured Carousel
-                  </Button>
-                  <Button className={`ghost-button compact ${lobbyBrowseMode === 'all' ? 'is-on' : ''}`} onClick={() => setLobbyBrowseMode('all')}>
-                    All Games Grid
-                  </Button>
+                <p className="panel-copy">Add Kim or another player here by username or email. Once added, `Invite Friend` becomes the main way to start games.</p>
+                <div className="lobby-friends-grid">
+                  <label className="field lobby-friends-field">
+                    <span>Username or email</span>
+                    <input
+                      value={friendLookupDraft}
+                      onChange={(event) => setFriendLookupDraft(event.target.value)}
+                      placeholder="kim or kim@example.com"
+                    />
+                  </label>
+                  <div className="button-row lobby-friends-actions">
+                    <Button
+                      className="primary-button compact"
+                      onClick={async () => {
+                        const added = await onAddFriend?.(friendLookupDraft);
+                        if (added !== false) setFriendLookupDraft('');
+                      }}
+                      disabled={isBusy || !normalizeText(friendLookupDraft)}
+                    >
+                      Add Friend
+                    </Button>
+                    <Button
+                      className="ghost-button compact"
+                      onClick={() => setIsProfileOpen(true)}
+                      disabled={isBusy}
+                    >
+                      Manage Friends
+                    </Button>
+                  </div>
+                </div>
+                <div className="mini-list">
+                  {friendProfiles.length ? (
+                    friendProfiles.slice(0, 4).map((friend) => (
+                      <article className="mini-list-row" key={`lobby-friend-${friend.uid}`}>
+                        <strong>{friend.displayName || friend.email || 'Friend'}</strong>
+                        <small>{friend.email || friend.uid}</small>
+                      </article>
+                    ))
+                  ) : (
+                    <p className="empty-copy">No friends added yet.</p>
+                  )}
                 </div>
               </section>
             ) : null}
-            {lobbyBrowseMode === 'all' ? renderLobbyGameBrowser() : null}
-            <div className="game-lobby-grid">
-              <section className="lobby-carousel-shell" aria-label="Game mode carousel">
+            {lobbyShowcaseSection === 'trending' ? renderLobbyGameBrowser({
+              eyebrow: 'Trending Games',
+              title: 'Most Played Right Now',
+              copy: 'These are pulled from your active and previous games so the busiest modes stay easy to reach.',
+              cards: trendingLobbyCards,
+              emptyTitle: 'No trending data yet',
+              emptyCopy: 'Play a few games and your most-used modes will show up here.',
+            }) : null}
+            {lobbyShowcaseSection === 'all' ? renderLobbyGameBrowser({
+              eyebrow: 'All Games',
+              title: 'Scan Every Mode',
+              copy: 'Pick a game to jump straight to its setup card. Use the star on any tile to add it to Favourites.',
+            }) : null}
+            {lobbyShowcaseSection === 'favourites' ? renderLobbyGameBrowser({
+              eyebrow: 'Favourites',
+              title: 'Your Saved Modes',
+              copy: 'Star the games you use most and they will stay collected here for faster access.',
+              cards: favouriteLobbyCards,
+              emptyTitle: 'No favourite games yet',
+              emptyCopy: 'Star any game from Trending or All Games to pin it here.',
+            }) : null}
+            <div className={`game-lobby-grid ${lobbyShowcaseSection === 'featured' ? '' : 'game-lobby-grid--hidden'}`}>
+              <section className="lobby-carousel-shell" aria-label="Game mode carousel" hidden={lobbyShowcaseSection !== 'featured'}>
                 <div
                   className="lobby-carousel-stage"
                   aria-live="polite"
