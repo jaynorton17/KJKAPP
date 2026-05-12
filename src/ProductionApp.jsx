@@ -7803,6 +7803,7 @@ function LobbyScreen({
   user,
   profile,
   isAdmin = false,
+  friendProfiles = [],
   connectionState,
   questionNotes,
   questionFeedback,
@@ -7840,6 +7841,7 @@ function LobbyScreen({
   onGameNameChange,
   onGameQuestionCountChange,
   onCreateGame,
+  onAddFriend,
   onJoinGame,
   onJoinGameInvite,
   onDismissGameInvite,
@@ -8022,6 +8024,8 @@ function LobbyScreen({
   const [isBalanceEditorOpen, setIsBalanceEditorOpen] = useState(false);
   const [balanceDrafts, setBalanceDrafts] = useState({ jay: '0', kim: '0' });
   const [profileNameDraft, setProfileNameDraft] = useState(() => normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
+  const [friendLookupDraft, setFriendLookupDraft] = useState('');
+  const [invitePickerConfig, setInvitePickerConfig] = useState(null);
   const [editingNoteId, setEditingNoteId] = useState('');
   const [editingNoteDraft, setEditingNoteDraft] = useState('');
   const [mobileLobbyChatOpen, setMobileLobbyChatOpen] = useState(false);
@@ -8100,6 +8104,26 @@ function LobbyScreen({
     setter(values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value]);
   };
 
+  const openInvitePicker = (config, label = 'this game') => {
+    if (!friendProfiles.length) {
+      window.alert('Add a friend in My Profile first. Private code stays available as a fallback.');
+      setIsProfileOpen(true);
+      return;
+    }
+    setInvitePickerConfig({ config, label });
+  };
+
+  const inviteFriendToGame = (friend) => {
+    if (!friend?.uid || !invitePickerConfig?.config) return;
+    onCreateGame({
+      ...invitePickerConfig.config,
+      sendInvite: true,
+      targetUserId: friend.uid,
+      targetDisplayName: friend.displayName || friend.email || 'Friend',
+    });
+    setInvitePickerConfig(null);
+  };
+
   const handleCreateGame = () =>
     onCreateGame({
       mode: createMode,
@@ -8109,27 +8133,32 @@ function LobbyScreen({
     });
 
   const handleCreateAndInviteGame = () =>
-    onCreateGame({
+    openInvitePicker({
       mode: createMode,
       gameMode: 'standard',
       roundTypes: createMode === 'custom' ? selectedRoundTypes : [],
       categories: createMode === 'custom' ? selectedCategories : [],
-      sendInvite: true,
-    });
+    }, 'Normal Game');
 
   const handleCreateQuizGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: quizCreateCodeDraft,
       mode: 'random',
       gameMode: 'quiz',
       roundTypes: [],
       categories: [],
       requestedQuestionCount: quizQuestionCountDraft,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, 'Quick Fire Quiz') : onCreateGame({
+      createCode: quizCreateCodeDraft,
+      mode: 'random',
+      gameMode: 'quiz',
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: quizQuestionCountDraft,
+    }));
 
   const handleCreateTrueFalseGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: trueFalseCreateCodeDraft,
       gameName: 'True or False',
       mode: 'random',
@@ -8137,11 +8166,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: trueFalseQuestionCountDraft,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, 'True or False') : onCreateGame({
+      createCode: trueFalseCreateCodeDraft,
+      gameName: 'True or False',
+      mode: 'random',
+      gameMode: TRUE_FALSE_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: trueFalseQuestionCountDraft,
+    }));
 
   const handleCreateThisOrThatGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: thisOrThatCreateCodeDraft,
       gameName: 'This or That',
       mode: 'random',
@@ -8149,11 +8185,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: thisOrThatQuestionCountDraft,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, 'This or That') : onCreateGame({
+      createCode: thisOrThatCreateCodeDraft,
+      gameName: 'This or That',
+      mode: 'random',
+      gameMode: THIS_OR_THAT_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: thisOrThatQuestionCountDraft,
+    }));
 
   const handleCreateMostLikelyGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: mostLikelyCreateCodeDraft,
       gameName: 'Most Likely To',
       mode: 'random',
@@ -8161,11 +8204,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: mostLikelyQuestionCountDraft,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, 'Most Likely To') : onCreateGame({
+      createCode: mostLikelyCreateCodeDraft,
+      gameName: 'Most Likely To',
+      mode: 'random',
+      gameMode: MOST_LIKELY_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: mostLikelyQuestionCountDraft,
+    }));
 
   const handleCreatePutYourPointsGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: putYourPointsCreateCodeDraft,
       gameName: 'Put Your Points Where Your Mouth Is',
       mode: 'random',
@@ -8173,11 +8223,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: putYourPointsQuestionCountDraft,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, 'Put Your Points') : onCreateGame({
+      createCode: putYourPointsCreateCodeDraft,
+      gameName: 'Put Your Points Where Your Mouth Is',
+      mode: 'random',
+      gameMode: PUT_YOUR_POINTS_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: putYourPointsQuestionCountDraft,
+    }));
 
   const handleCreateSecretAuctionGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: secretAuctionCreateCodeDraft,
       gameName: HOW_SURE_ARE_YOU_GAME_NAME,
       mode: 'random',
@@ -8185,11 +8242,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: secretAuctionQuestionCountDraft,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, HOW_SURE_ARE_YOU_GAME_NAME) : onCreateGame({
+      createCode: secretAuctionCreateCodeDraft,
+      gameName: HOW_SURE_ARE_YOU_GAME_NAME,
+      mode: 'random',
+      gameMode: SECRET_AUCTION_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: secretAuctionQuestionCountDraft,
+    }));
 
   const handleCreateRedFlagGreenFlagGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: redFlagGreenFlagCreateCodeDraft,
       gameName: 'Red Flag Green Flag',
       mode: 'random',
@@ -8197,11 +8261,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: redFlagGreenFlagQuestionCountDraft,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, 'Red Flag Green Flag') : onCreateGame({
+      createCode: redFlagGreenFlagCreateCodeDraft,
+      gameName: 'Red Flag Green Flag',
+      mode: 'random',
+      gameMode: RED_FLAG_GREEN_FLAG_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: redFlagGreenFlagQuestionCountDraft,
+    }));
 
   const handleCreateCompatibilityMeterGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: compatibilityMeterCreateCodeDraft,
       gameName: 'Compatibility Meter',
       mode: 'random',
@@ -8209,11 +8280,18 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: compatibilityMeterQuestionCountDraft,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, 'Compatibility Meter') : onCreateGame({
+      createCode: compatibilityMeterCreateCodeDraft,
+      gameName: 'Compatibility Meter',
+      mode: 'random',
+      gameMode: COMPATIBILITY_METER_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: compatibilityMeterQuestionCountDraft,
+    }));
 
   const handleCreateMemoryLaneGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: memoryLaneCreateCodeDraft,
       gameName: 'Memory Lane',
       mode: 'random',
@@ -8221,8 +8299,15 @@ function LobbyScreen({
       roundTypes: [],
       categories: [],
       requestedQuestionCount: memoryLaneQuestionCountDraft,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, 'Memory Lane') : onCreateGame({
+      createCode: memoryLaneCreateCodeDraft,
+      gameName: 'Memory Lane',
+      mode: 'random',
+      gameMode: MEMORY_LANE_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: memoryLaneQuestionCountDraft,
+    }));
 
   const randomLobbyGameModes = useMemo(
     () => ([
@@ -8359,7 +8444,7 @@ function LobbyScreen({
   );
 
   const handleCreateRandomGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       gameName: 'Surprise Me',
       mode: 'random',
       gameMode: 'standard',
@@ -8367,19 +8452,32 @@ function LobbyScreen({
       categories: [],
       requestedQuestionCount: String(Math.max(1, parseNumber(randomQuestionCountDraft, 10) || 10)),
       surpriseMe: true,
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, 'Surprise Me') : onCreateGame({
+      gameName: 'Surprise Me',
+      mode: 'random',
+      gameMode: 'standard',
+      roundTypes: [],
+      categories: [],
+      requestedQuestionCount: String(Math.max(1, parseNumber(randomQuestionCountDraft, 10) || 10)),
+      surpriseMe: true,
+    }));
 
   const handleCreateHoldemGame = (sendInvite = false) =>
-    onCreateGame({
+    (sendInvite ? openInvitePicker({
       createCode: holdemCreateCodeDraft,
       gameName: "Texas Hold'em",
       mode: 'random',
       gameMode: HOLDEM_GAME_MODE,
       roundTypes: [],
       categories: [],
-      ...(sendInvite ? { sendInvite: true } : {}),
-    });
+    }, "Texas Hold'em") : onCreateGame({
+      createCode: holdemCreateCodeDraft,
+      gameName: "Texas Hold'em",
+      mode: 'random',
+      gameMode: HOLDEM_GAME_MODE,
+      roundTypes: [],
+      categories: [],
+    }));
 
   const setLobbyTileFlipped = (cardId, nextValue) => {
     if (typeof document !== 'undefined') {
@@ -10071,7 +10169,7 @@ function LobbyScreen({
               onClick={onCreateAndInvite}
               disabled={isBusy}
             >
-              Create + Invite
+              Invite Friend
             </Button>
           </div>
         </div>
@@ -10169,7 +10267,7 @@ function LobbyScreen({
                 {createLabel}
               </Button>
               <Button className="ghost-button compact" onClick={() => onCreate(true)} disabled={isBusy}>
-                Create + Invite
+                Invite Friend
               </Button>
             </div>
           </div>
@@ -10580,32 +10678,19 @@ function LobbyScreen({
       <section className="lobby-dashboard">
         {activeTab === 'gameLobby' ? (
           <section className="lobby-tab-panel lobby-tab-panel--game-lobby">
+            {featuredActiveGame ? (
             <section className="panel lobby-panel lobby-panel--lobby lobby-quick-actions-panel">
               <div className="panel-heading">
                 <div>
-                  <p className="eyebrow">Play Faster</p>
-                  <h2>Quick Start</h2>
+                  <p className="eyebrow">Current Active Game</p>
+                  <h2>Jump Back In</h2>
                 </div>
-                {featuredActiveGame ? <span className="status-pill">{activeGames.length} active</span> : <span className="status-pill">Lobby ready</span>}
+                <span className="status-pill">{activeGames.length} active</span>
               </div>
               <div className="lobby-quick-actions-grid">
                 <div className="lobby-quick-action-card">
-                  <strong>Join by code</strong>
-                  <span>Fast fallback if the invite panel is not open.</span>
-                  <div className="lobby-quick-action-row">
-                    <input value={joinCode} onChange={(event) => onJoinCodeChange(normalizeJoinCode(event.target.value))} placeholder="ABCD12" />
-                    <Button className="primary-button compact" onClick={onJoinGame} disabled={isBusy || !joinCode.length}>
-                      Join Game
-                    </Button>
-                  </div>
-                </div>
-                <div className="lobby-quick-action-card">
-                  <strong>{featuredActiveGame ? 'Resume latest game' : 'No active game yet'}</strong>
-                  <span>
-                    {featuredActiveGame
-                      ? `${featuredActiveGame.gameName || featuredActiveGame.name || featuredActiveGame.joinCode} is ready to jump back into.`
-                      : 'Create a new game or accept an invite to see resume shortcuts here.'}
-                  </span>
+                  <strong>Resume latest game</strong>
+                  <span>{`${featuredActiveGame.gameName || featuredActiveGame.name || featuredActiveGame.joinCode} is ready to jump back into.`}</span>
                   <div className="lobby-quick-action-row">
                     <Button className="ghost-button compact" onClick={() => { setActiveTab('activity'); setActivityTab('activeGames'); }}>
                       View Active Games
@@ -10617,6 +10702,7 @@ function LobbyScreen({
                 </div>
               </div>
             </section>
+            ) : null}
             {gameInvites.length ? (
               <section className="lobby-invite-top">
                 <GameInvitesPanel
@@ -13109,6 +13195,47 @@ function LobbyScreen({
             <section className="forfeit-requests-panel" style={{ marginTop: 14 }}>
               <div className="panel-heading compact-heading">
                 <div>
+                  <h3>Friends</h3>
+                </div>
+                <span className="status-pill">{friendProfiles.length}</span>
+              </div>
+              <label className="field">
+                <span>Add by username or email</span>
+                <input
+                  value={friendLookupDraft}
+                  onChange={(event) => setFriendLookupDraft(event.target.value)}
+                  placeholder="kim or kim@example.com"
+                />
+              </label>
+              <div className="button-row">
+                <Button
+                  className="primary-button compact"
+                  onClick={async () => {
+                    const added = await onAddFriend?.(friendLookupDraft);
+                    if (added !== false) setFriendLookupDraft('');
+                  }}
+                  disabled={isBusy || !normalizeText(friendLookupDraft)}
+                >
+                  Add Friend
+                </Button>
+              </div>
+              <div className="mini-list">
+                {friendProfiles.length ? (
+                  friendProfiles.map((friend) => (
+                    <article className="mini-list-row" key={friend.uid}>
+                      <strong>{friend.displayName || friend.email || 'Friend'}</strong>
+                      <small>{friend.email || friend.uid}</small>
+                    </article>
+                  ))
+                ) : (
+                  <p className="empty-copy">No friends added yet. Add Kim here, then use Invite Friend from any game card.</p>
+                )}
+              </div>
+            </section>
+
+            <section className="forfeit-requests-panel" style={{ marginTop: 14 }}>
+              <div className="panel-heading compact-heading">
+                <div>
                   <h3>Flagged Question Notes</h3>
                 </div>
                 <span className="status-pill">{questionNotes?.length || 0}</span>
@@ -13168,6 +13295,36 @@ function LobbyScreen({
                 )}
               </div>
             </section>
+          </div>
+        </section>
+      ) : null}
+
+      {invitePickerConfig ? (
+        <section className="modal-backdrop" role="presentation" onClick={() => setInvitePickerConfig(null)}>
+          <div className="panel modal-panel forfeit-modal" role="dialog" aria-modal="true" aria-label="Invite friend to game" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-heading compact-heading">
+              <div>
+                <p className="eyebrow">Invite Friend</p>
+                <h2>{invitePickerConfig.label || 'Create game'}</h2>
+              </div>
+              <Button className="ghost-button compact modal-close-button" onClick={() => setInvitePickerConfig(null)} disabled={isBusy} aria-label="Close invite friend picker">
+                Close
+              </Button>
+            </div>
+            <p className="panel-copy">Choose who should receive the lobby invite. Private code stays as a fallback if the invite does not show automatically.</p>
+            <div className="mini-list">
+              {friendProfiles.map((friend) => (
+                <article className="mini-list-row" key={`invite-friend-${friend.uid}`}>
+                  <strong>{friend.displayName || friend.email || 'Friend'}</strong>
+                  <small>{friend.email || friend.uid}</small>
+                  <div className="button-row">
+                    <Button className="primary-button compact" onClick={() => inviteFriendToGame(friend)} disabled={isBusy}>
+                      Create And Invite
+                    </Button>
+                  </div>
+                </article>
+              ))}
+            </div>
           </div>
         </section>
       ) : null}
@@ -21451,6 +21608,7 @@ function ProductionApp() {
   const [roomGameInvites, setRoomGameInvites] = useState([]);
   const [amaRequests, setAmaRequests] = useState([]);
   const [diaryEntries, setDiaryEntries] = useState([]);
+  const [friendProfiles, setFriendProfiles] = useState([]);
   const [questionNotes, setQuestionNotes] = useState([]);
   const [questionFeedback, setQuestionFeedback] = useState([]);
   const [questionReplays, setQuestionReplays] = useState([]);
@@ -21822,14 +21980,18 @@ function ProductionApp() {
             {
               uid: nextUser.uid,
               displayName: nextUser.displayName || nextUser.email?.split('@')[0] || 'Player',
+              displayNameLower: normalizeIdentity(nextUser.displayName || nextUser.email?.split('@')[0] || 'Player'),
               email: nextUser.email || '',
+              emailLower: normalizeIdentity(nextUser.email || ''),
               photoURL: nextUser.photoURL || '',
+              friendIds: [],
               updatedAt: serverTimestamp(),
             },
             { merge: true },
           );
         } else {
           setProfile(null);
+          setFriendProfiles([]);
           autoResumedGameIdRef.current = '';
           setGameId('');
           localStorage.removeItem(activeGameKey);
@@ -21941,6 +22103,37 @@ function ProductionApp() {
     });
     return unsubscribe;
   }, [user, gameId, firestore, listenerRefreshKey, enterFirestoreCooldown, hiddenGameIdSet]);
+
+  useEffect(() => {
+    if (!firestore) return undefined;
+    const friendIds = Array.isArray(profile?.friendIds) ? profile.friendIds.filter(Boolean) : [];
+    if (!friendIds.length) {
+      setFriendProfiles([]);
+      return undefined;
+    }
+    let cancelled = false;
+    void Promise.all(friendIds.map(async (uid) => {
+      const snap = await getDoc(doc(firestore, 'users', uid)).catch(() => null);
+      if (!snap?.exists()) return null;
+      const data = snap.data() || {};
+      return {
+        uid,
+        displayName: data.displayName || '',
+        email: data.email || '',
+        photoURL: data.photoURL || '',
+      };
+    })).then((rows) => {
+      if (cancelled) return;
+      setFriendProfiles(
+        rows
+          .filter(Boolean)
+          .sort((a, b) => String(a.displayName || a.email || '').localeCompare(String(b.displayName || b.email || ''))),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [firestore, profile?.friendIds]);
 
   useEffect(() => {
     gameLibrarySnapshotRequestRef.current += 1;
@@ -26974,6 +27167,7 @@ function ProductionApp() {
         {
           uid: user.uid,
           displayName: cleanDisplayName,
+          displayNameLower: normalizeIdentity(cleanDisplayName),
           updatedAt: serverTimestamp(),
         },
         { merge: true },
@@ -27014,6 +27208,52 @@ function ProductionApp() {
       setProfile((current) => (current ? { ...current, displayName: cleanDisplayName } : current));
       setNotice(`Profile updated to ${cleanDisplayName}.`);
     }, 'Could not update profile.');
+
+  const addFriendByLookup = async (lookupValue = '') =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid) throw new Error('You must be signed in.');
+      const normalizedLookup = normalizeIdentity(lookupValue);
+      if (!normalizedLookup) throw new Error('Enter a username or email address.');
+      if (normalizedLookup === normalizeIdentity(user?.email || '') || normalizedLookup === normalizeIdentity(profile?.displayName || user?.displayName || '')) {
+        throw new Error('You cannot add yourself as a friend.');
+      }
+      const existingFriendIds = new Set(Array.isArray(profile?.friendIds) ? profile.friendIds : []);
+      let friendSnap = null;
+      const emailMatch = await getDocs(query(collection(firestore, 'users'), where('emailLower', '==', normalizedLookup), limit(1))).catch(() => null);
+      if (emailMatch && !emailMatch.empty) {
+        [friendSnap] = emailMatch.docs;
+      } else {
+        const nameMatch = await getDocs(query(collection(firestore, 'users'), where('displayNameLower', '==', normalizedLookup), limit(1))).catch(() => null);
+        if (nameMatch && !nameMatch.empty) [friendSnap] = nameMatch.docs;
+      }
+      if (!friendSnap?.exists()) {
+        const legacyEmailMatch = await getDocs(query(collection(firestore, 'users'), where('email', '==', lookupValue.trim()), limit(1))).catch(() => null);
+        if (legacyEmailMatch && !legacyEmailMatch.empty) {
+          [friendSnap] = legacyEmailMatch.docs;
+        } else {
+          const legacyNameMatch = await getDocs(query(collection(firestore, 'users'), where('displayName', '==', normalizeText(lookupValue)), limit(1))).catch(() => null);
+          if (legacyNameMatch && !legacyNameMatch.empty) [friendSnap] = legacyNameMatch.docs;
+        }
+      }
+      if (!friendSnap?.exists()) throw new Error('No user matched that username or email.');
+      if (friendSnap.id === user.uid) throw new Error('You cannot add yourself as a friend.');
+      if (existingFriendIds.has(friendSnap.id)) throw new Error('That friend is already in your list.');
+      const friendData = friendSnap.data() || {};
+      await Promise.all([
+        setDoc(doc(firestore, 'users', user.uid), {
+          uid: user.uid,
+          friendIds: arrayUnion(friendSnap.id),
+          updatedAt: serverTimestamp(),
+        }, { merge: true }),
+        setDoc(doc(firestore, 'users', friendSnap.id), {
+          uid: friendSnap.id,
+          friendIds: arrayUnion(user.uid),
+          updatedAt: serverTimestamp(),
+        }, { merge: true }),
+      ]);
+      setNotice(`Added ${friendData.displayName || friendData.email || 'friend'} to your friends list.`);
+      return true;
+    }, 'Could not add friend.');
 
   const savePrivateQuestionNote = async ({ round = null, noteText = '' } = {}) =>
     withBusy(async () => {
@@ -27893,7 +28133,8 @@ function ProductionApp() {
       const creatorSeat = preferredSeatForUser(user, profile);
       const guestSeat = oppositeSeatOf(creatorSeat);
       const inviteTargetSeat = guestSeat;
-      const inviteTargetUserId = playerIdForSeat(inviteTargetSeat);
+      const inviteTargetUserId = options.targetUserId || playerIdForSeat(inviteTargetSeat);
+      const inviteTargetLabel = options.targetDisplayName || PLAYER_LABEL[inviteTargetSeat] || inviteTargetSeat;
 
       const shouldCreateLocalTestGame = editingModeEnabled && window.confirm(
         'Editing Mode is enabled.\n\nPress OK to create a local test game on this device only.\nPress Cancel to create a live game that other players can join with a code.',
@@ -28318,9 +28559,9 @@ function ProductionApp() {
         setChatMessages([]);
         setGameId(gameRef.id);
         safeLocalStorageSet(activeGameKey, gameRef.id);
-        setNotice(
+          setNotice(
           options.sendInvite
-            ? `${isSurpriseMeGame ? 'Surprise Me room' : 'Game'} ${joinCode} created and invite sent to ${PLAYER_LABEL[inviteTargetSeat] || inviteTargetSeat}.`
+            ? `${isSurpriseMeGame ? 'Surprise Me room' : 'Game'} ${joinCode} created and invite sent to ${inviteTargetLabel}.`
             : isHoldemGame
               ? `Texas Hold’em game ${joinCode} created.`
               : isSurpriseMeGame
@@ -28809,11 +29050,14 @@ function ProductionApp() {
           {
             uid: credential.user.uid,
             displayName: authForm.displayName.trim(),
+            displayNameLower: normalizeIdentity(authForm.displayName.trim()),
             email: credential.user.email || '',
+            emailLower: normalizeIdentity(credential.user.email || ''),
             photoURL: credential.user.photoURL || '',
             lifetimePenaltyPoints: 0,
             activeGames: [],
             activeGameId: '',
+            friendIds: [],
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           },
@@ -32558,6 +32802,7 @@ function ProductionApp() {
 	        user={user}
 	        profile={profile}
         isAdmin={isAdminUser}
+        friendProfiles={friendProfiles}
 	        connectionState={connectionState}
 	        questionNotes={questionNotes}
 	        questionFeedback={questionFeedback}
@@ -32595,6 +32840,7 @@ function ProductionApp() {
         onGameNameChange={setLobbyGameName}
         onGameQuestionCountChange={setLobbyQuestionCount}
         onCreateGame={createGame}
+        onAddFriend={addFriendByLookup}
         onJoinGame={joinGame}
         onJoinGameInvite={acceptGameInviteAction}
         onDismissGameInvite={dismissGameInviteAction}
