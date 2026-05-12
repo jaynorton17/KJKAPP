@@ -10756,23 +10756,25 @@ function LobbyScreen({
                 />
               </section>
             ) : null}
-            <section className="panel lobby-panel lobby-panel--lobby lobby-browse-toggle-panel">
-              <div className="panel-heading">
-                <div>
-                  <p className="eyebrow">Browse Games</p>
-                  <h2>Featured Or All</h2>
+            {featuredActiveGame ? (
+              <section className="panel lobby-panel lobby-panel--lobby lobby-browse-toggle-panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Browse Games</p>
+                    <h2>Featured Or All</h2>
+                  </div>
+                  <span className="status-pill">{lobbyBrowseMode === 'featured' ? 'Featured' : 'All Games'}</span>
                 </div>
-                <span className="status-pill">{lobbyBrowseMode === 'featured' ? 'Featured' : 'All Games'}</span>
-              </div>
-              <div className="create-mode-row lobby-browse-toggle-row">
-                <Button className={`ghost-button compact ${lobbyBrowseMode === 'featured' ? 'is-on' : ''}`} onClick={() => setLobbyBrowseMode('featured')}>
-                  Featured Carousel
-                </Button>
-                <Button className={`ghost-button compact ${lobbyBrowseMode === 'all' ? 'is-on' : ''}`} onClick={() => setLobbyBrowseMode('all')}>
-                  All Games Grid
-                </Button>
-              </div>
-            </section>
+                <div className="create-mode-row lobby-browse-toggle-row">
+                  <Button className={`ghost-button compact ${lobbyBrowseMode === 'featured' ? 'is-on' : ''}`} onClick={() => setLobbyBrowseMode('featured')}>
+                    Featured Carousel
+                  </Button>
+                  <Button className={`ghost-button compact ${lobbyBrowseMode === 'all' ? 'is-on' : ''}`} onClick={() => setLobbyBrowseMode('all')}>
+                    All Games Grid
+                  </Button>
+                </div>
+              </section>
+            ) : null}
             {lobbyBrowseMode === 'all' ? renderLobbyGameBrowser() : null}
             <div className="game-lobby-grid">
               <section className="lobby-carousel-shell" aria-label="Game mode carousel">
