@@ -10744,19 +10744,10 @@ function LobbyScreen({
 	    <main className={`app production-app ${isMobileDashboardNav ? 'mobile-app' : ''}`}>
 	      <header className="top-bar top-bar--shell">
         {!isMobileDashboardNav ? (
-          <div className="top-bar-left top-bar-left--profile-stack">
+          <div className="top-bar-left">
             <Button className="ghost-button compact" onClick={() => setIsProfileOpen(true)}>
               My Profile
             </Button>
-            <button
-              type="button"
-              className="top-profile-shortcut top-profile-shortcut--friend"
-              onClick={() => setIsProfileOpen(true)}
-              aria-label="Add friend"
-              title="Add friend"
-            >
-              {renderDashboardIcon('personPlus')}
-            </button>
           </div>
         ) : null}
         <div className="brand-lockup">
@@ -10774,6 +10765,15 @@ function LobbyScreen({
 	              Kim {formatScore(Number(playerAccounts?.kim?.lifetimePenaltyPoints || 0))}
 	            </span>
 	          </div>
+            <button
+              type="button"
+              className="top-profile-shortcut top-profile-shortcut--friend"
+              onClick={() => setIsProfileOpen(true)}
+              aria-label="Add friend"
+              title="Add friend"
+            >
+              {renderDashboardIcon('personPlus')}
+            </button>
 	          <details className="top-menu settings-menu dashboard-settings-menu" ref={dashboardMenuRef}>
 	            <summary aria-label="Open account menu">
 	              <span className="settings-icon" aria-hidden="true">
@@ -10863,6 +10863,26 @@ function LobbyScreen({
       <section className="lobby-dashboard">
         {activeTab === 'gameLobby' ? (
           <section className="lobby-tab-panel lobby-tab-panel--game-lobby">
+            <section className="dashboard-subnav-shell dashboard-subnav-shell--lobby-menu lobby-showcase-menu-shell">
+              <div className="dashboard-subnav lobby-showcase-menu" role="tablist" aria-label="Lobby sections">
+                {[
+                  { id: 'trending', label: 'Trending Games', icon: 'trend' },
+                  { id: 'featured', label: 'Featured Games', icon: 'spark' },
+                  { id: 'all', label: 'All Games', icon: 'controller' },
+                  { id: 'favourites', label: 'Favourites', icon: 'star' },
+                ].map((pill) => (
+                  <button
+                    key={pill.id}
+                    type="button"
+                    className={`dashboard-pill tab-button dashboard-pill--activity-sub lobby-showcase-pill ${lobbyShowcaseSection === pill.id ? 'is-active' : ''}`}
+                    onClick={() => setLobbyShowcaseSection(pill.id)}
+                  >
+                    {renderDashboardIcon(pill.icon)}
+                    {pill.label}
+                  </button>
+                ))}
+              </div>
+            </section>
             {featuredActiveGame ? (
             <section className="panel lobby-panel lobby-panel--lobby lobby-quick-actions-panel">
               <div className="panel-heading">
@@ -10899,26 +10919,6 @@ function LobbyScreen({
                 />
               </section>
             ) : null}
-            <section className="dashboard-subnav-shell dashboard-subnav-shell--lobby-menu lobby-showcase-menu-shell">
-              <div className="dashboard-subnav lobby-showcase-menu" role="tablist" aria-label="Lobby sections">
-                {[
-                  { id: 'trending', label: 'Trending Games', icon: 'trend' },
-                  { id: 'featured', label: 'Featured Games', icon: 'spark' },
-                  { id: 'all', label: 'All Games', icon: 'controller' },
-                  { id: 'favourites', label: 'Favourites', icon: 'star' },
-                ].map((pill) => (
-                  <button
-                    key={pill.id}
-                    type="button"
-                    className={`dashboard-pill tab-button dashboard-pill--activity-sub lobby-showcase-pill ${lobbyShowcaseSection === pill.id ? 'is-active' : ''}`}
-                    onClick={() => setLobbyShowcaseSection(pill.id)}
-                  >
-                    {renderDashboardIcon(pill.icon)}
-                    {pill.label}
-                  </button>
-                ))}
-              </div>
-            </section>
             {lobbyShowcaseSection === 'trending' ? renderLobbyGameBrowser({
               eyebrow: 'Trending Games',
               title: 'Most Played Right Now',

@@ -203,7 +203,7 @@ button:disabled {
 
 .lobby-showcase-menu-shell {
   width: min(100%, 1120px);
-  margin: 4px auto 0;
+  margin: 0 auto 8px;
   --section-accent: #ff355d;
 }
 
@@ -12977,12 +12977,6 @@ select:focus-visible {
   grid-area: sponsor;
   justify-content: flex-start;
   align-self: start;
-}
-
-.top-bar-left--profile-stack {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
 }
 
 .top-profile-shortcut {
