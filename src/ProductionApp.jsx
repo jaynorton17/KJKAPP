@@ -15979,6 +15979,7 @@ function RoomRevealPlayerCard({
     const revealRound = compatibilityOverallStep ? null : (compatibilityRevealRounds[compatibilityRevealIndex] || null);
     if (compatibilityOverallStep) {
       const finalPenalty = Number(currentRound?.compatibilityFinalPenalty ?? currentRound?.penalties?.[playerSeat] ?? 0);
+      const finalCompatibilityScore = Number(currentRound?.compatibilityFinalScore ?? currentRound?.compatibilityScore ?? 0);
       return (
         <article className={`room-reveal-player-card room-reveal-player-card--${playerSeat}`}>
           <div className="room-reveal-player-head">
@@ -15998,9 +15999,9 @@ function RoomRevealPlayerCard({
             </div>
 
             <div className="room-reveal-answer-block room-reveal-answer-block--guess">
-              <span>Final band</span>
+              <span>Overall result</span>
               <div className="room-reveal-answer-copy">
-                <strong>{getCompatibilityScoreSummary(currentRound?.compatibilityFinalScore ?? currentRound?.compatibilityScore ?? 0)}</strong>
+                <strong>{`You two are ${finalCompatibilityScore}% compatible`}</strong>
               </div>
             </div>
           </div>
@@ -16830,7 +16831,9 @@ function RoomActiveFrameBase({
                       revealKey={`${currentRound?.id || 'compatibility'}-${compatibilityRevealIndex}-${compatibilityOverallRevealStep ? 'overall' : 'question'}`}
                     />
                     <p>
-                      {compatibilitySummaryLabel}
+                      {compatibilityOverallRevealStep
+                        ? `For this test, you two are ${compatibilityRevealScore}% compatible.`
+                        : compatibilitySummaryLabel}
                       {compatibilityOverallRevealStep || !compatibilityFinalReveal ? (
                         <>
                           {' · '}
