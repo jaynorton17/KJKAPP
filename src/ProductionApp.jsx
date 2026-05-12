@@ -2030,6 +2030,7 @@ const questionBankMetaId = 'question-bank-source';
 const ADMIN_EMAIL = 'admin@kjkapp.com';
 const FEATURED_LOBBY_CARD_COUNT = 3;
 const FEATURED_LOBBY_OFFSET_STORAGE_KEY = 'kjk-featured-lobby-offset';
+const FEATURED_LOBBY_PAIR_STORAGE_KEY = 'kjk-featured-lobby-pair';
 const LOBBY_SHOWCASE_SECTION_STORAGE_KEY = 'kjk-lobby-showcase-section';
 const LOBBY_FAVOURITE_GAMES_STORAGE_KEY = 'kjk-lobby-favourite-games';
 const TEST_GAME_PREFIX = 'test-game-';
@@ -10088,18 +10089,40 @@ function LobbyScreen({
     if (randomLobbyCard?.id) nextFeaturedIds.push(randomLobbyCard.id);
     if (rotatingLobbyCards.length) {
       let nextStartIndex = 0;
+      let previousPairIds = [];
       try {
         const storedRaw = Number.parseInt(window.localStorage.getItem(FEATURED_LOBBY_OFFSET_STORAGE_KEY) || '0', 10);
         nextStartIndex = Number.isFinite(storedRaw) ? Math.max(0, storedRaw) % rotatingLobbyCards.length : 0;
+        previousPairIds = JSON.parse(window.localStorage.getItem(FEATURED_LOBBY_PAIR_STORAGE_KEY) || '[]');
+      } catch {
+        nextStartIndex = 0;
+        previousPairIds = [];
+      }
+      const rotatingCardCount = Math.min(FEATURED_LOBBY_CARD_COUNT - nextFeaturedIds.length, rotatingLobbyCards.length);
+      let selectedPairIds = [];
+      for (let attempt = 0; attempt < Math.max(1, rotatingLobbyCards.length); attempt += 1) {
+        const candidateStartIndex = (nextStartIndex + attempt) % rotatingLobbyCards.length;
+        const candidateIds = [];
+        for (let index = 0; index < rotatingCardCount; index += 1) {
+          candidateIds.push(rotatingLobbyCards[(candidateStartIndex + index) % rotatingLobbyCards.length].id);
+        }
+        const isRepeatPair = (
+          candidateIds.length === previousPairIds.length &&
+          candidateIds.every((cardId, index) => cardId === previousPairIds[index])
+        );
+        selectedPairIds = candidateIds;
+        nextStartIndex = candidateStartIndex;
+        if (!isRepeatPair || rotatingLobbyCards.length <= rotatingCardCount) break;
+      }
+      nextFeaturedIds.push(...selectedPairIds);
+      try {
         window.localStorage.setItem(
           FEATURED_LOBBY_OFFSET_STORAGE_KEY,
           String((nextStartIndex + 2) % rotatingLobbyCards.length),
         );
+        window.localStorage.setItem(FEATURED_LOBBY_PAIR_STORAGE_KEY, JSON.stringify(selectedPairIds));
       } catch {
-        nextStartIndex = 0;
-      }
-      for (let index = 0; index < Math.min(FEATURED_LOBBY_CARD_COUNT - nextFeaturedIds.length, rotatingLobbyCards.length); index += 1) {
-        nextFeaturedIds.push(rotatingLobbyCards[(nextStartIndex + index) % rotatingLobbyCards.length].id);
+        // Ignore storage failures.
       }
     }
     if (!nextFeaturedIds.length) {
