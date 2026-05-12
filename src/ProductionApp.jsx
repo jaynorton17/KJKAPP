@@ -9997,6 +9997,19 @@ function LobbyScreen({
     thisOrThat: allGamesThisOrThatTileImage,
     trueFalse: allGamesTrueOrFalseTileImage,
   };
+  const lobbyCardActionHandlers = {
+    standard: { create: handleCreateGame, invite: handleCreateAndInviteGame },
+    putYourPoints: { create: () => handleCreatePutYourPointsGame(false), invite: () => handleCreatePutYourPointsGame(true) },
+    secretAuction: { create: () => handleCreateSecretAuctionGame(false), invite: () => handleCreateSecretAuctionGame(true) },
+    quiz: { create: () => handleCreateQuizGame(false), invite: () => handleCreateQuizGame(true) },
+    thisOrThat: { create: () => handleCreateThisOrThatGame(false), invite: () => handleCreateThisOrThatGame(true) },
+    memoryLane: { create: () => handleCreateMemoryLaneGame(false), invite: () => handleCreateMemoryLaneGame(true) },
+    trueFalse: { create: () => handleCreateTrueFalseGame(false), invite: () => handleCreateTrueFalseGame(true) },
+    mostLikely: { create: () => handleCreateMostLikelyGame(false), invite: () => handleCreateMostLikelyGame(true) },
+    redFlagGreenFlag: { create: () => handleCreateRedFlagGreenFlagGame(false), invite: () => handleCreateRedFlagGreenFlagGame(true) },
+    compatibilityMeter: { create: () => handleCreateCompatibilityMeterGame(false), invite: () => handleCreateCompatibilityMeterGame(true) },
+    random: { create: () => handleCreateRandomGame(false), invite: () => handleCreateRandomGame(true) },
+  };
   const lobbyAccessibleCards = lobbyCarouselCards.filter((card) => card.id !== 'holdem');
   const randomLobbyCard = lobbyAccessibleCards.find((card) => card.id === 'random') || null;
   const rotatingLobbyCards = lobbyAccessibleCards.filter((card) => card.id !== 'random');
@@ -10463,21 +10476,45 @@ function LobbyScreen({
           const isActive = featuredLobbyCards.some((featuredCard) => featuredCard.id === card.id);
           const isFavourite = favouriteLobbyCardIds.includes(card.id);
           const imageUrl = imageOverrides?.[card.id] || card.image;
+          const actionHandlers = lobbyCardActionHandlers[card.id] || null;
           return (
             <article
               key={card.id}
               className={`lobby-browser-card ${isActive ? 'is-active' : ''} ${compactArtwork ? 'lobby-browser-card--compact-art' : ''}`}
               style={{ '--lobby-browser-image': `url("${imageUrl}")` }}
             >
-              <button
-                type="button"
-                className="lobby-browser-card-main"
-                onClick={() => focusLobbyCard(card.id)}
-              >
-                <strong>{card.label}</strong>
-                <span>{lobbyCardReadyMeta[card.id] || 'Ready'}</span>
-                <small>{details?.name || 'Open setup'}</small>
-              </button>
+              {compactArtwork ? (
+                <div className="lobby-browser-card-main lobby-browser-card-main--compact-art">
+                  <div className="button-row lobby-browser-card-actions">
+                    <Button
+                      type="button"
+                      className="ghost-button compact"
+                      onClick={() => actionHandlers?.create ? actionHandlers.create() : focusLobbyCard(card.id)}
+                      disabled={isBusy}
+                    >
+                      Create
+                    </Button>
+                    <Button
+                      type="button"
+                      className="primary-button compact"
+                      onClick={() => actionHandlers?.invite ? actionHandlers.invite() : focusLobbyCard(card.id)}
+                      disabled={isBusy}
+                    >
+                      Invite
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="lobby-browser-card-main"
+                  onClick={() => focusLobbyCard(card.id)}
+                >
+                  <strong>{card.label}</strong>
+                  <span>{lobbyCardReadyMeta[card.id] || 'Ready'}</span>
+                  <small>{details?.name || 'Open setup'}</small>
+                </button>
+              )}
               <button
                 type="button"
                 className={`ghost-button compact lobby-browser-favourite ${isFavourite ? 'is-on' : ''}`}

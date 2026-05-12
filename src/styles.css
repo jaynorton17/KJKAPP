@@ -320,6 +320,20 @@ button:disabled {
   --lobby-browser-image-position: center 38%;
 }
 
+.lobby-browser-card-main--compact-art {
+  align-content: end;
+  padding: 14px;
+}
+
+.lobby-browser-card-actions {
+  width: 100%;
+  justify-content: center;
+}
+
+.lobby-browser-card-actions .compact {
+  min-width: 96px;
+}
+
 .lobby-browser-card::before {
   content: "";
   position: absolute;
