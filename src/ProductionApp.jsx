@@ -10745,6 +10745,57 @@ function LobbyScreen({
               </div>
             </section>
             ) : null}
+            <section className="panel lobby-panel lobby-panel--lobby lobby-friends-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Friends</p>
+                  <h2>Add Friend</h2>
+                </div>
+                <span className="status-pill">{friendProfiles.length}</span>
+              </div>
+              <p className="panel-copy">Add Kim or another player here by username or email. Once added, `Invite Friend` becomes the main way to start games.</p>
+              <div className="lobby-friends-grid">
+                <label className="field lobby-friends-field">
+                  <span>Username or email</span>
+                  <input
+                    value={friendLookupDraft}
+                    onChange={(event) => setFriendLookupDraft(event.target.value)}
+                    placeholder="kim or kim@example.com"
+                  />
+                </label>
+                <div className="button-row lobby-friends-actions">
+                  <Button
+                    className="primary-button compact"
+                    onClick={async () => {
+                      const added = await onAddFriend?.(friendLookupDraft);
+                      if (added !== false) setFriendLookupDraft('');
+                    }}
+                    disabled={isBusy || !normalizeText(friendLookupDraft)}
+                  >
+                    Add Friend
+                  </Button>
+                  <Button
+                    className="ghost-button compact"
+                    onClick={() => setIsProfileOpen(true)}
+                    disabled={isBusy}
+                  >
+                    Manage Friends
+                  </Button>
+                </div>
+              </div>
+              <div className="mini-list">
+                {friendProfiles.length ? (
+                  friendProfiles.slice(0, 4).map((friend) => (
+                    <article className="mini-list-row" key={`lobby-friend-${friend.uid}`}>
+                      <strong>{friend.displayName || friend.email || 'Friend'}</strong>
+                      <small>{friend.email || friend.uid}</small>
+                    </article>
+                  ))
+                ) : (
+                  <p className="empty-copy">No friends added yet.</p>
+                )}
+              </div>
+            </section>
             {gameInvites.length ? (
               <section className="lobby-invite-top">
                 <GameInvitesPanel

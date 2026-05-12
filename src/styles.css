@@ -191,6 +191,7 @@ button:disabled {
 }
 
 .lobby-quick-actions-panel,
+.lobby-friends-panel,
 .lobby-browse-toggle-panel,
 .lobby-browser-panel {
   width: 100%;
@@ -242,6 +243,21 @@ button:disabled {
   color: #fff;
   font-size: 0.95rem;
   font-weight: 700;
+}
+
+.lobby-friends-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.lobby-friends-field {
+  margin: 0;
+}
+
+.lobby-friends-actions {
+  justify-content: flex-end;
 }
 
 .lobby-browse-toggle-row {
@@ -868,6 +884,9 @@ button:disabled {
   .lobby-browser-grid {
     grid-template-columns: 1fr;
   }
+  .lobby-friends-grid {
+    grid-template-columns: 1fr;
+  }
   .game-lobby-grid {
     grid-template-columns: 1fr;
   }
@@ -928,8 +947,13 @@ button:disabled {
   }
 
   .lobby-quick-action-row input,
-  .lobby-quick-action-row .compact {
+  .lobby-quick-action-row .compact,
+  .lobby-friends-actions .compact {
     width: 100%;
+  }
+
+  .lobby-friends-actions {
+    justify-content: stretch;
   }
 
   .lobby-carousel-shell {
