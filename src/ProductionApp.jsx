@@ -21250,15 +21250,7 @@ function ProductionApp() {
       return false;
     }
   });
-  const [gameId, setGameId] = useState(() => {
-    try {
-      if (window.matchMedia?.('(max-width: 900px)').matches) return '';
-      const storedGameId = window.localStorage.getItem(activeGameKey) || '';
-      return isLocalTestGameId(storedGameId) ? '' : storedGameId;
-    } catch {
-      return '';
-    }
-  });
+  const [gameId, setGameId] = useState('');
   const [game, setGame] = useState(null);
   const [rounds, setRounds] = useState([]);
   const [bankQuestions, setBankQuestions] = useState([]);
@@ -21764,8 +21756,6 @@ function ProductionApp() {
             setNotice('The saved active game was no longer available, so the app returned to the lobby.');
             return;
           }
-          autoResumedGameIdRef.current = activeGameFromProfile;
-          setGameId(activeGameFromProfile);
           safeLocalStorageSet(activeGameKey, activeGameFromProfile);
         })();
         return;
