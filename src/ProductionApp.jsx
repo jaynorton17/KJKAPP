@@ -2029,6 +2029,8 @@ const roomChatMutedKey = 'kjk-room-chat-muted';
 const questionBankMetaId = 'question-bank-source';
 const ADMIN_EMAIL = 'admin@kjkapp.com';
 const FEATURED_LOBBY_CARD_COUNT = 3;
+const FEATURED_LOBBY_SIDE_CARD_COUNT = 2;
+const FEATURED_LOBBY_ROTATION_INTERVAL_MS = 5000;
 const FEATURED_LOBBY_OFFSET_STORAGE_KEY = 'kjk-featured-lobby-offset';
 const FEATURED_LOBBY_PAIR_STORAGE_KEY = 'kjk-featured-lobby-pair';
 const LOBBY_SHOWCASE_SECTION_STORAGE_KEY = 'kjk-lobby-showcase-section';
@@ -8030,7 +8032,6 @@ function LobbyScreen({
   const [memoryLaneQuestionCountDraft, setMemoryLaneQuestionCountDraft] = useState('10');
   const [randomQuestionCountDraft, setRandomQuestionCountDraft] = useState('10');
   const [holdemCreateCodeDraft, setHoldemCreateCodeDraft] = useState('');
-  const [lobbyCarouselIndex, setLobbyCarouselIndex] = useState(0);
   const [flippedLobbyTiles, setFlippedLobbyTiles] = useState(() => ({
     standard: false,
     quiz: false,
@@ -8079,8 +8080,6 @@ function LobbyScreen({
   const [mobileLobbyChatOpen, setMobileLobbyChatOpen] = useState(false);
   const dashboardMenuRef = useRef(null);
   const questionUploadInputRef = useRef(null);
-  const lobbyCarouselTouchStartXRef = useRef(null);
-  const lobbyCarouselTouchInteractiveRef = useRef(false);
   const featuredLobbyRotationAppliedRef = useRef(false);
   const isMobileDashboardNav = useMediaQuery('(max-width: 900px)');
   const pendingInviteCount = useMemo(() => {
@@ -10017,41 +10016,39 @@ function LobbyScreen({
     if (cardsWithHistory.length) return cardsWithHistory.slice(0, 4);
     return featuredLobbyCards.length ? featuredLobbyCards : sorted.slice(0, 4);
   }, [activeGames, previousGames, lobbyAccessibleCards, featuredLobbyCards]);
+  const buildFeaturedLobbyCardIds = useCallback((startIndex = 0, focusCardId = '') => {
+    const nextFeaturedIds = [];
+    const normalizedFocusCardId = focusCardId && focusCardId !== 'random' ? focusCardId : '';
+    if (rotatingLobbyCards.length) {
+      if (normalizedFocusCardId && rotatingLobbyCards.some((card) => card.id === normalizedFocusCardId)) {
+        nextFeaturedIds.push(normalizedFocusCardId);
+      }
+      for (let index = 0; index < rotatingLobbyCards.length && nextFeaturedIds.length < FEATURED_LOBBY_SIDE_CARD_COUNT; index += 1) {
+        const card = rotatingLobbyCards[(startIndex + index) % rotatingLobbyCards.length];
+        if (card?.id && !nextFeaturedIds.includes(card.id)) nextFeaturedIds.push(card.id);
+      }
+    }
+    if (randomLobbyCard?.id) nextFeaturedIds.splice(1, 0, randomLobbyCard.id);
+    return nextFeaturedIds.slice(0, FEATURED_LOBBY_CARD_COUNT);
+  }, [randomLobbyCard, rotatingLobbyCards]);
   const getLobbyCarouselCardIndex = (cardId) =>
     featuredLobbyCards.findIndex((card) => card.id === cardId);
-  const lobbyCarouselCount = featuredLobbyCards.length;
-  const moveLobbyCarousel = (direction) => {
-    setOpenLobbyTileInfoId('');
-    if (!lobbyCarouselCount) return;
-    setLobbyCarouselIndex((current) => (current + direction + lobbyCarouselCount) % lobbyCarouselCount);
-  };
   const focusLobbyCard = (cardId) => {
     setOpenLobbyTileInfoId('');
-    const nextFeaturedIndex = getLobbyCarouselCardIndex(cardId);
     if (!lobbyAccessibleCards.some((card) => card.id === cardId)) return;
     setLobbyShowcaseSection('featured');
-    if (nextFeaturedIndex >= 0) {
-      setLobbyCarouselIndex(nextFeaturedIndex);
+    if (getLobbyCarouselCardIndex(cardId) >= 0) {
       return;
     }
-    const nextFeaturedIds = [];
-    if (randomLobbyCard?.id) nextFeaturedIds.push(randomLobbyCard.id);
-    if (cardId !== randomLobbyCard?.id) nextFeaturedIds.push(cardId);
-    rotatingLobbyCards.forEach((card) => {
-      if (nextFeaturedIds.length >= FEATURED_LOBBY_CARD_COUNT) return;
-      if (!nextFeaturedIds.includes(card.id)) nextFeaturedIds.push(card.id);
-    });
-    const limitedIds = nextFeaturedIds.slice(0, FEATURED_LOBBY_CARD_COUNT);
-    setFeaturedLobbyCardIds(limitedIds);
-    setLobbyCarouselIndex(Math.max(0, limitedIds.indexOf(cardId)));
+    const focusIndex = rotatingLobbyCards.findIndex((card) => card.id === cardId);
+    setFeaturedLobbyCardIds(buildFeaturedLobbyCardIds(Math.max(0, focusIndex), cardId));
   };
 
   const getLobbyCarouselPosition = (index) => {
-    if (index < 0 || !lobbyCarouselCount) return 'hidden';
-    const offset = (index - lobbyCarouselIndex + lobbyCarouselCount) % lobbyCarouselCount;
-    if (offset === 0) return 'center';
-    if (offset === 1) return 'right';
-    if (offset === lobbyCarouselCount - 1) return 'left';
+    if (index < 0 || !featuredLobbyCards.length) return 'hidden';
+    if (index === 0) return 'left';
+    if (index === 1) return 'center';
+    if (index === 2) return 'right';
     return 'hidden';
   };
 
@@ -10059,8 +10056,7 @@ function LobbyScreen({
     if (!lobbyAccessibleCards.length) return;
     if (featuredLobbyRotationAppliedRef.current) return;
     featuredLobbyRotationAppliedRef.current = true;
-    const nextFeaturedIds = [];
-    if (randomLobbyCard?.id) nextFeaturedIds.push(randomLobbyCard.id);
+    let nextFeaturedIds = [];
     if (rotatingLobbyCards.length) {
       let nextStartIndex = 0;
       let previousPairIds = [];
@@ -10072,7 +10068,7 @@ function LobbyScreen({
         nextStartIndex = 0;
         previousPairIds = [];
       }
-      const rotatingCardCount = Math.min(FEATURED_LOBBY_CARD_COUNT - nextFeaturedIds.length, rotatingLobbyCards.length);
+      const rotatingCardCount = Math.min(FEATURED_LOBBY_SIDE_CARD_COUNT, rotatingLobbyCards.length);
       let selectedPairIds = [];
       for (let attempt = 0; attempt < Math.max(1, rotatingLobbyCards.length); attempt += 1) {
         const candidateStartIndex = (nextStartIndex + attempt) % rotatingLobbyCards.length;
@@ -10088,11 +10084,11 @@ function LobbyScreen({
         nextStartIndex = candidateStartIndex;
         if (!isRepeatPair || rotatingLobbyCards.length <= rotatingCardCount) break;
       }
-      nextFeaturedIds.push(...selectedPairIds);
+      nextFeaturedIds = buildFeaturedLobbyCardIds(nextStartIndex);
       try {
         window.localStorage.setItem(
           FEATURED_LOBBY_OFFSET_STORAGE_KEY,
-          String((nextStartIndex + 2) % rotatingLobbyCards.length),
+          String((nextStartIndex + FEATURED_LOBBY_SIDE_CARD_COUNT) % rotatingLobbyCards.length),
         );
         window.localStorage.setItem(FEATURED_LOBBY_PAIR_STORAGE_KEY, JSON.stringify(selectedPairIds));
       } catch {
@@ -10100,16 +10096,26 @@ function LobbyScreen({
       }
     }
     if (!nextFeaturedIds.length) {
-      nextFeaturedIds.push(...lobbyAccessibleCards.slice(0, FEATURED_LOBBY_CARD_COUNT).map((card) => card.id));
+      nextFeaturedIds = buildFeaturedLobbyCardIds(0);
     }
     setFeaturedLobbyCardIds(nextFeaturedIds);
-    setLobbyCarouselIndex(0);
-  }, []);
+  }, [buildFeaturedLobbyCardIds, lobbyAccessibleCards.length, randomLobbyCard, rotatingLobbyCards]);
 
   useEffect(() => {
-    if (!lobbyCarouselCount) return;
-    setLobbyCarouselIndex((current) => Math.min(current, lobbyCarouselCount - 1));
-  }, [lobbyCarouselCount]);
+    if (lobbyShowcaseSection !== 'featured' || rotatingLobbyCards.length <= FEATURED_LOBBY_SIDE_CARD_COUNT) return undefined;
+    const rotationTimer = window.setInterval(() => {
+      setFeaturedLobbyCardIds((current) => {
+        const currentSideIds = current.filter((cardId) => cardId !== 'random');
+        const anchorCardId = currentSideIds[1] || currentSideIds[0] || '';
+        const currentStartIndex = rotatingLobbyCards.findIndex((card) => card.id === anchorCardId);
+        const nextStartIndex = currentStartIndex >= 0
+          ? (currentStartIndex + 1) % rotatingLobbyCards.length
+          : 0;
+        return buildFeaturedLobbyCardIds(nextStartIndex);
+      });
+    }, FEATURED_LOBBY_ROTATION_INTERVAL_MS);
+    return () => window.clearInterval(rotationTimer);
+  }, [buildFeaturedLobbyCardIds, lobbyShowcaseSection, rotatingLobbyCards]);
 
   useEffect(() => {
     try {
@@ -10134,35 +10140,6 @@ function LobbyScreen({
         ? current.filter((value) => value !== cardId)
         : [...current, cardId]
     ));
-  };
-
-  const handleLobbyCarouselTouchStart = (event) => {
-    const touch = event.touches?.[0];
-    if (!touch) return;
-    const target = event.target instanceof Element ? event.target : null;
-    lobbyCarouselTouchInteractiveRef.current = Boolean(
-      target?.closest('input, textarea, select, button, label, .field, .filter-chip, a'),
-    );
-    if (lobbyCarouselTouchInteractiveRef.current) {
-      lobbyCarouselTouchStartXRef.current = null;
-      return;
-    }
-    lobbyCarouselTouchStartXRef.current = touch.clientX;
-  };
-
-  const handleLobbyCarouselTouchEnd = (event) => {
-    if (lobbyCarouselTouchInteractiveRef.current) {
-      lobbyCarouselTouchInteractiveRef.current = false;
-      lobbyCarouselTouchStartXRef.current = null;
-      return;
-    }
-    const touch = event.changedTouches?.[0];
-    const startX = lobbyCarouselTouchStartXRef.current;
-    lobbyCarouselTouchStartXRef.current = null;
-    if (!touch || typeof startX !== 'number') return;
-    const deltaX = touch.clientX - startX;
-    if (Math.abs(deltaX) < 44) return;
-    moveLobbyCarousel(deltaX < 0 ? 1 : -1);
   };
 
   const isStandardTileFlipped = Boolean(flippedLobbyTiles.standard);
@@ -10476,7 +10453,7 @@ function LobbyScreen({
       <div className="lobby-browser-grid">
         {cards.length ? cards.map((card) => {
           const details = lobbyGameDetails?.[card.id];
-          const isActive = featuredLobbyCards[lobbyCarouselIndex]?.id === card.id;
+          const isActive = featuredLobbyCards.some((featuredCard) => featuredCard.id === card.id);
           const isFavourite = favouriteLobbyCardIds.includes(card.id);
           return (
             <article
@@ -10977,31 +10954,8 @@ function LobbyScreen({
               emptyCopy: 'Star any game from Trending or All Games to pin it here.',
             }) : null}
             <div className={`game-lobby-grid ${lobbyShowcaseSection === 'featured' ? '' : 'game-lobby-grid--hidden'}`}>
-              <section className="lobby-carousel-shell" aria-label="Game mode carousel" hidden={lobbyShowcaseSection !== 'featured'}>
-                <div
-                  className="lobby-carousel-stage"
-                  aria-live="polite"
-                  onTouchStart={handleLobbyCarouselTouchStart}
-                  onTouchEnd={handleLobbyCarouselTouchEnd}
-                >
-                  <Button
-                    type="button"
-                    className="ghost-button compact lobby-carousel-stage-arrow lobby-carousel-stage-arrow--left"
-                    onClick={() => moveLobbyCarousel(-1)}
-                    aria-label="Show previous game mode"
-                  >
-                    <span aria-hidden="true">‹</span>
-                    <small>Prev</small>
-                  </Button>
-                  <Button
-                    type="button"
-                    className="ghost-button compact lobby-carousel-stage-arrow lobby-carousel-stage-arrow--right"
-                    onClick={() => moveLobbyCarousel(1)}
-                    aria-label="Show next game mode"
-                  >
-                    <small>Next</small>
-                    <span aria-hidden="true">›</span>
-                  </Button>
+              <section className="lobby-carousel-shell" aria-label="Featured game modes" hidden={lobbyShowcaseSection !== 'featured'}>
+                <div className="lobby-carousel-stage" aria-live="polite">
                   <div
                     className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('standard'))}`}
                     inert={getLobbyCarouselPosition(getLobbyCarouselCardIndex('standard')) !== 'center'}
@@ -11810,18 +11764,6 @@ function LobbyScreen({
                   </div>
                 </div>
 
-                <div className="lobby-carousel-dots" role="tablist" aria-label="Game modes">
-                  {featuredLobbyCards.map((card, index) => (
-                    <button
-                      key={card.id}
-                      type="button"
-                      className={`lobby-carousel-dot ${index === lobbyCarouselIndex ? 'is-active' : ''}`}
-                      onClick={() => setLobbyCarouselIndex(index)}
-                      aria-label={`Show ${card.label}`}
-                      aria-selected={index === lobbyCarouselIndex}
-                    />
-                  ))}
-                </div>
               </section>
 
 
