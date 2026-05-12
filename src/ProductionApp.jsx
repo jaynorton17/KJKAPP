@@ -2039,7 +2039,17 @@ const fixedPlayerUids = {
 };
 const getSafeInitialDashboardTab = (value) => {
   const nextTab = normalizeText(value) || 'gameLobby';
-  return nextTab === 'questionBank' ? 'gameLobby' : nextTab;
+  if (nextTab === 'questionBank') return 'gameLobby';
+  if (nextTab === 'ai' || nextTab === 'diary') return 'activity';
+  return nextTab;
+};
+const getSafeInitialActivityTab = (value, dashboardValue) => {
+  const nextTab = normalizeText(value);
+  if (nextTab) return nextTab;
+  const nextDashboardTab = normalizeText(dashboardValue);
+  if (nextDashboardTab === 'ai') return 'ai';
+  if (nextDashboardTab === 'diary') return 'diary';
+  return 'activeGames';
 };
 const readStoredBoolean = (key = '', fallbackValue = false) => {
   if (!key || typeof window === 'undefined') return fallbackValue;
@@ -7963,7 +7973,10 @@ function LobbyScreen({
   onActiveTabChange,
 }) {
   const [activeTab, setActiveTab] = useState(() => getSafeInitialDashboardTab(localStorage.getItem('kjk-dashboard-tab')));
-  const [activityTab, setActivityTab] = useState(() => localStorage.getItem('kjk-activity-tab') || 'activeGames');
+  const [activityTab, setActivityTab] = useState(() => getSafeInitialActivityTab(
+    localStorage.getItem('kjk-activity-tab'),
+    localStorage.getItem('kjk-dashboard-tab'),
+  ));
   const [lobbyBrowseMode, setLobbyBrowseMode] = useState(() => (typeof window !== 'undefined' && window.innerWidth <= 900 ? 'all' : 'featured'));
   const [createMode, setCreateMode] = useState('random');
   const [quizCreateCodeDraft, setQuizCreateCodeDraft] = useState('');
@@ -8046,9 +8059,7 @@ function LobbyScreen({
   const dashboardPills = [
     { id: 'gameLobby', label: 'Game Lobby', tone: 'lobby', icon: 'home' },
     { id: 'activity', label: 'Activity', tone: 'activity', icon: 'activity' },
-    { id: 'ai', label: 'AI', tone: 'ai', icon: 'spark' },
     { id: 'analytics', label: 'Analytics', tone: 'analytics', icon: 'graph' },
-    { id: 'diary', label: 'Diary', tone: 'diary', icon: 'book' },
     { id: 'forfeitStore', label: 'Forfeit Store', tone: 'store', icon: 'gift' },
   ];
   const typeOptions = ROUND_TYPES.map((type) => ({ value: type.id, label: type.shortLabel }));
@@ -12009,6 +12020,8 @@ function LobbyScreen({
                     { id: 'activeGames', label: 'Active', icon: 'controller' },
                     { id: 'previousGames', label: 'Previous', icon: 'trophy' },
                     { id: 'pending', label: 'Pending', icon: 'clock' },
+                    { id: 'ai', label: 'AI', icon: 'spark' },
+                    { id: 'diary', label: 'Diary', icon: 'book' },
                   ].map((pill) => (
                     <button
                       key={pill.id}
@@ -12206,28 +12219,46 @@ function LobbyScreen({
                   </div>
                 </div>
               ) : null}
-            </section>
-          </section>
-        ) : null}
 
-        {activeTab === 'ai' ? (
-          <section className="lobby-tab-panel" aria-label="AI" id="dashboard-ai">
-            <AiAssistantPanel
-              user={user}
-              profile={profile}
-              currentPlayerSeat={currentPlayerSeat}
-              aiChatMessages={aiChatMessages}
-              aiChatSessions={aiChatSessions}
-              aiChatDraft={aiChatDraft}
-              setAiChatDraft={setAiChatDraft}
-              sendAiChat={sendAiChat}
-              isAiChatSending={isAiChatSending}
-              onClearAiChat={onClearAiChat}
-              onSaveAiChat={onSaveAiChat}
-              onOpenAiChatSession={onOpenAiChatSession}
-              onRenameAiChatSession={onRenameAiChatSession}
-              onDeleteAiChatSession={onDeleteAiChatSession}
-            />
+              {activityTab === 'ai' ? (
+                <div className="activity-content activity-content--ai">
+                  <AiAssistantPanel
+                    user={user}
+                    profile={profile}
+                    currentPlayerSeat={currentPlayerSeat}
+                    aiChatMessages={aiChatMessages}
+                    aiChatSessions={aiChatSessions}
+                    aiChatDraft={aiChatDraft}
+                    setAiChatDraft={setAiChatDraft}
+                    sendAiChat={sendAiChat}
+                    isAiChatSending={isAiChatSending}
+                    onClearAiChat={onClearAiChat}
+                    onSaveAiChat={onSaveAiChat}
+                    onOpenAiChatSession={onOpenAiChatSession}
+                    onRenameAiChatSession={onRenameAiChatSession}
+                    onDeleteAiChatSession={onDeleteAiChatSession}
+                  />
+                </div>
+              ) : null}
+
+              {activityTab === 'diary' ? (
+                <div className="activity-content activity-content--diary">
+                  <DiaryDashboardSection
+                    user={user}
+                    profile={profile}
+                    currentPlayerSeat={currentPlayerSeat}
+                    diaryEntries={diaryEntries}
+                    roundAnalytics={lobbyRoundAnalytics}
+                    onSubmitAmaQuestion={onSubmitAmaQuestion}
+                    onAnswerAmaRequest={onAnswerAmaRequest}
+                    onBackfillGameDiaryEntries={onBackfillGameDiaryEntries}
+                    gameDiaryBackfillState={gameDiaryBackfillState}
+                    missingGameDiaryCount={missingGameDiaryCount}
+                    isBusy={isBusy}
+                  />
+                </div>
+              ) : null}
+            </section>
           </section>
         ) : null}
 
@@ -13184,24 +13215,6 @@ function LobbyScreen({
                 </section>
               )}
             </section>
-          </section>
-        ) : null}
-
-        {activeTab === 'diary' ? (
-          <section className="lobby-tab-panel" aria-label="Diary" id="dashboard-diary">
-            <DiaryDashboardSection
-              user={user}
-              profile={profile}
-              currentPlayerSeat={currentPlayerSeat}
-              diaryEntries={diaryEntries}
-              roundAnalytics={lobbyRoundAnalytics}
-              onSubmitAmaQuestion={onSubmitAmaQuestion}
-              onAnswerAmaRequest={onAnswerAmaRequest}
-              onBackfillGameDiaryEntries={onBackfillGameDiaryEntries}
-              gameDiaryBackfillState={gameDiaryBackfillState}
-              missingGameDiaryCount={missingGameDiaryCount}
-              isBusy={isBusy}
-            />
           </section>
         ) : null}
 
@@ -21779,35 +21792,35 @@ function ProductionApp() {
     && firestore
     && deferredLobbyDataReady
     && !hasOpenRoomSession
-    && (dashboardTabState === 'diary' || dashboardTabState === 'activity' || dashboardTabState === 'ai'),
+    && dashboardTabState === 'activity',
   );
   const shouldLoadQuestionFeedback = Boolean(
     user
     && firestore
     && deferredLobbyDataReady
     && !hasOpenRoomSession
-    && (dashboardTabState === 'analytics' || dashboardTabState === 'ai' || dashboardTabState === 'diary'),
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'activity'),
   );
   const shouldLoadQuestionReplays = Boolean(
     user
     && firestore
     && deferredLobbyDataReady
     && !hasOpenRoomSession
-    && (dashboardTabState === 'analytics' || dashboardTabState === 'diary'),
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'activity'),
   );
   const shouldLoadQuizAnswerHistory = Boolean(
     user
     && firestore
     && deferredLobbyDataReady
     && !hasOpenRoomSession
-    && (dashboardTabState === 'analytics' || dashboardTabState === 'ai' || dashboardTabState === 'diary'),
+    && (dashboardTabState === 'analytics' || dashboardTabState === 'activity'),
   );
   const shouldLoadAiChatHistory = Boolean(
     user?.uid
     && firestore
     && deferredLobbyDataReady
     && !hasOpenRoomSession
-    && dashboardTabState === 'ai',
+    && dashboardTabState === 'activity',
   );
   const shouldAutoTopUpQuestionBanks = Boolean(
     user
