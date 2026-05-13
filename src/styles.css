@@ -482,6 +482,11 @@ button:disabled {
   padding: 20px;
 }
 
+.lobby-browser-card-main--arcade > *:not(.lobby-arcade-card-glow-stack) {
+  position: relative;
+  z-index: 1;
+}
+
 .lobby-browser-card-topline {
   display: flex;
   align-items: center;
@@ -854,6 +859,90 @@ button:disabled {
   z-index: 1;
 }
 
+.lobby-arcade-card-glow-stack {
+  position: absolute;
+  inset: -16%;
+  z-index: 0;
+  pointer-events: none;
+  filter: saturate(1.12);
+}
+
+.lobby-arcade-card-glow {
+  position: absolute;
+  pointer-events: none;
+}
+
+.lobby-arcade-card-glow--outer {
+  inset: 4%;
+  border-radius: 36px;
+  background:
+    radial-gradient(circle at 12% 14%, color-mix(in srgb, var(--arcade-primary) 34%, transparent), transparent 42%),
+    radial-gradient(circle at 88% 82%, color-mix(in srgb, var(--arcade-secondary) 28%, transparent), transparent 42%);
+  filter: blur(72px);
+  opacity: 0.5;
+}
+
+.lobby-arcade-card-glow--inner {
+  inset: 9%;
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--arcade-primary) 28%, transparent), transparent 36%),
+    radial-gradient(circle at 82% 22%, color-mix(in srgb, var(--arcade-secondary) 22%, transparent), transparent 38%),
+    radial-gradient(circle at 50% 100%, rgba(255, 255, 255, 0.08), transparent 42%);
+  filter: blur(46px);
+  opacity: 0.54;
+  mix-blend-mode: screen;
+}
+
+.lobby-arcade-card-glow--icon {
+  left: 50%;
+  top: 28%;
+  width: 46%;
+  height: 34%;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle, color-mix(in srgb, var(--arcade-primary) 42%, transparent) 0%, color-mix(in srgb, var(--arcade-primary) 24%, transparent) 34%, transparent 72%),
+    radial-gradient(circle at 62% 38%, color-mix(in srgb, var(--arcade-secondary) 34%, transparent) 0%, transparent 68%);
+  filter: blur(62px);
+  opacity: 0.78;
+  mix-blend-mode: screen;
+}
+
+.lobby-arcade-card-glow--button {
+  left: 12%;
+  right: 12%;
+  bottom: 2%;
+  height: 20%;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--arcade-primary) 30%, transparent), transparent 58%),
+    radial-gradient(circle at 78% 58%, color-mix(in srgb, var(--arcade-secondary) 22%, transparent), transparent 54%);
+  filter: blur(46px);
+  opacity: 0.42;
+}
+
+.lobby-arcade-card-glow--border {
+  inset: 7%;
+  border-radius: 32px;
+  border: 1px solid color-mix(in srgb, var(--arcade-primary) 26%, rgba(255, 255, 255, 0.1));
+  box-shadow:
+    0 0 24px color-mix(in srgb, var(--arcade-primary) 16%, transparent),
+    0 0 36px color-mix(in srgb, var(--arcade-secondary) 10%, transparent),
+    inset 0 0 18px color-mix(in srgb, var(--arcade-primary) 12%, transparent);
+  overflow: hidden;
+}
+
+.lobby-arcade-card-glow--border::after {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  background: linear-gradient(120deg, transparent 28%, rgba(255, 255, 255, 0.28) 50%, transparent 72%);
+  mix-blend-mode: screen;
+  opacity: 0.22;
+  animation: arcadeBorderShimmer 5.8s linear infinite;
+}
+
 .lobby-image-tile-face--back {
   transform: rotateY(180deg);
   overflow-x: hidden;
@@ -1213,12 +1302,45 @@ button:disabled {
     inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
+.lobby-image-tile-face--arcade .lobby-primary-button,
+.lobby-browser-card--arcade .primary-button {
+  box-shadow:
+    0 0 18px color-mix(in srgb, var(--arcade-primary) 26%, transparent),
+    0 0 34px color-mix(in srgb, var(--arcade-primary) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.lobby-image-tile-face--arcade .lobby-primary-button:hover,
+.lobby-image-tile-face--arcade .lobby-primary-button:focus-visible,
+.lobby-browser-card--arcade .primary-button:hover,
+.lobby-browser-card--arcade .primary-button:focus-visible {
+  box-shadow:
+    0 0 26px color-mix(in srgb, var(--arcade-primary) 34%, transparent),
+    0 0 48px color-mix(in srgb, var(--arcade-secondary) 22%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
 .lobby-image-tile-action.lobby-secondary-button {
   border-color: color-mix(in srgb, var(--arcade-secondary) 30%, rgba(255, 255, 255, 0.18));
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--arcade-secondary) 16%, rgba(26, 43, 78, 0.98)), rgba(13, 25, 48, 0.94)),
     rgba(9, 18, 34, 0.92);
   color: #f4f8ff;
+}
+
+.lobby-image-tile--arcade:hover .lobby-arcade-card-glow--outer,
+.lobby-image-tile--arcade:focus-within .lobby-arcade-card-glow--outer,
+.lobby-browser-card--arcade:hover .lobby-arcade-card-glow--outer,
+.lobby-browser-card--arcade:focus-within .lobby-arcade-card-glow--outer {
+  opacity: 0.72;
+}
+
+.lobby-image-tile--arcade:hover .lobby-arcade-card-glow--icon,
+.lobby-image-tile--arcade:focus-within .lobby-arcade-card-glow--icon,
+.lobby-browser-card--arcade:hover .lobby-arcade-card-glow--icon,
+.lobby-browser-card--arcade:focus-within .lobby-arcade-card-glow--icon {
+  opacity: 0.96;
+  transform: translateX(-50%) scale(1.05);
 }
 
 .lobby-image-tile-back-toolbar {
@@ -1510,6 +1632,100 @@ button:disabled {
     linear-gradient(300deg, transparent 16%, rgba(236, 72, 153, 0.16) 46%, transparent 64%);
 }
 
+.lobby-arcade-card-glow-stack--memoryLane .lobby-arcade-card-glow--outer {
+  background:
+    radial-gradient(circle at 18% 18%, rgba(29, 161, 255, 0.42), transparent 42%),
+    radial-gradient(circle at 82% 78%, rgba(107, 227, 255, 0.32), transparent 42%);
+}
+
+.lobby-arcade-card-glow-stack--random .lobby-arcade-card-glow--outer {
+  background:
+    radial-gradient(circle at 20% 18%, rgba(168, 85, 247, 0.44), transparent 42%),
+    radial-gradient(circle at 84% 24%, rgba(236, 72, 153, 0.36), transparent 44%);
+}
+
+.lobby-arcade-card-glow-stack--trueFalse .lobby-arcade-card-glow--outer,
+.lobby-arcade-card-glow-stack--redFlagGreenFlag .lobby-arcade-card-glow--outer {
+  background:
+    radial-gradient(circle at 18% 26%, rgba(34, 197, 94, 0.36), transparent 40%),
+    radial-gradient(circle at 84% 24%, rgba(239, 68, 68, 0.38), transparent 40%);
+}
+
+.lobby-arcade-card-glow-stack--putYourPoints .lobby-arcade-card-glow--outer,
+.lobby-arcade-card-glow-stack--quiz .lobby-arcade-card-glow--outer {
+  background:
+    radial-gradient(circle at 18% 20%, rgba(249, 115, 22, 0.42), transparent 42%),
+    radial-gradient(circle at 82% 78%, rgba(37, 99, 235, 0.28), transparent 42%);
+}
+
+.lobby-arcade-card-glow-stack--quiz .lobby-arcade-card-glow--inner {
+  background:
+    radial-gradient(circle at 24% 22%, rgba(249, 115, 22, 0.3), transparent 34%),
+    radial-gradient(circle at 78% 28%, rgba(239, 68, 68, 0.24), transparent 36%),
+    radial-gradient(circle at 50% 100%, rgba(255, 255, 255, 0.08), transparent 42%);
+}
+
+.lobby-arcade-card-glow-stack--standard .lobby-arcade-card-glow--outer {
+  background:
+    radial-gradient(circle at 18% 18%, rgba(250, 204, 21, 0.34), transparent 38%),
+    radial-gradient(circle at 84% 82%, rgba(59, 130, 246, 0.22), transparent 40%);
+}
+
+.lobby-arcade-card-glow-stack--mostLikely .lobby-arcade-card-glow--outer,
+.lobby-arcade-card-glow-stack--thisOrThat .lobby-arcade-card-glow--outer,
+.lobby-arcade-card-glow-stack--compatibilityMeter .lobby-arcade-card-glow--outer {
+  background:
+    radial-gradient(circle at 20% 20%, rgba(251, 113, 133, 0.36), transparent 40%),
+    radial-gradient(circle at 82% 22%, rgba(96, 165, 250, 0.34), transparent 42%);
+}
+
+.lobby-arcade-card-glow-stack--secretAuction .lobby-arcade-card-glow--outer {
+  background:
+    radial-gradient(circle at 22% 18%, rgba(245, 158, 11, 0.4), transparent 40%),
+    radial-gradient(circle at 84% 22%, rgba(37, 99, 235, 0.28), transparent 42%);
+}
+
+.lobby-arcade-card-glow-stack--memoryLane .lobby-arcade-card-glow--icon {
+  background:
+    radial-gradient(circle, rgba(29, 161, 255, 0.44) 0%, rgba(29, 161, 255, 0.22) 34%, transparent 72%),
+    radial-gradient(circle at 64% 38%, rgba(107, 227, 255, 0.34) 0%, transparent 68%);
+}
+
+.lobby-arcade-card-glow-stack--random .lobby-arcade-card-glow--icon {
+  background:
+    radial-gradient(circle, rgba(168, 85, 247, 0.46) 0%, rgba(168, 85, 247, 0.24) 34%, transparent 72%),
+    radial-gradient(circle at 64% 38%, rgba(236, 72, 153, 0.38) 0%, transparent 68%);
+}
+
+.lobby-arcade-card-glow-stack--trueFalse .lobby-arcade-card-glow--icon,
+.lobby-arcade-card-glow-stack--redFlagGreenFlag .lobby-arcade-card-glow--icon {
+  background:
+    radial-gradient(circle at 34% 50%, rgba(34, 197, 94, 0.34) 0%, transparent 52%),
+    radial-gradient(circle at 68% 48%, rgba(239, 68, 68, 0.36) 0%, transparent 54%);
+}
+
+.lobby-arcade-card-glow-stack--putYourPoints .lobby-arcade-card-glow--icon,
+.lobby-arcade-card-glow-stack--secretAuction .lobby-arcade-card-glow--icon,
+.lobby-arcade-card-glow-stack--quiz .lobby-arcade-card-glow--icon {
+  background:
+    radial-gradient(circle, rgba(249, 115, 22, 0.42) 0%, rgba(249, 115, 22, 0.22) 34%, transparent 72%),
+    radial-gradient(circle at 64% 38%, rgba(37, 99, 235, 0.3) 0%, transparent 68%);
+}
+
+.lobby-arcade-card-glow-stack--quiz .lobby-arcade-card-glow--button {
+  background:
+    radial-gradient(circle at 50% 40%, rgba(249, 115, 22, 0.34), transparent 54%),
+    radial-gradient(circle at 78% 58%, rgba(239, 68, 68, 0.26), transparent 52%);
+}
+
+.lobby-arcade-card-glow-stack--thisOrThat .lobby-arcade-card-glow--button,
+.lobby-arcade-card-glow-stack--mostLikely .lobby-arcade-card-glow--button,
+.lobby-arcade-card-glow-stack--compatibilityMeter .lobby-arcade-card-glow--button {
+  background:
+    radial-gradient(circle at 28% 46%, rgba(59, 130, 246, 0.26), transparent 52%),
+    radial-gradient(circle at 72% 52%, rgba(236, 72, 153, 0.28), transparent 52%);
+}
+
 .lobby-carousel-slide .lobby-panel {
   height: 100%;
   min-height: 100%;
@@ -1565,6 +1781,15 @@ button:disabled {
   width: 320px;
   min-height: 0;
   height: 100%;
+}
+
+@keyframes arcadeBorderShimmer {
+  0% {
+    transform: translateX(-34%) translateY(-8%) rotate(18deg);
+  }
+  100% {
+    transform: translateX(34%) translateY(8%) rotate(18deg);
+  }
 }
 
 @media (max-width: 900px) {

@@ -10383,6 +10383,13 @@ function LobbyScreen({
       >
         {theme ? (
           <>
+            <div className={`lobby-arcade-card-glow-stack lobby-arcade-card-glow-stack--${cardId}`} aria-hidden="true">
+              <div className="lobby-arcade-card-glow lobby-arcade-card-glow--outer" />
+              <div className="lobby-arcade-card-glow lobby-arcade-card-glow--inner" />
+              <div className="lobby-arcade-card-glow lobby-arcade-card-glow--icon" />
+              <div className="lobby-arcade-card-glow lobby-arcade-card-glow--button" />
+              <div className="lobby-arcade-card-glow lobby-arcade-card-glow--border" />
+            </div>
             <div className="lobby-arcade-card-topline">
               <span className="lobby-arcade-card-kicker">{eyebrow}</span>
               <span className="lobby-arcade-card-badge">READY</span>
@@ -10608,6 +10615,13 @@ function LobbyScreen({
             >
               {theme ? (
                 <div className={`lobby-browser-card-main lobby-browser-card-main--arcade ${compactArtwork ? 'lobby-browser-card-main--compact-art' : ''}`}>
+                  <div className={`lobby-arcade-card-glow-stack lobby-arcade-card-glow-stack--${card.id}`} aria-hidden="true">
+                    <div className="lobby-arcade-card-glow lobby-arcade-card-glow--outer" />
+                    <div className="lobby-arcade-card-glow lobby-arcade-card-glow--inner" />
+                    <div className="lobby-arcade-card-glow lobby-arcade-card-glow--icon" />
+                    <div className="lobby-arcade-card-glow lobby-arcade-card-glow--button" />
+                    <div className="lobby-arcade-card-glow lobby-arcade-card-glow--border" />
+                  </div>
                   <div className="lobby-browser-card-topline">
                     <span className="lobby-browser-card-kicker">{eyebrow}</span>
                     <span className="lobby-arcade-card-badge">READY</span>
