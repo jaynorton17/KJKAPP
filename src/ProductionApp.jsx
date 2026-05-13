@@ -22540,7 +22540,6 @@ function ProductionApp() {
               email: nextUser.email || '',
               emailLower: normalizeIdentity(nextUser.email || ''),
               photoURL: nextUser.photoURL || '',
-              friendIds: [],
               updatedAt: serverTimestamp(),
             },
             { merge: true },
@@ -22683,6 +22682,7 @@ function ProductionApp() {
       setFriendProfiles(
         rows
           .filter(Boolean)
+          .filter((entry) => entry?.uid && entry.uid !== user?.uid)
           .sort((a, b) => String(a.displayName || a.email || '').localeCompare(String(b.displayName || b.email || ''))),
       );
     });
@@ -27810,6 +27810,25 @@ function ProductionApp() {
           updatedAt: serverTimestamp(),
         }, { merge: true }),
       ]);
+      setProfile((current) => (
+        current
+          ? {
+              ...current,
+              friendIds: mergeUniqueIds(Array.isArray(current.friendIds) ? current.friendIds : [], [friendSnap.id]),
+            }
+          : current
+      ));
+      setFriendProfiles((current) => {
+        const nextFriend = {
+          uid: friendSnap.id,
+          displayName: friendData.displayName || '',
+          email: friendData.email || '',
+          photoURL: friendData.photoURL || '',
+        };
+        return [nextFriend, ...current]
+          .filter((entry, index, array) => entry?.uid && entry.uid !== user.uid && array.findIndex((candidate) => candidate?.uid === entry.uid) === index)
+          .sort((a, b) => String(a.displayName || a.email || '').localeCompare(String(b.displayName || b.email || '')));
+      });
       setNotice(`Added ${friendData.displayName || friendData.email || 'friend'} to your friends list.`);
       return true;
     }, 'Could not add friend.');
