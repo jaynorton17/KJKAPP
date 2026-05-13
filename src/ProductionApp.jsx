@@ -11213,8 +11213,16 @@ function LobbyScreen({
               emptyTitle: 'No favourite games yet',
               emptyCopy: 'Star any game from Trending or All Games to pin it here.',
             }) : null}
-            <div className={`game-lobby-grid ${lobbyShowcaseSection === 'featured' ? '' : 'game-lobby-grid--hidden'}`}>
-              <section className="lobby-carousel-shell" aria-label="Featured game modes" hidden={lobbyShowcaseSection !== 'featured'}>
+            {lobbyShowcaseSection === 'featured' ? renderLobbyGameBrowser({
+              eyebrow: 'Featured Games',
+              title: 'Featured Games',
+              copy: 'These use the exact same cards as All Games, filtered to the featured set.',
+              cards: featuredLobbyCards,
+              imageOverrides: allGamesTileImages,
+              compactArtwork: true,
+            }) : null}
+            <div className="game-lobby-grid game-lobby-grid--hidden" aria-hidden="true">
+              <section className="lobby-carousel-shell" aria-label="Featured game modes" hidden>
                 <div className="lobby-carousel-stage" aria-live="polite">
                   <div
                     className={`lobby-carousel-slide lobby-carousel-slide--${getLobbyCarouselPosition(getLobbyCarouselCardIndex('standard'))}`}
