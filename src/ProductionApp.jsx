@@ -10446,6 +10446,7 @@ function LobbyScreen({
             </div>
             <div className="lobby-arcade-card-footer">
               <div className="button-row lobby-image-tile-front-actions">
+                <span className="lobby-arcade-card-footer-pill">{availableCount} questions</span>
                 <Button
                   type="button"
                   className="primary-button compact lobby-primary-button lobby-image-tile-action"
@@ -10659,6 +10660,7 @@ function LobbyScreen({
                   </div>
                   <div className="lobby-browser-card-footer">
                     <div className="button-row lobby-browser-card-actions">
+                      <span className="lobby-arcade-card-footer-pill">{availableCount} questions</span>
                       <Button
                         type="button"
                         className="primary-button compact"

@@ -475,7 +475,7 @@ button:disabled {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-rows: auto minmax(170px, 1fr) auto auto auto;
+  grid-template-rows: auto minmax(188px, 188px) minmax(176px, 176px) auto auto;
   gap: 16px;
   align-content: start;
   justify-items: stretch;
@@ -507,28 +507,41 @@ button:disabled {
   display: grid;
   place-items: center;
   min-height: 188px;
+  align-content: start;
+  padding-top: 8px;
 }
 
 .lobby-browser-card-copy {
   display: grid;
   gap: 8px;
   text-align: center;
+  align-content: start;
 }
 
 .lobby-browser-card-copy strong {
+  display: grid;
+  align-items: center;
+  min-height: 4.7rem;
+  margin: 0;
   font-size: clamp(1.3rem, 1.95vw, 1.9rem);
   letter-spacing: 0.07em;
+  line-height: 1.15;
   text-transform: uppercase;
   color: #f7fbff;
   text-shadow: 0 0 22px color-mix(in srgb, var(--arcade-primary) 36%, transparent);
 }
 
 .lobby-browser-card-copy span {
+  display: -webkit-box;
+  min-height: 5.25rem;
+  overflow: hidden;
   color: rgba(219, 230, 248, 0.8);
   font-size: 0.9rem;
   line-height: 1.45;
   letter-spacing: 0;
   text-transform: none;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
 }
 
 .lobby-browser-card-stats {
@@ -574,12 +587,38 @@ button:disabled {
 
 .lobby-browser-card--arcade .lobby-browser-card-actions {
   width: 100%;
+  align-items: stretch;
   justify-content: stretch;
   gap: 12px;
 }
 
+.lobby-arcade-card-footer-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 54px;
+  padding: 0 16px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--arcade-secondary) 28%, rgba(255, 255, 255, 0.12));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--arcade-primary) 14%, rgba(11, 19, 34, 0.92)), rgba(8, 16, 30, 0.96)),
+    rgba(7, 17, 35, 0.9);
+  color: #f7fbff;
+  font-size: 0.74rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  line-height: 1.1;
+  text-align: center;
+  text-transform: uppercase;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 18px color-mix(in srgb, var(--arcade-primary) 18%, transparent);
+  white-space: nowrap;
+}
+
 .lobby-browser-card--arcade .lobby-browser-card-actions .compact {
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-height: 54px;
   border-radius: 16px;
   font-size: 0.84rem;
@@ -1105,6 +1144,7 @@ button:disabled {
   place-items: center;
   min-height: 216px;
   align-content: start;
+  padding-top: 10px;
 }
 
 .lobby-arcade-card-icon {
@@ -1164,7 +1204,6 @@ button:disabled {
 
 .lobby-arcade-card-artframe--random {
   border-radius: 32px;
-  transform: translateY(-18px);
 }
 
 .lobby-arcade-card-icon svg {
@@ -1213,12 +1252,16 @@ button:disabled {
   display: grid;
   gap: 10px;
   text-align: center;
+  align-content: start;
 }
 
 .lobby-arcade-card-copy h2 {
   margin: 0;
+  display: grid;
+  align-items: center;
+  min-height: 5rem;
   font-size: clamp(1.6rem, 2.2vw, 2.45rem);
-  line-height: 0.96;
+  line-height: 0.98;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #f9fbff;
@@ -1230,9 +1273,14 @@ button:disabled {
 .lobby-arcade-card-copy p {
   margin: 0 auto;
   max-width: 28ch;
+  min-height: 5.5rem;
+  overflow: hidden;
   color: rgba(221, 230, 247, 0.82);
   font-size: 0.94rem;
   line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
 }
 
 .lobby-arcade-card-stats {
@@ -1300,11 +1348,13 @@ button:disabled {
 .lobby-image-tile-face--arcade .lobby-image-tile-front-actions {
   gap: 12px;
   margin-top: 0;
+  align-items: stretch;
   justify-content: stretch;
 }
 
 .lobby-image-tile-face--arcade .lobby-image-tile-action {
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-height: 56px;
   border-radius: 18px;
   font-size: 0.86rem;
@@ -1897,14 +1947,24 @@ button:disabled {
   }
   .lobby-browser-card-main--arcade {
     padding: 16px;
+    grid-template-rows: auto minmax(152px, 152px) minmax(150px, 150px) auto auto;
   }
   .lobby-browser-card-hero {
     min-height: 116px;
+  }
+  .lobby-browser-card-copy strong {
+    min-height: 4.15rem;
+  }
+  .lobby-browser-card-copy span {
+    min-height: 4.75rem;
   }
   .lobby-arcade-card-stats {
     grid-template-columns: 1fr;
   }
   .lobby-arcade-card-icon {
+    width: min(54%, 170px);
+  }
+  .lobby-arcade-card-artframe {
     width: min(54%, 170px);
   }
   .lobby-image-tile-front-footer {
@@ -1983,6 +2043,7 @@ button:disabled {
   .lobby-browser-card-main--arcade {
     gap: 10px;
     padding: 14px;
+    grid-template-rows: auto minmax(120px, 120px) minmax(132px, 132px) auto auto;
   }
 
   .lobby-browser-card-hero {
@@ -1991,10 +2052,12 @@ button:disabled {
 
   .lobby-browser-card-copy strong {
     font-size: 1.05rem;
+    min-height: 2.8rem;
   }
 
   .lobby-browser-card-copy span {
     font-size: 0.8rem;
+    min-height: 4.2rem;
   }
 
   .lobby-browser-card-stats {
@@ -2052,16 +2115,23 @@ button:disabled {
     border-radius: 22px;
   }
 
+  .lobby-arcade-card-artframe {
+    width: min(58%, 132px);
+    border-radius: 22px;
+  }
+
   .lobby-arcade-card-copy {
     gap: 8px;
   }
 
   .lobby-arcade-card-copy h2 {
     font-size: clamp(1.15rem, 4vw, 1.55rem);
+    min-height: 2.8rem;
   }
 
   .lobby-arcade-card-copy p {
     font-size: 0.82rem;
+    min-height: 4.8rem;
   }
 
   .lobby-arcade-card-stats {
@@ -2082,6 +2152,13 @@ button:disabled {
     min-height: 46px;
     padding: 0 12px;
     font-size: 0.74rem;
+  }
+
+  .lobby-arcade-card-footer-pill {
+    min-height: 50px;
+    padding: 0 12px;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
   }
 
   .lobby-image-tile-front-control {
