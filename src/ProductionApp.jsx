@@ -8272,9 +8272,10 @@ function LobbyScreen({
   const toggleFilterValue = (value, values, setter) => {
     setter(values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value]);
   };
+  const inviteableFriendProfiles = friendProfiles.filter((friend) => friend?.uid && friend.uid !== user?.uid);
 
   const openInvitePicker = (config, label = 'this game') => {
-    if (!friendProfiles.length) {
+    if (!inviteableFriendProfiles.length) {
       window.alert('Add a friend in My Profile first. Private code stays available as a fallback.');
       setIsProfileOpen(true);
       return;
@@ -8284,6 +8285,10 @@ function LobbyScreen({
 
   const inviteFriendToGame = (friend) => {
     if (!friend?.uid || !invitePickerConfig?.config) return;
+    if (friend.uid === user?.uid) {
+      setNotice('Choose the other player for the invite.');
+      return;
+    }
     onCreateGame({
       ...invitePickerConfig.config,
       sendInvite: true,
@@ -13776,7 +13781,7 @@ function LobbyScreen({
             </div>
             <p className="panel-copy">Choose who should receive the lobby invite. Private code stays as a fallback if the invite does not show automatically.</p>
             <div className="mini-list">
-              {friendProfiles.map((friend) => (
+              {inviteableFriendProfiles.map((friend) => (
                 <article className="mini-list-row" key={`invite-friend-${friend.uid}`}>
                   <strong>{friend.displayName || friend.email || 'Friend'}</strong>
                   <small>{friend.email || friend.uid}</small>
