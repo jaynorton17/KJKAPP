@@ -10368,7 +10368,7 @@ function LobbyScreen({
     };
     return (
       <div
-        className={`lobby-image-tile-face lobby-image-tile-face--front ${theme ? 'lobby-image-tile-face--arcade' : ''}`}
+        className={`lobby-image-tile-face lobby-image-tile-face--front ${theme ? 'lobby-image-tile-face--arcade lobby-image-tile-face--arcade-' + cardId : ''}`}
         inert={isFlipped}
         aria-hidden={isFlipped}
         onClick={handleFrontClick}
@@ -10405,6 +10405,26 @@ function LobbyScreen({
                 {footerMeta}
               </div>
             </div>
+            <div className="lobby-arcade-card-footer">
+              <div className="button-row lobby-image-tile-front-actions">
+                <Button
+                  type="button"
+                  className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
+                  onClick={() => setLobbyTileFlipped(cardId, true)}
+                  disabled={isBusy}
+                >
+                  Details
+                </Button>
+                <Button
+                  type="button"
+                  className="primary-button compact lobby-primary-button lobby-image-tile-action"
+                  onClick={onPlayNow || onCreateAndInvite}
+                  disabled={isBusy}
+                >
+                  Play Now
+                </Button>
+              </div>
+            </div>
           </>
         ) : (
           <>
@@ -10427,24 +10447,26 @@ function LobbyScreen({
             </div>
           </>
         )}
-        <div className="button-row lobby-image-tile-front-actions">
-          <Button
-            type="button"
-            className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
-            onClick={() => setLobbyTileFlipped(cardId, true)}
-            disabled={isBusy}
-          >
-            Details
-          </Button>
-          <Button
-            type="button"
-            className="primary-button compact lobby-primary-button lobby-image-tile-action"
-            onClick={onPlayNow || onCreateAndInvite}
-            disabled={isBusy}
-          >
-            Play Now
-          </Button>
-        </div>
+        {!theme ? (
+          <div className="button-row lobby-image-tile-front-actions">
+            <Button
+              type="button"
+              className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
+              onClick={() => setLobbyTileFlipped(cardId, true)}
+              disabled={isBusy}
+            >
+              Details
+            </Button>
+            <Button
+              type="button"
+              className="primary-button compact lobby-primary-button lobby-image-tile-action"
+              onClick={onPlayNow || onCreateAndInvite}
+              disabled={isBusy}
+            >
+              Play Now
+            </Button>
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -10581,7 +10603,7 @@ function LobbyScreen({
           return (
             <article
               key={card.id}
-              className={`lobby-browser-card ${isActive ? 'is-active' : ''} ${compactArtwork ? 'lobby-browser-card--compact-art' : ''} ${theme ? 'lobby-browser-card--arcade' : ''}`}
+              className={`lobby-browser-card lobby-browser-card--${card.id} ${isActive ? 'is-active' : ''} ${compactArtwork ? 'lobby-browser-card--compact-art' : ''} ${theme ? 'lobby-browser-card--arcade' : ''}`}
               style={theme ? { '--arcade-primary': theme.primary, '--arcade-secondary': theme.secondary } : { '--lobby-browser-image': `url("${imageUrl}")` }}
             >
               {theme ? (
@@ -10609,23 +10631,25 @@ function LobbyScreen({
                       <b>{isActive ? 'Featured' : 'Ready'}</b>
                     </article>
                   </div>
-                  <div className="button-row lobby-browser-card-actions">
-                    <Button
-                      type="button"
-                      className="ghost-button compact"
-                      onClick={() => focusLobbyCard(card.id)}
-                      disabled={isBusy}
-                    >
-                      Details
-                    </Button>
-                    <Button
-                      type="button"
-                      className="primary-button compact"
-                      onClick={() => actionHandlers?.create ? actionHandlers.create() : focusLobbyCard(card.id)}
-                      disabled={isBusy}
-                    >
-                      Play Now
-                    </Button>
+                  <div className="lobby-browser-card-footer">
+                    <div className="button-row lobby-browser-card-actions">
+                      <Button
+                        type="button"
+                        className="ghost-button compact"
+                        onClick={() => focusLobbyCard(card.id)}
+                        disabled={isBusy}
+                      >
+                        Details
+                      </Button>
+                      <Button
+                        type="button"
+                        className="primary-button compact"
+                        onClick={() => actionHandlers?.create ? actionHandlers.create() : focusLobbyCard(card.id)}
+                        disabled={isBusy}
+                      >
+                        Play Now
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ) : (
