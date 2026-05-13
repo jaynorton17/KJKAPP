@@ -1105,6 +1105,7 @@ button:disabled {
   display: grid;
   place-items: center;
   min-height: 216px;
+  align-content: start;
 }
 
 .lobby-arcade-card-icon {
@@ -1127,7 +1128,7 @@ button:disabled {
 
 .lobby-arcade-card-artframe {
   position: relative;
-  width: min(74%, 300px);
+  width: min(56%, 220px);
   aspect-ratio: 1 / 1;
   display: grid;
   place-items: center;
@@ -1163,8 +1164,8 @@ button:disabled {
 }
 
 .lobby-arcade-card-artframe--random {
-  width: min(56%, 220px);
   border-radius: 32px;
+  transform: translateY(-18px);
 }
 
 .lobby-arcade-card-icon svg {
