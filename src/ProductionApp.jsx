@@ -10446,7 +10446,7 @@ function LobbyScreen({
         }}
       >
         {theme ? (
-          <>
+          <div className="lobby-browser-card-main lobby-browser-card-main--arcade lobby-browser-card-main--compact-art">
             <div className={`lobby-arcade-card-glow-stack lobby-arcade-card-glow-stack--${cardId}`} aria-hidden="true">
               <div className="lobby-arcade-card-glow lobby-arcade-card-glow--outer" />
               <div className="lobby-arcade-card-glow lobby-arcade-card-glow--inner" />
@@ -10454,23 +10454,23 @@ function LobbyScreen({
               <div className="lobby-arcade-card-glow lobby-arcade-card-glow--button" />
               <div className="lobby-arcade-card-glow lobby-arcade-card-glow--border" />
             </div>
-            <div className="lobby-arcade-card-topline">
-              <span className="lobby-arcade-card-kicker">{eyebrow}</span>
+            <div className="lobby-browser-card-topline">
+              <span className="lobby-browser-card-kicker">{eyebrow}</span>
               <span className="lobby-arcade-card-badge">{availableCount} available</span>
             </div>
-            <div className="lobby-arcade-card-hero" aria-hidden="true">
+            <div className="lobby-browser-card-hero" aria-hidden="true">
               {renderLobbyArcadeHero(cardId)}
             </div>
-            <div className="lobby-arcade-card-copy">
-              <h2>{displayTitle}</h2>
-              <p>{displayDescription}</p>
+            <div className="lobby-browser-card-copy">
+              <strong>{displayTitle}</strong>
+              <span>{displayDescription}</span>
             </div>
-            <div className="lobby-arcade-card-footer">
-              <div className="button-row lobby-image-tile-front-actions">
+            <div className="lobby-browser-card-footer">
+              <div className="button-row lobby-browser-card-actions">
                 {footerActionControl}
                 <Button
                   type="button"
-                  className="primary-button compact lobby-primary-button lobby-image-tile-action"
+                  className="primary-button compact"
                   onClick={onPlayNow || onCreateAndInvite}
                   disabled={isBusy}
                 >
@@ -10478,7 +10478,7 @@ function LobbyScreen({
                 </Button>
               </div>
             </div>
-          </>
+          </div>
         ) : (
           <>
             <div className="lobby-image-tile-front-copy">
