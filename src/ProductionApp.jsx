@@ -11287,8 +11287,8 @@ function LobbyScreen({
                               />
                             </label>
                           ),
-                          onCreateAndInvite: handleCreateAndInviteGame,
-                          onPlayNow: handleCreateGame,
+                          onCreateAndInvite: handleCreateGame,
+                          onPlayNow: handleCreateAndInviteGame,
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isStandardTileFlipped} aria-hidden={!isStandardTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11383,11 +11383,11 @@ function LobbyScreen({
                           )}
 
                           <div className="button-row lobby-create-actions">
-                            <Button type="button" className="primary-button lobby-primary-button" onClick={handleCreateGame} disabled={isBusy}>
-                              Create New Game
+                            <Button type="button" className="primary-button lobby-primary-button" onClick={handleCreateAndInviteGame} disabled={isBusy}>
+                              Plan + Invite
                             </Button>
-                            <Button type="button" className="ghost-button lobby-secondary-button" onClick={handleCreateAndInviteGame} disabled={isBusy}>
-                              Create + Invite
+                            <Button type="button" className="ghost-button lobby-secondary-button" onClick={handleCreateGame} disabled={isBusy}>
+                              Create Without Invite
                             </Button>
                           </div>
 
@@ -11438,8 +11438,8 @@ function LobbyScreen({
                               />
                             </label>
                           ),
-                          onCreateAndInvite: () => handleCreatePutYourPointsGame(true),
-                          onPlayNow: () => handleCreatePutYourPointsGame(false),
+                          onCreateAndInvite: () => handleCreatePutYourPointsGame(false),
+                          onPlayNow: () => handleCreatePutYourPointsGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isPutYourPointsTileFlipped} aria-hidden={!isPutYourPointsTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11484,17 +11484,17 @@ function LobbyScreen({
                           <div className="button-row">
                             <Button
                               className="primary-button compact"
-                              onClick={() => handleCreatePutYourPointsGame(false)}
-                              disabled={isBusy}
-                            >
-                              Create Luck of the Draw
-                            </Button>
-                            <Button
-                              className="ghost-button compact"
                               onClick={() => handleCreatePutYourPointsGame(true)}
                               disabled={isBusy}
                             >
-                              Create + Invite
+                              Plan + Invite
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreatePutYourPointsGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create Without Invite
                             </Button>
                           </div>
                         </div>
@@ -11552,8 +11552,8 @@ function LobbyScreen({
                               />
                             </label>
                           ),
-                          onCreateAndInvite: () => handleCreateQuizGame(true),
-                          onPlayNow: () => handleCreateQuizGame(false),
+                          onCreateAndInvite: () => handleCreateQuizGame(false),
+                          onPlayNow: () => handleCreateQuizGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isQuizTileFlipped} aria-hidden={!isQuizTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11621,17 +11621,17 @@ function LobbyScreen({
 	                        <div className="button-row">
 	                          <Button
 	                            className="primary-button compact"
-	                            onClick={() => handleCreateQuizGame(false)}
-	                            disabled={isBusy}
-	                          >
-	                            Create Quiz Game
-	                          </Button>
-	                          <Button
-	                            className="ghost-button compact"
 	                            onClick={() => handleCreateQuizGame(true)}
 	                            disabled={isBusy}
 	                          >
-	                            Create + Invite
+	                            Plan + Invite
+	                          </Button>
+	                          <Button
+	                            className="ghost-button compact"
+	                            onClick={() => handleCreateQuizGame(false)}
+	                            disabled={isBusy}
+	                          >
+	                            Create Without Invite
 	                          </Button>
 	                        </div>
                         </div>
@@ -11669,8 +11669,8 @@ function LobbyScreen({
                               />
                             </label>
                           ),
-                          onCreateAndInvite: () => handleCreateTrueFalseGame(true),
-                          onPlayNow: () => handleCreateTrueFalseGame(false),
+                          onCreateAndInvite: () => handleCreateTrueFalseGame(false),
+                          onPlayNow: () => handleCreateTrueFalseGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isTrueFalseTileFlipped} aria-hidden={!isTrueFalseTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11715,14 +11715,14 @@ function LobbyScreen({
                           <div className="button-row">
                             <Button
                               className="primary-button compact"
-                              onClick={() => handleCreateTrueFalseGame(false)}
+                              onClick={() => handleCreateTrueFalseGame(true)}
                               disabled={isBusy}
                             >
                               Create True or False
                             </Button>
                             <Button
                               className="ghost-button compact"
-                              onClick={() => handleCreateTrueFalseGame(true)}
+                              onClick={() => handleCreateTrueFalseGame(false)}
                               disabled={isBusy}
                             >
                               Create + Invite
@@ -11763,8 +11763,8 @@ function LobbyScreen({
                               />
                             </label>
                           ),
-                          onCreateAndInvite: () => handleCreateThisOrThatGame(true),
-                          onPlayNow: () => handleCreateThisOrThatGame(false),
+                          onCreateAndInvite: () => handleCreateThisOrThatGame(false),
+                          onPlayNow: () => handleCreateThisOrThatGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isThisOrThatTileFlipped} aria-hidden={!isThisOrThatTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11809,17 +11809,17 @@ function LobbyScreen({
                           <div className="button-row">
                             <Button
                               className="primary-button compact"
-                              onClick={() => handleCreateThisOrThatGame(false)}
-                              disabled={isBusy}
-                            >
-                              Create This or That
-                            </Button>
-                            <Button
-                              className="ghost-button compact"
                               onClick={() => handleCreateThisOrThatGame(true)}
                               disabled={isBusy}
                             >
-                              Create + Invite
+                              Plan + Invite
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateThisOrThatGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create Without Invite
                             </Button>
                           </div>
                         </div>
@@ -11857,8 +11857,8 @@ function LobbyScreen({
                               />
                             </label>
                           ),
-                          onCreateAndInvite: () => handleCreateMostLikelyGame(true),
-                          onPlayNow: () => handleCreateMostLikelyGame(false),
+                          onCreateAndInvite: () => handleCreateMostLikelyGame(false),
+                          onPlayNow: () => handleCreateMostLikelyGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isMostLikelyTileFlipped} aria-hidden={!isMostLikelyTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11903,17 +11903,17 @@ function LobbyScreen({
                           <div className="button-row">
                             <Button
                               className="primary-button compact"
-                              onClick={() => handleCreateMostLikelyGame(false)}
-                              disabled={isBusy}
-                            >
-                              Create Most Likely To
-                            </Button>
-                            <Button
-                              className="ghost-button compact"
                               onClick={() => handleCreateMostLikelyGame(true)}
                               disabled={isBusy}
                             >
-                              Create + Invite
+                              Plan + Invite
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateMostLikelyGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create Without Invite
                             </Button>
                           </div>
                         </div>
@@ -12019,7 +12019,8 @@ function LobbyScreen({
                           statusText: `${formatScore(HOLDEM_SMALL_BLIND)} / ${formatScore(HOLDEM_BIG_BLIND)}`,
                           description: 'Heads-up poker using Jay and Kim’s live penalty-point totals as the bankroll for each hand.',
                           footerMeta: '2 Players',
-                          onCreateAndInvite: () => handleCreateHoldemGame(true),
+                          onCreateAndInvite: () => handleCreateHoldemGame(false),
+                          onPlayNow: () => handleCreateHoldemGame(true),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isHoldemTileFlipped} aria-hidden={!isHoldemTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -12059,17 +12060,17 @@ function LobbyScreen({
                           <div className="button-row">
                             <Button
                               className="primary-button compact"
-                              onClick={() => handleCreateHoldemGame(false)}
-                              disabled={isBusy}
-                            >
-                              Create Texas Hold'em
-                            </Button>
-                            <Button
-                              className="ghost-button compact"
                               onClick={() => handleCreateHoldemGame(true)}
                               disabled={isBusy}
                             >
-                              Create + Invite
+                              Plan + Invite
+                            </Button>
+                            <Button
+                              className="ghost-button compact"
+                              onClick={() => handleCreateHoldemGame(false)}
+                              disabled={isBusy}
+                            >
+                              Create Without Invite
                             </Button>
                           </div>
                         </div>
