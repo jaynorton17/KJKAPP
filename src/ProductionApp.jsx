@@ -8306,18 +8306,22 @@ function LobbyScreen({
 
   const handleCreateGame = () =>
     onCreateGame({
+      createCode: lobbyCode,
       mode: createMode,
       gameMode: 'standard',
       roundTypes: createMode === 'custom' ? selectedRoundTypes : [],
       categories: createMode === 'custom' ? selectedCategories : [],
+      requestedQuestionCount: gameQuestionCount,
     });
 
   const handleCreateAndInviteGame = () =>
     openInvitePicker({
+      createCode: lobbyCode,
       mode: createMode,
       gameMode: 'standard',
       roundTypes: createMode === 'custom' ? selectedRoundTypes : [],
       categories: createMode === 'custom' ? selectedCategories : [],
+      requestedQuestionCount: gameQuestionCount,
     }, 'Normal Game');
 
   const handleCreateQuizGame = (sendInvite = false) =>
@@ -10598,8 +10602,8 @@ function LobbyScreen({
                 />
               </label>
             ),
-            onCreateAndInvite: () => onCreate(true),
-            onPlayNow: () => onCreate(false),
+            onCreateAndInvite: () => onCreate(false),
+            onPlayNow: () => onCreate(true),
           })}
           <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isFlipped} aria-hidden={!isFlipped}>
             <div className="lobby-image-tile-back-toolbar">
@@ -10636,11 +10640,11 @@ function LobbyScreen({
             </label>
             <p className="field-note">{fieldNote}</p>
             <div className="button-row">
-              <Button className="primary-button compact" onClick={() => onCreate(false)} disabled={isBusy}>
+              <Button className="primary-button compact" onClick={() => onCreate(true)} disabled={isBusy}>
                 {createLabel}
               </Button>
-              <Button className="ghost-button compact" onClick={() => onCreate(true)} disabled={isBusy}>
-                Invite Friend
+              <Button className="ghost-button compact" onClick={() => onCreate(false)} disabled={isBusy}>
+                Create Without Invite
               </Button>
             </div>
           </div>
