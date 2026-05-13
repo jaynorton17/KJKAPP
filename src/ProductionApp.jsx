@@ -55,11 +55,20 @@ import mostLikelyTileImage from './assets/lobby-most-likely.png';
 import pokerTileImage from './assets/lobby-poker.webp';
 import putYourPointsTileImage from './assets/lobby-put-your-points.png';
 import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
+import quickFireQuizLatestImage from './assets/quick-fire-quiz-latest.png';
 import randomTileImage from './assets/lobby-random.png';
 import randomGameLatestImage from './assets/random-game-latest.png';
 import redGreenFlagTileImage from './assets/lobby-red-green-flag.png';
+import redFlagGreenFlagLatestImage from './assets/red-flag-green-flag-latest.png';
 import thisOrThatTileImage from './assets/lobby-this-or-that.webp';
+import thisOrThatLatestImage from './assets/this-or-that-latest.png';
 import trueOrFalseTileImage from './assets/lobby-true-or-false.webp';
+import trueOrFalseLatestImage from './assets/true-or-false-latest.png';
+import normalGameLatestImage from './assets/normal-game-latest.png';
+import memoryLaneLatestImage from './assets/memory-lane-latest.png';
+import whosMoreLikelyLatestImage from './assets/whos-more-likely-latest.png';
+import compatibilityMeterLatestImage from './assets/compatibility-meter-latest.png';
+import luckOfTheDrawLatestImage from './assets/luck-of-the-draw-latest.png';
 import {
   calculateAnalytics,
   CATEGORY_COLOR_MAP,
@@ -209,7 +218,7 @@ const QUESTION_BANK_SYNC_TARGETS = [
   },
   {
     bankType: PUT_YOUR_POINTS_GAME_MODE,
-    gameName: 'Put Your Points Where Your Mouth Is',
+    gameName: 'Luck of the Draw',
     label: 'Put Your Points Where Your Mouth Is Bank',
     importLabel: 'Put Your Points Questions',
     sheetName: 'Put Your Money Where Your Mouth Is',
@@ -2171,7 +2180,7 @@ const ANALYTICS_GAME_SCORE_MODES = [
   { id: 'trueFalse', label: 'True or False' },
   { id: 'thisOrThat', label: 'This or That' },
   { id: 'mostLikely', label: 'Most Likely To' },
-  { id: 'putYourPoints', label: 'Put Your Points' },
+  { id: 'putYourPoints', label: 'Luck of the Draw' },
   { id: 'secretAuction', label: HOW_SURE_ARE_YOU_GAME_NAME },
   { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag' },
   { id: 'compatibilityMeter', label: 'Compatibility Meter' },
@@ -2184,7 +2193,7 @@ const SURPRISE_ME_GAME_OPTIONS = [
   { id: 'trueFalse', label: 'True or False', gameMode: TRUE_FALSE_GAME_MODE, gameName: 'True or False' },
   { id: 'thisOrThat', label: 'This or That', gameMode: THIS_OR_THAT_GAME_MODE, gameName: 'This or That' },
   { id: 'mostLikely', label: 'Most Likely To', gameMode: MOST_LIKELY_GAME_MODE, gameName: 'Most Likely To' },
-  { id: 'putYourPoints', label: 'Put Your Points', gameMode: PUT_YOUR_POINTS_GAME_MODE, gameName: 'Put Your Points Where Your Mouth Is' },
+  { id: 'putYourPoints', label: 'Luck of the Draw', gameMode: PUT_YOUR_POINTS_GAME_MODE, gameName: 'Luck of the Draw' },
   { id: 'secretAuction', label: HOW_SURE_ARE_YOU_GAME_NAME, gameMode: SECRET_AUCTION_GAME_MODE, gameName: HOW_SURE_ARE_YOU_GAME_NAME },
   { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag', gameMode: RED_FLAG_GREEN_FLAG_GAME_MODE, gameName: 'Red Flag Green Flag' },
   { id: 'compatibilityMeter', label: 'Compatibility Meter', gameMode: COMPATIBILITY_METER_GAME_MODE, gameName: 'Compatibility Meter' },
@@ -8172,7 +8181,7 @@ function LobbyScreen({
     memoryLane: { title: 'MEMORY LANE', description: 'Relive shared moments and answer personal questions together.', primary: '#1DA1FF', secondary: '#6BE3FF' },
     random: { title: 'RANDOM GAME', description: 'Let the computer choose a random game mode.', primary: '#A855F7', secondary: '#EC4899' },
     trueFalse: { title: 'TRUE OR FALSE', description: 'Guess whether shocking statements are true or false.', primary: '#22C55E', secondary: '#EF4444' },
-    putYourPoints: { title: 'PUT YOUR POINTS WHERE YOUR MOUTH IS', description: 'Answer with confidence and put your points on the line.', primary: '#F97316', secondary: '#2563EB' },
+    putYourPoints: { title: 'LUCK OF THE DRAW', description: 'Answer with confidence and put your points on the line.', primary: '#F97316', secondary: '#2563EB' },
     standard: { title: 'NORMAL GAME', description: 'Classic straightforward questions for everyone.', primary: '#FACC15', secondary: '#3B82F6' },
     mostLikely: { title: "WHO'S MORE LIKELY TO", description: 'Find out who in your group is most likely to do the wildest things.', primary: '#FB7185', secondary: '#60A5FA' },
     compatibilityMeter: { title: 'COMPATIBILITY METER', description: 'Test how well you match with your partner or friends.', primary: '#EC4899', secondary: '#38BDF8' },
@@ -8219,10 +8228,22 @@ function LobbyScreen({
     }
   };
   const renderLobbyArcadeHero = (cardId) => {
-    if (cardId === 'random') {
+    const imageByCardId = {
+      standard: normalGameLatestImage,
+      quiz: quickFireQuizLatestImage,
+      thisOrThat: thisOrThatLatestImage,
+      memoryLane: memoryLaneLatestImage,
+      trueFalse: trueOrFalseLatestImage,
+      mostLikely: whosMoreLikelyLatestImage,
+      redFlagGreenFlag: redFlagGreenFlagLatestImage,
+      compatibilityMeter: compatibilityMeterLatestImage,
+      putYourPoints: luckOfTheDrawLatestImage,
+      random: randomGameLatestImage,
+    };
+    if (imageByCardId[cardId]) {
       return (
-        <div className="lobby-arcade-card-artframe lobby-arcade-card-artframe--random">
-          <img src={randomGameLatestImage} alt="" />
+        <div className={`lobby-arcade-card-artframe lobby-arcade-card-artframe--${cardId}`}>
+          <img src={imageByCardId[cardId]} alt="" />
         </div>
       );
     }
@@ -8363,15 +8384,15 @@ function LobbyScreen({
   const handleCreatePutYourPointsGame = (sendInvite = false) =>
     (sendInvite ? openInvitePicker({
       createCode: putYourPointsCreateCodeDraft,
-      gameName: 'Put Your Points Where Your Mouth Is',
+      gameName: 'Luck of the Draw',
       mode: 'random',
       gameMode: PUT_YOUR_POINTS_GAME_MODE,
       roundTypes: [],
       categories: [],
       requestedQuestionCount: putYourPointsQuestionCountDraft,
-    }, 'Put Your Points') : onCreateGame({
+    }, 'Luck of the Draw') : onCreateGame({
       createCode: putYourPointsCreateCodeDraft,
-      gameName: 'Put Your Points Where Your Mouth Is',
+      gameName: 'Luck of the Draw',
       mode: 'random',
       gameMode: PUT_YOUR_POINTS_GAME_MODE,
       roundTypes: [],
@@ -8522,9 +8543,9 @@ function LobbyScreen({
       },
       {
         id: 'putYourPoints',
-        label: 'Put Your Points',
+        label: 'Luck of the Draw',
         buildConfig: (sendInvite = false, requestedQuestionCount = randomQuestionCountDraft) => ({
-          gameName: 'Put Your Points Where Your Mouth Is',
+          gameName: 'Luck of the Draw',
           mode: 'random',
           gameMode: PUT_YOUR_POINTS_GAME_MODE,
           roundTypes: [],
@@ -10064,7 +10085,7 @@ function LobbyScreen({
 
   const lobbyCarouselCards = [
     { id: 'random', label: 'Random', image: randomTileImage },
-    { id: 'putYourPoints', label: 'Put Your Points', image: putYourPointsTileImage },
+    { id: 'putYourPoints', label: 'Luck of the Draw', image: putYourPointsTileImage },
     { id: 'secretAuction', label: HOW_SURE_ARE_YOU_GAME_NAME, image: howSureAreYouTileImage },
     { id: 'standard', label: 'Normal Game', image: normalGameTileImage },
     { id: 'quiz', label: 'Quick Fire Quiz', image: quickFireQuizTileImage },
@@ -10298,7 +10319,7 @@ function LobbyScreen({
       categories: ['Connection', 'Fun', 'Personality', 'Romance', 'Competition'],
     },
     putYourPoints: {
-      name: 'Put Your Points Where Your Mouth Is',
+      name: 'Luck of the Draw',
       howItWorks: 'Each round generates a random 1-200 point stake. Players answer for themselves and guess the other person, then the host marks Match or Miss for each player. A Miss adds the stake as that player’s penalty.',
       questionTypes: ['Text Answer', 'Multiple Choice', 'True or False', 'Who is More Likely To', 'Would You Rather', 'Rating'],
       categories: ['Food', 'Lifestyle', 'Entertainment', 'Romance', 'Travel', 'Technology', 'Home', 'Funny', 'Games', 'Personality', 'Communication', 'Social', 'Fashion', 'Future', 'Habits', 'Music', 'Money', 'Wellbeing', 'Fitness'],
@@ -10407,7 +10428,7 @@ function LobbyScreen({
             </div>
             <div className="lobby-arcade-card-topline">
               <span className="lobby-arcade-card-kicker">{eyebrow}</span>
-              <span className="lobby-arcade-card-badge">READY</span>
+              <span className="lobby-arcade-card-badge">{availableCount} available</span>
             </div>
             <div className="lobby-arcade-card-hero" aria-hidden="true">
               {renderLobbyArcadeHero(cardId)}
@@ -10417,10 +10438,6 @@ function LobbyScreen({
               <p>{displayDescription}</p>
             </div>
             <div className="lobby-arcade-card-stats">
-              <article className="lobby-arcade-card-stat" aria-live="polite">
-                <span>Questions Available</span>
-                <strong>{availableCount}</strong>
-              </article>
               <div className="lobby-arcade-card-stat lobby-arcade-card-stat--editable">
                 {footerMeta}
               </div>
@@ -10637,7 +10654,7 @@ function LobbyScreen({
                   </div>
                   <div className="lobby-browser-card-topline">
                     <span className="lobby-browser-card-kicker">{eyebrow}</span>
-                    <span className="lobby-arcade-card-badge">READY</span>
+                    <span className="lobby-arcade-card-badge">{availableCount} available</span>
                   </div>
                   <div className="lobby-browser-card-hero" aria-hidden="true">
                     {renderLobbyArcadeHero(card.id)}
@@ -10645,16 +10662,6 @@ function LobbyScreen({
                   <div className="lobby-browser-card-copy">
                     <strong>{theme.title || card.label}</strong>
                     <span>{theme.description || details?.name || 'Open setup'}</span>
-                  </div>
-                  <div className="lobby-browser-card-stats">
-                    <article className="lobby-browser-card-stat">
-                      <small>Questions Available</small>
-                      <b>{availableCount}</b>
-                    </article>
-                    <article className="lobby-browser-card-stat">
-                      <small>Status</small>
-                      <b>{isActive ? 'Featured' : 'Ready'}</b>
-                    </article>
                   </div>
                   <div className="lobby-browser-card-footer">
                     <div className="button-row lobby-browser-card-actions">
@@ -11340,7 +11347,7 @@ function LobbyScreen({
                         {renderLobbyTileFront({
                           cardId: 'putYourPoints',
                           eyebrow: 'Stake Match',
-                          title: 'Put Your Points',
+                          title: 'Luck of the Draw',
                           statusText: `${putYourPointsReadyCount} ready`,
                           description: 'A normal answer-and-guess round with a random 1-200 point stake. The host marks each player as matched or missed after the reveal.',
                           availableCount: lobbyCardAvailableCounts.putYourPoints,
@@ -11374,14 +11381,14 @@ function LobbyScreen({
                           <div className="panel-heading">
                             <div>
                               <p className="eyebrow">Stake Match</p>
-                              <h2>Put Your Points</h2>
+                              <h2>Luck of the Draw</h2>
                             </div>
                             <span className="status-pill">{remainingPutYourPointsQuestionCount} available</span>
                           </div>
                           {renderLobbyTileDetails('putYourPoints')}
                           <p className="panel-copy">Each round flicks through a few stake numbers, then lands on the final amount. Players submit their own answer and their guess. The host marks Match or Miss for Jay and Kim separately.</p>
                           <label className="field">
-                            <span>Put Your Points Code</span>
+                            <span>Luck of the Draw Code</span>
                             <input
                               value={putYourPointsCreateCodeDraft}
                               onChange={(event) => setPutYourPointsCreateCodeDraft(normalizeJoinCode(event.target.value))}
@@ -11406,7 +11413,7 @@ function LobbyScreen({
                               onClick={() => handleCreatePutYourPointsGame(false)}
                               disabled={isBusy}
                             >
-                              Create Put Your Points
+                              Create Luck of the Draw
                             </Button>
                             <Button
                               className="ghost-button compact"
@@ -12030,7 +12037,7 @@ function LobbyScreen({
                   Most Likely To
                 </button>
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'putYourPoints' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('putYourPoints')}>
-                  Put Your Points
+                  Luck of the Draw
                 </button>
                 <button type="button" className={`dashboard-pill tab-button ${questionBankSegment === 'secretAuction' ? 'is-active' : ''}`} onClick={() => handleQuestionBankSegmentChange('secretAuction')}>
                   How Sure Are You
@@ -12635,7 +12642,7 @@ function LobbyScreen({
                   Most Likely To
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'putYourPoints' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('putYourPoints')}>
-                  Put Your Points
+                  Luck of the Draw
                 </button>
                 <button type="button" className={`dashboard-pill tab-button dashboard-pill--activity-sub ${analyticsSegment === 'secretAuction' ? 'is-active' : ''}`} onClick={() => setAnalyticsSegment('secretAuction')}>
                   How Sure Are You
@@ -24142,7 +24149,7 @@ function ProductionApp() {
       { id: 'quiz', label: 'Quick Fire Quiz', remaining: remainingQuizQuestionCount },
       { id: 'thisOrThat', label: 'This or That', remaining: remainingThisOrThatQuestionCount },
       { id: 'mostLikely', label: 'Most Likely To', remaining: remainingMostLikelyQuestionCount },
-      { id: 'putYourPoints', label: 'Put Your Points', remaining: remainingPutYourPointsQuestionCount },
+      { id: 'putYourPoints', label: 'Luck of the Draw', remaining: remainingPutYourPointsQuestionCount },
       { id: 'secretAuction', label: HOW_SURE_ARE_YOU_GAME_NAME, remaining: remainingSecretAuctionQuestionCount },
       { id: 'trueFalse', label: 'True or False', remaining: remainingTrueFalseQuestionCount },
       { id: 'redFlagGreenFlag', label: 'Red Flag Green Flag', remaining: remainingRedFlagGreenFlagQuestionCount },
