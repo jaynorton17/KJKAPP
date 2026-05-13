@@ -10125,7 +10125,7 @@ function LobbyScreen({
     random: { create: () => handleCreateRandomGame(false), invite: () => handleCreateRandomGame(true) },
   };
   const lobbyCardRequestedCountDrafts = {
-    standard: lobbyQuestionCount,
+    standard: gameQuestionCount,
     putYourPoints: putYourPointsQuestionCountDraft,
     secretAuction: secretAuctionQuestionCountDraft,
     quiz: quizQuestionCountDraft,
@@ -10138,7 +10138,7 @@ function LobbyScreen({
     random: randomQuestionCountDraft,
   };
   const lobbyCardRequestedCountSetters = {
-    standard: setLobbyQuestionCount,
+    standard: onGameQuestionCountChange,
     putYourPoints: setPutYourPointsQuestionCountDraft,
     secretAuction: setSecretAuctionQuestionCountDraft,
     quiz: setQuizQuestionCountDraft,
