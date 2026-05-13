@@ -10736,7 +10736,13 @@ function LobbyScreen({
                       <Button
                         type="button"
                         className="primary-button compact"
-                        onClick={() => actionHandlers?.create ? actionHandlers.create() : focusLobbyCard(card.id)}
+                        onClick={() => (
+                          actionHandlers?.invite
+                            ? actionHandlers.invite()
+                            : actionHandlers?.create
+                              ? actionHandlers.create()
+                              : focusLobbyCard(card.id)
+                        )}
                         disabled={isBusy}
                       >
                         Play Now
