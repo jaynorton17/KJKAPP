@@ -10667,6 +10667,15 @@ function LobbyScreen({
           const countSetter = lobbyCardRequestedCountSetters[card.id] || null;
           const theme = lobbyArcadeCardThemes[card.id] || null;
           const availableCount = lobbyCardAvailableCounts[card.id] || 0;
+          const handleBrowserCardSurfaceClick = (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (target?.closest('input, textarea, select, button, label, a')) return;
+            if (actionHandlers?.invite) {
+              actionHandlers.invite();
+              return;
+            }
+            focusLobbyCard(card.id);
+          };
           return (
             <article
               key={card.id}
@@ -10674,7 +10683,10 @@ function LobbyScreen({
               style={theme ? { '--arcade-primary': theme.primary, '--arcade-secondary': theme.secondary } : { '--lobby-browser-image': `url("${imageUrl}")` }}
             >
               {theme ? (
-                <div className={`lobby-browser-card-main lobby-browser-card-main--arcade ${compactArtwork ? 'lobby-browser-card-main--compact-art' : ''}`}>
+                <div
+                  className={`lobby-browser-card-main lobby-browser-card-main--arcade ${compactArtwork ? 'lobby-browser-card-main--compact-art' : ''}`}
+                  onClick={handleBrowserCardSurfaceClick}
+                >
                   <div className={`lobby-arcade-card-glow-stack lobby-arcade-card-glow-stack--${card.id}`} aria-hidden="true">
                     <div className="lobby-arcade-card-glow lobby-arcade-card-glow--outer" />
                     <div className="lobby-arcade-card-glow lobby-arcade-card-glow--inner" />
