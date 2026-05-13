@@ -1108,7 +1108,7 @@ button:disabled {
 }
 
 .lobby-arcade-card-icon {
-  width: min(56%, 220px);
+  width: min(50%, 190px);
   aspect-ratio: 1;
   display: grid;
   place-items: center;
@@ -1127,7 +1127,7 @@ button:disabled {
 
 .lobby-arcade-card-artframe {
   position: relative;
-  width: min(56%, 220px);
+  width: min(50%, 190px);
   aspect-ratio: 1 / 1;
   display: grid;
   place-items: center;

@@ -69,6 +69,7 @@ import memoryLaneLatestImage from './assets/memory-lane-latest.png';
 import whosMoreLikelyLatestImage from './assets/whos-more-likely-latest.png';
 import compatibilityMeterLatestImage from './assets/compatibility-meter-latest.png';
 import luckOfTheDrawLatestImage from './assets/luck-of-the-draw-latest.png';
+import howSureLatestImage from './assets/how-sure-latest.png';
 import {
   calculateAnalytics,
   CATEGORY_COLOR_MAP,
@@ -8238,6 +8239,7 @@ function LobbyScreen({
       redFlagGreenFlag: redFlagGreenFlagLatestImage,
       compatibilityMeter: compatibilityMeterLatestImage,
       putYourPoints: luckOfTheDrawLatestImage,
+      secretAuction: howSureLatestImage,
       random: randomGameLatestImage,
     };
     if (imageByCardId[cardId]) {
