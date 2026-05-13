@@ -401,7 +401,8 @@ button:disabled {
     linear-gradient(160deg, color-mix(in srgb, var(--arcade-primary) 10%, rgba(4, 10, 20, 0.98)), rgba(8, 16, 30, 0.96) 42%, color-mix(in srgb, var(--arcade-secondary) 8%, rgba(4, 8, 18, 0.98)));
   box-shadow:
     0 26px 44px rgba(1, 5, 12, 0.4),
-    0 0 36px color-mix(in srgb, var(--arcade-primary) 14%, transparent),
+    0 0 56px color-mix(in srgb, var(--arcade-primary) 22%, transparent),
+    0 0 82px color-mix(in srgb, var(--arcade-secondary) 12%, transparent),
     0 0 0 1px rgba(255, 255, 255, 0.03),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
@@ -767,7 +768,8 @@ button:disabled {
   border: 1px solid color-mix(in srgb, var(--arcade-primary) 42%, rgba(255, 255, 255, 0.14));
   box-shadow:
     0 28px 52px rgba(1, 4, 10, 0.56),
-    0 0 40px color-mix(in srgb, var(--arcade-primary) 14%, transparent),
+    0 0 58px color-mix(in srgb, var(--arcade-primary) 22%, transparent),
+    0 0 90px color-mix(in srgb, var(--arcade-secondary) 12%, transparent),
     0 0 0 1px rgba(255, 255, 255, 0.04),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
   transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
@@ -800,7 +802,8 @@ button:disabled {
   border-color: color-mix(in srgb, var(--arcade-primary) 58%, rgba(255, 255, 255, 0.18));
   box-shadow:
     0 34px 66px rgba(1, 4, 10, 0.6),
-    0 0 40px color-mix(in srgb, var(--arcade-primary) 28%, transparent),
+    0 0 74px color-mix(in srgb, var(--arcade-primary) 34%, transparent),
+    0 0 110px color-mix(in srgb, var(--arcade-secondary) 18%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
@@ -861,10 +864,10 @@ button:disabled {
 
 .lobby-arcade-card-glow-stack {
   position: absolute;
-  inset: -16%;
+  inset: -22%;
   z-index: 0;
   pointer-events: none;
-  filter: saturate(1.12);
+  filter: saturate(1.24) brightness(1.04);
 }
 
 .lobby-arcade-card-glow {
@@ -873,63 +876,63 @@ button:disabled {
 }
 
 .lobby-arcade-card-glow--outer {
-  inset: 4%;
+  inset: 2%;
   border-radius: 36px;
   background:
-    radial-gradient(circle at 12% 14%, color-mix(in srgb, var(--arcade-primary) 34%, transparent), transparent 42%),
-    radial-gradient(circle at 88% 82%, color-mix(in srgb, var(--arcade-secondary) 28%, transparent), transparent 42%);
-  filter: blur(72px);
-  opacity: 0.5;
+    radial-gradient(circle at 12% 14%, color-mix(in srgb, var(--arcade-primary) 46%, transparent), transparent 44%),
+    radial-gradient(circle at 88% 82%, color-mix(in srgb, var(--arcade-secondary) 38%, transparent), transparent 44%);
+  filter: blur(96px);
+  opacity: 0.68;
 }
 
 .lobby-arcade-card-glow--inner {
-  inset: 9%;
+  inset: 7%;
   border-radius: 30px;
   background:
-    radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--arcade-primary) 28%, transparent), transparent 36%),
-    radial-gradient(circle at 82% 22%, color-mix(in srgb, var(--arcade-secondary) 22%, transparent), transparent 38%),
-    radial-gradient(circle at 50% 100%, rgba(255, 255, 255, 0.08), transparent 42%);
-  filter: blur(46px);
-  opacity: 0.54;
+    radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--arcade-primary) 38%, transparent), transparent 38%),
+    radial-gradient(circle at 82% 22%, color-mix(in srgb, var(--arcade-secondary) 30%, transparent), transparent 40%),
+    radial-gradient(circle at 50% 100%, rgba(255, 255, 255, 0.12), transparent 44%);
+  filter: blur(58px);
+  opacity: 0.7;
   mix-blend-mode: screen;
 }
 
 .lobby-arcade-card-glow--icon {
   left: 50%;
-  top: 28%;
-  width: 46%;
-  height: 34%;
+  top: 24%;
+  width: 54%;
+  height: 40%;
   transform: translateX(-50%);
   border-radius: 999px;
   background:
-    radial-gradient(circle, color-mix(in srgb, var(--arcade-primary) 42%, transparent) 0%, color-mix(in srgb, var(--arcade-primary) 24%, transparent) 34%, transparent 72%),
-    radial-gradient(circle at 62% 38%, color-mix(in srgb, var(--arcade-secondary) 34%, transparent) 0%, transparent 68%);
-  filter: blur(62px);
-  opacity: 0.78;
+    radial-gradient(circle, color-mix(in srgb, var(--arcade-primary) 58%, transparent) 0%, color-mix(in srgb, var(--arcade-primary) 30%, transparent) 34%, transparent 74%),
+    radial-gradient(circle at 62% 38%, color-mix(in srgb, var(--arcade-secondary) 46%, transparent) 0%, transparent 70%);
+  filter: blur(84px);
+  opacity: 0.96;
   mix-blend-mode: screen;
 }
 
 .lobby-arcade-card-glow--button {
   left: 12%;
   right: 12%;
-  bottom: 2%;
-  height: 20%;
+  bottom: -1%;
+  height: 24%;
   border-radius: 999px;
   background:
-    radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--arcade-primary) 30%, transparent), transparent 58%),
-    radial-gradient(circle at 78% 58%, color-mix(in srgb, var(--arcade-secondary) 22%, transparent), transparent 54%);
-  filter: blur(46px);
-  opacity: 0.42;
+    radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--arcade-primary) 42%, transparent), transparent 60%),
+    radial-gradient(circle at 78% 58%, color-mix(in srgb, var(--arcade-secondary) 30%, transparent), transparent 56%);
+  filter: blur(60px);
+  opacity: 0.58;
 }
 
 .lobby-arcade-card-glow--border {
-  inset: 7%;
+  inset: 6%;
   border-radius: 32px;
-  border: 1px solid color-mix(in srgb, var(--arcade-primary) 26%, rgba(255, 255, 255, 0.1));
+  border: 1px solid color-mix(in srgb, var(--arcade-primary) 38%, rgba(255, 255, 255, 0.12));
   box-shadow:
-    0 0 24px color-mix(in srgb, var(--arcade-primary) 16%, transparent),
-    0 0 36px color-mix(in srgb, var(--arcade-secondary) 10%, transparent),
-    inset 0 0 18px color-mix(in srgb, var(--arcade-primary) 12%, transparent);
+    0 0 34px color-mix(in srgb, var(--arcade-primary) 26%, transparent),
+    0 0 54px color-mix(in srgb, var(--arcade-secondary) 16%, transparent),
+    inset 0 0 22px color-mix(in srgb, var(--arcade-primary) 18%, transparent);
   overflow: hidden;
 }
 
@@ -939,8 +942,8 @@ button:disabled {
   inset: -30%;
   background: linear-gradient(120deg, transparent 28%, rgba(255, 255, 255, 0.28) 50%, transparent 72%);
   mix-blend-mode: screen;
-  opacity: 0.22;
-  animation: arcadeBorderShimmer 5.8s linear infinite;
+  opacity: 0.34;
+  animation: arcadeBorderShimmer 4.8s linear infinite;
 }
 
 .lobby-image-tile-face--back {
@@ -1305,8 +1308,9 @@ button:disabled {
 .lobby-image-tile-face--arcade .lobby-primary-button,
 .lobby-browser-card--arcade .primary-button {
   box-shadow:
-    0 0 18px color-mix(in srgb, var(--arcade-primary) 26%, transparent),
-    0 0 34px color-mix(in srgb, var(--arcade-primary) 18%, transparent),
+    0 0 24px color-mix(in srgb, var(--arcade-primary) 34%, transparent),
+    0 0 46px color-mix(in srgb, var(--arcade-primary) 22%, transparent),
+    0 0 66px color-mix(in srgb, var(--arcade-secondary) 14%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
@@ -1315,8 +1319,9 @@ button:disabled {
 .lobby-browser-card--arcade .primary-button:hover,
 .lobby-browser-card--arcade .primary-button:focus-visible {
   box-shadow:
-    0 0 26px color-mix(in srgb, var(--arcade-primary) 34%, transparent),
-    0 0 48px color-mix(in srgb, var(--arcade-secondary) 22%, transparent),
+    0 0 34px color-mix(in srgb, var(--arcade-primary) 42%, transparent),
+    0 0 62px color-mix(in srgb, var(--arcade-primary) 28%, transparent),
+    0 0 92px color-mix(in srgb, var(--arcade-secondary) 22%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
@@ -1332,15 +1337,22 @@ button:disabled {
 .lobby-image-tile--arcade:focus-within .lobby-arcade-card-glow--outer,
 .lobby-browser-card--arcade:hover .lobby-arcade-card-glow--outer,
 .lobby-browser-card--arcade:focus-within .lobby-arcade-card-glow--outer {
-  opacity: 0.72;
+  opacity: 0.88;
 }
 
 .lobby-image-tile--arcade:hover .lobby-arcade-card-glow--icon,
 .lobby-image-tile--arcade:focus-within .lobby-arcade-card-glow--icon,
 .lobby-browser-card--arcade:hover .lobby-arcade-card-glow--icon,
 .lobby-browser-card--arcade:focus-within .lobby-arcade-card-glow--icon {
-  opacity: 0.96;
-  transform: translateX(-50%) scale(1.05);
+  opacity: 1;
+  transform: translateX(-50%) scale(1.08);
+}
+
+.lobby-image-tile--arcade:hover .lobby-arcade-card-glow--button,
+.lobby-image-tile--arcade:focus-within .lobby-arcade-card-glow--button,
+.lobby-browser-card--arcade:hover .lobby-arcade-card-glow--button,
+.lobby-browser-card--arcade:focus-within .lobby-arcade-card-glow--button {
+  opacity: 0.78;
 }
 
 .lobby-image-tile-back-toolbar {
