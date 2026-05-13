@@ -11,6 +11,7 @@ import {
   updateProfile,
 } from 'firebase/auth';
 import {
+  arrayRemove,
   arrayUnion,
   collection,
   doc,
@@ -7869,6 +7870,8 @@ function LobbyScreen({
   profile,
   isAdmin = false,
   friendProfiles = [],
+  incomingFriendRequestProfiles = [],
+  outgoingFriendRequestProfiles = [],
   connectionState,
   questionNotes,
   questionFeedback,
@@ -7907,6 +7910,9 @@ function LobbyScreen({
   onGameQuestionCountChange,
   onCreateGame,
   onAddFriend,
+  onAcceptFriendRequest,
+  onDeclineFriendRequest,
+  onCancelFriendRequest,
   onJoinGame,
   onJoinGameInvite,
   onDismissGameInvite,
@@ -13666,7 +13672,7 @@ function LobbyScreen({
                 </div>
                 <span className="status-pill">{friendProfiles.length}</span>
               </div>
-              <p className="panel-copy">Add Kim here once by username or email. After that, every lobby game can use Invite Friend first, with private code left as the fallback.</p>
+              <p className="panel-copy">Send a friend request by username or email. They need to accept it before they appear in Invite Friend for lobby games.</p>
               <label className="field">
                 <span>Add by username or email</span>
                 <input
@@ -13684,8 +13690,57 @@ function LobbyScreen({
                   }}
                   disabled={isBusy || !normalizeText(friendLookupDraft)}
                 >
-                  Add Friend To Invites
+                  Send Friend Request
                 </Button>
+              </div>
+              <div className="panel-heading compact-heading" style={{ marginTop: 12 }}>
+                <div>
+                  <h3>Incoming Requests</h3>
+                </div>
+                <span className="status-pill">{incomingFriendRequestProfiles.length}</span>
+              </div>
+              <div className="mini-list">
+                {incomingFriendRequestProfiles.length ? (
+                  incomingFriendRequestProfiles.map((friend) => (
+                    <article className="mini-list-row" key={friend.uid}>
+                      <strong>{friend.displayName || friend.email || 'Friend request'}</strong>
+                      <small>{friend.email || friend.uid}</small>
+                      <div className="button-row">
+                        <Button className="primary-button compact" onClick={() => onAcceptFriendRequest?.(friend.uid)} disabled={isBusy}>
+                          Accept
+                        </Button>
+                        <Button className="ghost-button compact" onClick={() => onDeclineFriendRequest?.(friend.uid)} disabled={isBusy}>
+                          Decline
+                        </Button>
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <p className="empty-copy">No incoming friend requests.</p>
+                )}
+              </div>
+              <div className="panel-heading compact-heading" style={{ marginTop: 12 }}>
+                <div>
+                  <h3>Sent Requests</h3>
+                </div>
+                <span className="status-pill">{outgoingFriendRequestProfiles.length}</span>
+              </div>
+              <div className="mini-list">
+                {outgoingFriendRequestProfiles.length ? (
+                  outgoingFriendRequestProfiles.map((friend) => (
+                    <article className="mini-list-row" key={friend.uid}>
+                      <strong>{friend.displayName || friend.email || 'Pending request'}</strong>
+                      <small>{friend.email || friend.uid}</small>
+                      <div className="button-row">
+                        <Button className="ghost-button compact" onClick={() => onCancelFriendRequest?.(friend.uid)} disabled={isBusy}>
+                          Cancel Request
+                        </Button>
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <p className="empty-copy">No sent friend requests.</p>
+                )}
               </div>
               <div className="mini-list">
                 {friendProfiles.length ? (
@@ -22165,6 +22220,8 @@ function ProductionApp() {
   const [amaRequests, setAmaRequests] = useState([]);
   const [diaryEntries, setDiaryEntries] = useState([]);
   const [friendProfiles, setFriendProfiles] = useState([]);
+  const [incomingFriendRequestProfiles, setIncomingFriendRequestProfiles] = useState([]);
+  const [outgoingFriendRequestProfiles, setOutgoingFriendRequestProfiles] = useState([]);
   const [questionNotes, setQuestionNotes] = useState([]);
   const [questionFeedback, setQuestionFeedback] = useState([]);
   const [questionReplays, setQuestionReplays] = useState([]);
@@ -22547,6 +22604,8 @@ function ProductionApp() {
         } else {
           setProfile(null);
           setFriendProfiles([]);
+          setIncomingFriendRequestProfiles([]);
+          setOutgoingFriendRequestProfiles([]);
           autoResumedGameIdRef.current = '';
           setGameId('');
           localStorage.removeItem(activeGameKey);
@@ -22690,6 +22749,70 @@ function ProductionApp() {
       cancelled = true;
     };
   }, [firestore, profile?.friendIds]);
+
+  useEffect(() => {
+    if (!firestore) return undefined;
+    const incomingIds = Array.isArray(profile?.incomingFriendRequestIds) ? profile.incomingFriendRequestIds.filter(Boolean) : [];
+    if (!incomingIds.length) {
+      setIncomingFriendRequestProfiles([]);
+      return undefined;
+    }
+    let cancelled = false;
+    void Promise.all(incomingIds.map(async (uid) => {
+      const snap = await getDoc(doc(firestore, 'users', uid)).catch(() => null);
+      if (!snap?.exists()) return null;
+      const data = snap.data() || {};
+      return {
+        uid,
+        displayName: data.displayName || '',
+        email: data.email || '',
+        photoURL: data.photoURL || '',
+      };
+    })).then((rows) => {
+      if (cancelled) return;
+      setIncomingFriendRequestProfiles(
+        rows
+          .filter(Boolean)
+          .filter((entry) => entry?.uid && entry.uid !== user?.uid)
+          .sort((a, b) => String(a.displayName || a.email || '').localeCompare(String(b.displayName || b.email || ''))),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [firestore, profile?.incomingFriendRequestIds, user?.uid]);
+
+  useEffect(() => {
+    if (!firestore) return undefined;
+    const outgoingIds = Array.isArray(profile?.outgoingFriendRequestIds) ? profile.outgoingFriendRequestIds.filter(Boolean) : [];
+    if (!outgoingIds.length) {
+      setOutgoingFriendRequestProfiles([]);
+      return undefined;
+    }
+    let cancelled = false;
+    void Promise.all(outgoingIds.map(async (uid) => {
+      const snap = await getDoc(doc(firestore, 'users', uid)).catch(() => null);
+      if (!snap?.exists()) return null;
+      const data = snap.data() || {};
+      return {
+        uid,
+        displayName: data.displayName || '',
+        email: data.email || '',
+        photoURL: data.photoURL || '',
+      };
+    })).then((rows) => {
+      if (cancelled) return;
+      setOutgoingFriendRequestProfiles(
+        rows
+          .filter(Boolean)
+          .filter((entry) => entry?.uid && entry.uid !== user?.uid)
+          .sort((a, b) => String(a.displayName || a.email || '').localeCompare(String(b.displayName || b.email || ''))),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [firestore, profile?.outgoingFriendRequestIds, user?.uid]);
 
   useEffect(() => {
     gameLibrarySnapshotRequestRef.current += 1;
@@ -27777,6 +27900,8 @@ function ProductionApp() {
         throw new Error('You cannot add yourself as a friend.');
       }
       const existingFriendIds = new Set(Array.isArray(profile?.friendIds) ? profile.friendIds : []);
+      const incomingRequestIds = new Set(Array.isArray(profile?.incomingFriendRequestIds) ? profile.incomingFriendRequestIds : []);
+      const outgoingRequestIds = new Set(Array.isArray(profile?.outgoingFriendRequestIds) ? profile.outgoingFriendRequestIds : []);
       let friendSnap = null;
       const emailMatch = await getDocs(query(collection(firestore, 'users'), where('emailLower', '==', normalizedLookup), limit(1))).catch(() => null);
       if (emailMatch && !emailMatch.empty) {
@@ -27797,16 +27922,18 @@ function ProductionApp() {
       if (!friendSnap?.exists()) throw new Error('No user matched that username or email.');
       if (friendSnap.id === user.uid) throw new Error('You cannot add yourself as a friend.');
       if (existingFriendIds.has(friendSnap.id)) throw new Error('That friend is already in your list.');
+      if (incomingRequestIds.has(friendSnap.id)) throw new Error('This user already sent you a request. Accept it from Incoming Requests.');
+      if (outgoingRequestIds.has(friendSnap.id)) throw new Error('Friend request already sent.');
       const friendData = friendSnap.data() || {};
       await Promise.all([
         setDoc(doc(firestore, 'users', user.uid), {
           uid: user.uid,
-          friendIds: arrayUnion(friendSnap.id),
+          outgoingFriendRequestIds: arrayUnion(friendSnap.id),
           updatedAt: serverTimestamp(),
         }, { merge: true }),
         setDoc(doc(firestore, 'users', friendSnap.id), {
           uid: friendSnap.id,
-          friendIds: arrayUnion(user.uid),
+          incomingFriendRequestIds: arrayUnion(user.uid),
           updatedAt: serverTimestamp(),
         }, { merge: true }),
       ]);
@@ -27814,11 +27941,11 @@ function ProductionApp() {
         current
           ? {
               ...current,
-              friendIds: mergeUniqueIds(Array.isArray(current.friendIds) ? current.friendIds : [], [friendSnap.id]),
+              outgoingFriendRequestIds: mergeUniqueIds(Array.isArray(current.outgoingFriendRequestIds) ? current.outgoingFriendRequestIds : [], [friendSnap.id]),
             }
           : current
       ));
-      setFriendProfiles((current) => {
+      setOutgoingFriendRequestProfiles((current) => {
         const nextFriend = {
           uid: friendSnap.id,
           displayName: friendData.displayName || '',
@@ -27829,9 +27956,117 @@ function ProductionApp() {
           .filter((entry, index, array) => entry?.uid && entry.uid !== user.uid && array.findIndex((candidate) => candidate?.uid === entry.uid) === index)
           .sort((a, b) => String(a.displayName || a.email || '').localeCompare(String(b.displayName || b.email || '')));
       });
-      setNotice(`Added ${friendData.displayName || friendData.email || 'friend'} to your friends list.`);
+      setNotice(`Friend request sent to ${friendData.displayName || friendData.email || 'friend'}.`);
       return true;
-    }, 'Could not add friend.');
+    }, 'Could not send friend request.');
+
+  const acceptFriendRequest = async (friendUid = '') =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid) throw new Error('You must be signed in.');
+      const cleanFriendUid = normalizeText(friendUid);
+      if (!cleanFriendUid) throw new Error('Missing friend request.');
+      const incomingRequestIds = new Set(Array.isArray(profile?.incomingFriendRequestIds) ? profile.incomingFriendRequestIds : []);
+      if (!incomingRequestIds.has(cleanFriendUid)) throw new Error('That friend request is no longer pending.');
+      const friendSnap = await getDoc(doc(firestore, 'users', cleanFriendUid)).catch(() => null);
+      const friendData = friendSnap?.data?.() || {};
+      await Promise.all([
+        setDoc(doc(firestore, 'users', user.uid), {
+          uid: user.uid,
+          incomingFriendRequestIds: arrayRemove(cleanFriendUid),
+          friendIds: arrayUnion(cleanFriendUid),
+          updatedAt: serverTimestamp(),
+        }, { merge: true }),
+        setDoc(doc(firestore, 'users', cleanFriendUid), {
+          uid: cleanFriendUid,
+          outgoingFriendRequestIds: arrayRemove(user.uid),
+          friendIds: arrayUnion(user.uid),
+          updatedAt: serverTimestamp(),
+        }, { merge: true }),
+      ]);
+      setProfile((current) => (
+        current
+          ? {
+              ...current,
+              incomingFriendRequestIds: (Array.isArray(current.incomingFriendRequestIds) ? current.incomingFriendRequestIds : []).filter((uid) => uid !== cleanFriendUid),
+              friendIds: mergeUniqueIds(Array.isArray(current.friendIds) ? current.friendIds : [], [cleanFriendUid]),
+            }
+          : current
+      ));
+      setIncomingFriendRequestProfiles((current) => current.filter((entry) => entry?.uid !== cleanFriendUid));
+      setFriendProfiles((current) => {
+        const nextFriend = {
+          uid: cleanFriendUid,
+          displayName: friendData.displayName || '',
+          email: friendData.email || '',
+          photoURL: friendData.photoURL || '',
+        };
+        return [nextFriend, ...current]
+          .filter((entry, index, array) => entry?.uid && entry.uid !== user.uid && array.findIndex((candidate) => candidate?.uid === entry.uid) === index)
+          .sort((a, b) => String(a.displayName || a.email || '').localeCompare(String(b.displayName || b.email || '')));
+      });
+      setNotice(`Accepted ${friendData.displayName || friendData.email || 'friend'}'s friend request.`);
+      return true;
+    }, 'Could not accept friend request.');
+
+  const declineFriendRequest = async (friendUid = '') =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid) throw new Error('You must be signed in.');
+      const cleanFriendUid = normalizeText(friendUid);
+      if (!cleanFriendUid) throw new Error('Missing friend request.');
+      await Promise.all([
+        setDoc(doc(firestore, 'users', user.uid), {
+          uid: user.uid,
+          incomingFriendRequestIds: arrayRemove(cleanFriendUid),
+          updatedAt: serverTimestamp(),
+        }, { merge: true }),
+        setDoc(doc(firestore, 'users', cleanFriendUid), {
+          uid: cleanFriendUid,
+          outgoingFriendRequestIds: arrayRemove(user.uid),
+          updatedAt: serverTimestamp(),
+        }, { merge: true }),
+      ]);
+      setProfile((current) => (
+        current
+          ? {
+              ...current,
+              incomingFriendRequestIds: (Array.isArray(current.incomingFriendRequestIds) ? current.incomingFriendRequestIds : []).filter((uid) => uid !== cleanFriendUid),
+            }
+          : current
+      ));
+      setIncomingFriendRequestProfiles((current) => current.filter((entry) => entry?.uid !== cleanFriendUid));
+      setNotice('Friend request declined.');
+      return true;
+    }, 'Could not decline friend request.');
+
+  const cancelFriendRequest = async (friendUid = '') =>
+    withBusy(async () => {
+      if (!firestore || !user?.uid) throw new Error('You must be signed in.');
+      const cleanFriendUid = normalizeText(friendUid);
+      if (!cleanFriendUid) throw new Error('Missing friend request.');
+      await Promise.all([
+        setDoc(doc(firestore, 'users', user.uid), {
+          uid: user.uid,
+          outgoingFriendRequestIds: arrayRemove(cleanFriendUid),
+          updatedAt: serverTimestamp(),
+        }, { merge: true }),
+        setDoc(doc(firestore, 'users', cleanFriendUid), {
+          uid: cleanFriendUid,
+          incomingFriendRequestIds: arrayRemove(user.uid),
+          updatedAt: serverTimestamp(),
+        }, { merge: true }),
+      ]);
+      setProfile((current) => (
+        current
+          ? {
+              ...current,
+              outgoingFriendRequestIds: (Array.isArray(current.outgoingFriendRequestIds) ? current.outgoingFriendRequestIds : []).filter((uid) => uid !== cleanFriendUid),
+            }
+          : current
+      ));
+      setOutgoingFriendRequestProfiles((current) => current.filter((entry) => entry?.uid !== cleanFriendUid));
+      setNotice('Friend request cancelled.');
+      return true;
+    }, 'Could not cancel friend request.');
 
   const savePrivateQuestionNote = async ({ round = null, noteText = '' } = {}) =>
     withBusy(async () => {
@@ -33499,6 +33734,8 @@ function ProductionApp() {
 	        profile={profile}
         isAdmin={isAdminUser}
         friendProfiles={friendProfiles}
+        incomingFriendRequestProfiles={incomingFriendRequestProfiles}
+        outgoingFriendRequestProfiles={outgoingFriendRequestProfiles}
 	        connectionState={connectionState}
 	        questionNotes={questionNotes}
 	        questionFeedback={questionFeedback}
@@ -33537,6 +33774,9 @@ function ProductionApp() {
         onGameQuestionCountChange={setLobbyQuestionCount}
         onCreateGame={createGame}
         onAddFriend={addFriendByLookup}
+        onAcceptFriendRequest={acceptFriendRequest}
+        onDeclineFriendRequest={declineFriendRequest}
+        onCancelFriendRequest={cancelFriendRequest}
         onJoinGame={joinGame}
         onJoinGameInvite={acceptGameInviteAction}
         onDismissGameInvite={dismissGameInviteAction}
