@@ -8115,6 +8115,18 @@ function LobbyScreen({
   const redFlagGreenFlagReadyCount = Number(redFlagGreenFlagQuestionCount || 0);
   const compatibilityMeterReadyCount = Number(compatibilityMeterQuestionCount || 0);
   const memoryLaneReadyCount = Number(memoryLaneQuestionCount || 0);
+  const randomAvailableCount = (
+    Number(remainingQuestionCount || 0) +
+    Number(remainingQuizQuestionCount || 0) +
+    Number(remainingTrueFalseQuestionCount || 0) +
+    Number(remainingThisOrThatQuestionCount || 0) +
+    Number(remainingMostLikelyQuestionCount || 0) +
+    Number(remainingPutYourPointsQuestionCount || 0) +
+    Number(remainingSecretAuctionQuestionCount || 0) +
+    Number(remainingRedFlagGreenFlagQuestionCount || 0) +
+    Number(remainingCompatibilityMeterQuestionCount || 0) +
+    Number(remainingMemoryLaneQuestionCount || 0)
+  );
   const randomReadyCount = Math.max(
     Number(questionCount || 0),
     Number(quizQuestionCount || 0),
@@ -8127,19 +8139,83 @@ function LobbyScreen({
     Number(compatibilityMeterQuestionCount || 0),
     Number(memoryLaneQuestionCount || 0),
   );
+  const lobbyCardAvailableCounts = {
+    random: randomAvailableCount,
+    putYourPoints: Number(remainingPutYourPointsQuestionCount || 0),
+    secretAuction: Number(remainingSecretAuctionQuestionCount || 0),
+    standard: Number(remainingQuestionCount || 0),
+    quiz: Number(remainingQuizQuestionCount || 0),
+    thisOrThat: Number(remainingThisOrThatQuestionCount || 0),
+    memoryLane: Number(remainingMemoryLaneQuestionCount || 0),
+    trueFalse: Number(remainingTrueFalseQuestionCount || 0),
+    mostLikely: Number(remainingMostLikelyQuestionCount || 0),
+    redFlagGreenFlag: Number(remainingRedFlagGreenFlagQuestionCount || 0),
+    compatibilityMeter: Number(remainingCompatibilityMeterQuestionCount || 0),
+    holdem: 2,
+  };
   const lobbyCardReadyMeta = {
-    random: `${randomReadyCount} ready`,
-    putYourPoints: `${putYourPointsReadyCount} ready`,
-    secretAuction: `${secretAuctionReadyCount} ready`,
-    standard: `${questionCount} ready`,
-    quiz: `${quizQuestionCount} ready`,
-    thisOrThat: `${thisOrThatReadyCount} ready`,
-    memoryLane: `${memoryLaneReadyCount} ready`,
-    trueFalse: `${trueFalseQuestionCount} ready`,
-    mostLikely: `${mostLikelyReadyCount} ready`,
-    redFlagGreenFlag: `${redFlagGreenFlagReadyCount} ready`,
-    compatibilityMeter: `${compatibilityMeterReadyCount} ready`,
+    random: `${randomAvailableCount} available`,
+    putYourPoints: `${remainingPutYourPointsQuestionCount} available`,
+    secretAuction: `${remainingSecretAuctionQuestionCount} available`,
+    standard: `${remainingQuestionCount} available`,
+    quiz: `${remainingQuizQuestionCount} available`,
+    thisOrThat: `${remainingThisOrThatQuestionCount} available`,
+    memoryLane: `${remainingMemoryLaneQuestionCount} available`,
+    trueFalse: `${remainingTrueFalseQuestionCount} available`,
+    mostLikely: `${remainingMostLikelyQuestionCount} available`,
+    redFlagGreenFlag: `${remainingRedFlagGreenFlagQuestionCount} available`,
+    compatibilityMeter: `${remainingCompatibilityMeterQuestionCount} available`,
     holdem: `${formatScore(HOLDEM_SMALL_BLIND)} / ${formatScore(HOLDEM_BIG_BLIND)}`,
+  };
+  const lobbyArcadeCardThemes = {
+    memoryLane: { title: 'MEMORY LANE', description: 'Relive shared moments and answer personal questions together.', primary: '#1DA1FF', secondary: '#6BE3FF' },
+    random: { title: 'RANDOM GAME', description: 'Let the computer choose a random game mode.', primary: '#A855F7', secondary: '#EC4899' },
+    trueFalse: { title: 'TRUE OR FALSE', description: 'Guess whether shocking statements are true or false.', primary: '#22C55E', secondary: '#EF4444' },
+    putYourPoints: { title: 'PUT YOUR POINTS WHERE YOUR MOUTH IS', description: 'Answer with confidence and put your points on the line.', primary: '#F97316', secondary: '#2563EB' },
+    standard: { title: 'NORMAL GAME', description: 'Classic straightforward questions for everyone.', primary: '#FACC15', secondary: '#3B82F6' },
+    mostLikely: { title: "WHO'S MORE LIKELY TO", description: 'Find out who in your group is most likely to do the wildest things.', primary: '#FB7185', secondary: '#60A5FA' },
+    compatibilityMeter: { title: 'COMPATIBILITY METER', description: 'Test how well you match with your partner or friends.', primary: '#EC4899', secondary: '#38BDF8' },
+    redFlagGreenFlag: { title: 'RED FLAG / GREEN FLAG', description: 'Spot the red flags and celebrate the green flags.', primary: '#EF4444', secondary: '#22C55E' },
+    quiz: { title: 'QUICK FIRE QUIZ', description: 'Fast-paced questions with instant answers.', primary: '#F97316', secondary: '#EF4444' },
+    secretAuction: { title: 'HOW SURE ARE YOU', description: 'Rate how confident you really are in your answers.', primary: '#F59E0B', secondary: '#2563EB' },
+    thisOrThat: { title: 'THIS OR THAT', description: 'Choose between two difficult options.', primary: '#3B82F6', secondary: '#EC4899' },
+  };
+  const getLobbyTileCardStyle = (cardId, imageUrl) => {
+    const theme = lobbyArcadeCardThemes[cardId];
+    if (!theme) return getLobbyTileImageStyle(imageUrl);
+    return {
+      '--lobby-tile-image': 'none',
+      '--arcade-primary': theme.primary,
+      '--arcade-secondary': theme.secondary,
+    };
+  };
+  const renderLobbyArcadeIcon = (cardId) => {
+    switch (cardId) {
+      case 'memoryLane':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><rect className="arcade-icon-secondary" x="20" y="28" width="46" height="56" rx="10" /><rect className="arcade-icon-primary" x="44" y="38" width="52" height="62" rx="12" /><path className="arcade-icon-glow" d="M60 78c-8-7-14-11-14-18a9 9 0 0 1 16-5 9 9 0 0 1 16 5c0 7-6 11-18 18Z" /></svg>;
+      case 'random':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><path className="arcade-icon-primary" d="M33 42 60 28l27 14v30L60 88 33 72Z" /><path className="arcade-icon-secondary" d="M60 28v30m-27-16h54" /><path className="arcade-icon-glow" d="M60 44c-7 0-12 4-12 10m12-10c6 0 11 4 11 10 0 9-11 9-11 18m0 10h.2" /></svg>;
+      case 'trueFalse':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><path className="arcade-icon-primary" d="m24 64 16 16 24-32" /><path className="arcade-icon-secondary" d="m74 44 22 22m0-22L74 66" /></svg>;
+      case 'putYourPoints':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><circle className="arcade-icon-secondary" cx="42" cy="72" r="16" /><circle className="arcade-icon-primary" cx="62" cy="60" r="18" /><circle className="arcade-icon-secondary" cx="82" cy="72" r="16" /><rect className="arcade-icon-glow arcade-icon-fill-none" x="42" y="22" width="36" height="16" rx="6" /></svg>;
+      case 'standard':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><circle className="arcade-icon-primary arcade-icon-fill" cx="60" cy="44" r="14" /><path className="arcade-icon-secondary" d="M34 86c4-18 18-28 26-28s22 10 26 28" /></svg>;
+      case 'mostLikely':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><circle className="arcade-icon-primary arcade-icon-fill" cx="42" cy="42" r="12" /><circle className="arcade-icon-secondary arcade-icon-fill" cx="78" cy="42" r="12" /><path className="arcade-icon-primary" d="M24 84c4-16 14-24 18-24s14 8 18 24" /><path className="arcade-icon-secondary" d="M60 84c4-16 14-24 18-24s14 8 18 24" /></svg>;
+      case 'compatibilityMeter':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><path className="arcade-icon-primary" d="M28 76a32 32 0 0 1 64 0" /><path className="arcade-icon-secondary" d="M60 76 82 54" /><path className="arcade-icon-glow" d="M60 88c-8-7-14-11-14-18a9 9 0 0 1 16-5 9 9 0 0 1 16 5c0 7-6 11-18 18Z" /></svg>;
+      case 'redFlagGreenFlag':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><path className="arcade-icon-primary" d="M40 28v58m0-48h26l-8 12 8 12H40" /><path className="arcade-icon-secondary" d="M80 28v58m0-48H54l8 12-8 12h26" /></svg>;
+      case 'quiz':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><path className="arcade-icon-primary" d="M60 26c-8 10-14 21-14 30 0 10 7 18 14 26 7-8 14-16 14-26 0-9-6-20-14-30Z" /><path className="arcade-icon-secondary" d="M68 26 52 58h14l-10 36 24-34H66Z" /></svg>;
+      case 'secretAuction':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><path className="arcade-icon-primary" d="M28 74a32 32 0 1 1 64 0" /><path className="arcade-icon-secondary" d="M60 74 82 56" /><path className="arcade-icon-glow" d="M60 42c-6 0-10 4-10 9m10-9c5 0 9 4 9 9 0 7-9 7-9 14m0 9h.2" /></svg>;
+      case 'thisOrThat':
+        return <svg viewBox="0 0 120 120" aria-hidden="true"><path className="arcade-icon-primary" d="M18 60h36m-20-16-16 16 16 16" /><path className="arcade-icon-secondary" d="M102 60H66m20-16 16 16-16 16" /></svg>;
+      default:
+        return null;
+    }
   };
   const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
   const lobbyChatUnreadCount = useChatUnreadCount(
@@ -10280,9 +10356,11 @@ function LobbyScreen({
     );
   };
 
-  const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, description, footerMeta, onCreateAndInvite }) => {
+  const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, description, footerMeta, onCreateAndInvite, onPlayNow, availableCount = 0 }) => {
     const isFlipped = Boolean(flippedLobbyTiles?.[cardId]);
-    const isInfoOpen = openLobbyTileInfoId === cardId;
+    const theme = lobbyArcadeCardThemes[cardId] || null;
+    const displayTitle = theme?.title || title;
+    const displayDescription = theme?.description || description;
     const handleFrontClick = (event) => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('input, textarea, select, button, label, a')) return;
@@ -10290,7 +10368,7 @@ function LobbyScreen({
     };
     return (
       <div
-        className="lobby-image-tile-face lobby-image-tile-face--front"
+        className={`lobby-image-tile-face lobby-image-tile-face--front ${theme ? 'lobby-image-tile-face--arcade' : ''}`}
         inert={isFlipped}
         aria-hidden={isFlipped}
         onClick={handleFrontClick}
@@ -10303,50 +10381,69 @@ function LobbyScreen({
           }
         }}
       >
-        <div className="lobby-image-tile-front-copy">
-          <div className="panel-heading lobby-image-tile-front-heading">
-            <div>
-              <p className="eyebrow">{eyebrow}</p>
-              <h2>{title}</h2>
+        {theme ? (
+          <>
+            <div className="lobby-arcade-card-topline">
+              <span className="lobby-arcade-card-kicker">{eyebrow}</span>
+              <span className="lobby-arcade-card-badge">READY</span>
             </div>
-            <div className="lobby-image-tile-front-heading-side">
-              <Button
-                type="button"
-                className={`ghost-button compact lobby-image-tile-info-button ${isInfoOpen ? 'is-active' : ''}`}
-                onClick={() => setOpenLobbyTileInfoId((current) => (current === cardId ? '' : cardId))}
-                aria-label={`Show more info about ${title}`}
-                aria-expanded={isInfoOpen}
-              >
-                i
-              </Button>
-              {statusText ? <span className="status-pill">{statusText}</span> : null}
+            <div className="lobby-arcade-card-hero" aria-hidden="true">
+              <div className={`lobby-arcade-card-icon lobby-arcade-card-icon--${cardId}`}>
+                {renderLobbyArcadeIcon(cardId)}
+              </div>
             </div>
-          </div>
-          {isInfoOpen ? <p className="panel-copy lobby-image-tile-info-copy">{description}</p> : null}
-        </div>
-        <div className="lobby-image-tile-front-spacer" aria-hidden="true" />
-        <div className="lobby-image-tile-front-footer">
-          <div className="lobby-image-tile-front-meta" aria-live="polite">
-            {footerMeta}
-          </div>
-          <div className="button-row lobby-image-tile-front-actions">
-            <Button
-              type="button"
-              className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
-              onClick={() => setLobbyTileFlipped(cardId, true)}
-              disabled={isBusy}
-            >
-              Details
-            </Button>
-            <Button
-              type="button"
-              className="primary-button compact lobby-primary-button lobby-image-tile-action"
-              onClick={onCreateAndInvite}
-              disabled={isBusy}
-            >
-              Invite Friend
-            </Button>
-          </div>
+            <div className="lobby-arcade-card-copy">
+              <h2>{displayTitle}</h2>
+              <p>{displayDescription}</p>
+            </div>
+            <div className="lobby-arcade-card-stats">
+              <article className="lobby-arcade-card-stat" aria-live="polite">
+                <span>Questions Available</span>
+                <strong>{availableCount}</strong>
+              </article>
+              <div className="lobby-arcade-card-stat lobby-arcade-card-stat--editable">
+                {footerMeta}
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="lobby-image-tile-front-copy">
+              <div className="panel-heading lobby-image-tile-front-heading">
+                <div>
+                  <p className="eyebrow">{eyebrow}</p>
+                  <h2>{title}</h2>
+                </div>
+                <div className="lobby-image-tile-front-heading-side">
+                  {statusText ? <span className="status-pill">{statusText}</span> : null}
+                </div>
+              </div>
+            </div>
+            <div className="lobby-image-tile-front-spacer" aria-hidden="true" />
+            <div className="lobby-image-tile-front-footer">
+              <div className="lobby-image-tile-front-meta" aria-live="polite">
+                {footerMeta}
+              </div>
+            </div>
+          </>
+        )}
+        <div className="button-row lobby-image-tile-front-actions">
+          <Button
+            type="button"
+            className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
+            onClick={() => setLobbyTileFlipped(cardId, true)}
+            disabled={isBusy}
+          >
+            Details
+          </Button>
+          <Button
+            type="button"
+            className="primary-button compact lobby-primary-button lobby-image-tile-action"
+            onClick={onPlayNow || onCreateAndInvite}
+            disabled={isBusy}
+          >
+            Play Now
+          </Button>
         </div>
       </div>
     );
@@ -10378,8 +10475,8 @@ function LobbyScreen({
       aria-hidden={getLobbyCarouselPosition(index) !== 'center'}
     >
       <section
-        className={`panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile ${className}`}
-        style={getLobbyTileImageStyle(image)}
+        className={`panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile ${className} ${lobbyArcadeCardThemes[cardId] ? 'lobby-image-tile--arcade' : ''}`}
+        style={getLobbyTileCardStyle(cardId, image)}
       >
         <div className={`lobby-image-tile-flip ${isFlipped ? 'is-flipped' : ''}`}>
           {renderLobbyTileFront({
@@ -10388,9 +10485,10 @@ function LobbyScreen({
             title,
             statusText: `${readyCount} ready`,
             description,
+            availableCount: lobbyCardAvailableCounts[cardId] || 0,
             footerMeta: (
               <label className="lobby-image-tile-front-control">
-                <span>Questions</span>
+                <span>Questions Per Round</span>
                 <input
                   type="number"
                   inputMode="numeric"
@@ -10402,6 +10500,7 @@ function LobbyScreen({
               </label>
             ),
             onCreateAndInvite: () => onCreate(true),
+            onPlayNow: () => onCreate(false),
           })}
           <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isFlipped} aria-hidden={!isFlipped}>
             <div className="lobby-image-tile-back-toolbar">
@@ -10415,7 +10514,7 @@ function LobbyScreen({
                 <p className="eyebrow">{eyebrow}</p>
                 <h2>{title}</h2>
               </div>
-              <span className="status-pill">{readyCount} ready</span>
+              <span className="status-pill">{lobbyCardAvailableCounts[cardId] || 0} available</span>
             </div>
             {renderLobbyTileDetails(cardId)}
             <p className="panel-copy">{description}</p>
@@ -11009,8 +11108,8 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('standard')) !== 'center'}
                   >
                     <section
-                      className="panel lobby-panel lobby-panel--lobby create-game-card lobby-image-tile lobby-image-tile--normal"
-                      style={getLobbyTileImageStyle(normalGameTileImage)}
+                      className="panel lobby-panel lobby-panel--lobby create-game-card lobby-image-tile lobby-image-tile--normal lobby-image-tile--arcade"
+                      style={getLobbyTileCardStyle('standard', normalGameTileImage)}
                     >
                       <div className={`lobby-image-tile-flip ${isStandardTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
@@ -11019,9 +11118,10 @@ function LobbyScreen({
                           title: 'Normal Game',
                           statusText: `${questionCount} ready`,
                           description: 'Penalty-point rounds, question reveals, and all the usual Jay vs Kim game flow.',
+                          availableCount: lobbyCardAvailableCounts.standard,
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
-                              <span>Questions</span>
+                              <span>Questions Per Round</span>
                               <input
                                 type="number"
                                 inputMode="numeric"
@@ -11033,6 +11133,7 @@ function LobbyScreen({
                             </label>
                           ),
                           onCreateAndInvite: handleCreateAndInviteGame,
+                          onPlayNow: handleCreateGame,
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isStandardTileFlipped} aria-hidden={!isStandardTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11050,7 +11151,7 @@ function LobbyScreen({
                               <p className="eyebrow">Game Lobby</p>
                               <h2>Create New Game</h2>
                             </div>
-                            <span className="status-pill">{questionCount} ready</span>
+                            <span className="status-pill">{remainingQuestionCount} available</span>
                           </div>
                           {renderLobbyTileDetails('standard')}
 
@@ -11158,8 +11259,8 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('putYourPoints')) !== 'center'}
                   >
                     <section
-                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--put-points"
-                      style={getLobbyTileImageStyle(putYourPointsTileImage)}
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--put-points lobby-image-tile--arcade"
+                      style={getLobbyTileCardStyle('putYourPoints', putYourPointsTileImage)}
                     >
                       <div className={`lobby-image-tile-flip ${isPutYourPointsTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
@@ -11168,9 +11269,10 @@ function LobbyScreen({
                           title: 'Put Your Points',
                           statusText: `${putYourPointsReadyCount} ready`,
                           description: 'A normal answer-and-guess round with a random 1-200 point stake. The host marks each player as matched or missed after the reveal.',
+                          availableCount: lobbyCardAvailableCounts.putYourPoints,
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
-                              <span>Questions</span>
+                              <span>Questions Per Round</span>
                               <input
                                 type="number"
                                 inputMode="numeric"
@@ -11182,6 +11284,7 @@ function LobbyScreen({
                             </label>
                           ),
                           onCreateAndInvite: () => handleCreatePutYourPointsGame(true),
+                          onPlayNow: () => handleCreatePutYourPointsGame(false),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isPutYourPointsTileFlipped} aria-hidden={!isPutYourPointsTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11199,7 +11302,7 @@ function LobbyScreen({
                               <p className="eyebrow">Stake Match</p>
                               <h2>Put Your Points</h2>
                             </div>
-                            <span className="status-pill">{putYourPointsReadyCount} ready</span>
+                            <span className="status-pill">{remainingPutYourPointsQuestionCount} available</span>
                           </div>
                           {renderLobbyTileDetails('putYourPoints')}
                           <p className="panel-copy">Each round flicks through a few stake numbers, then lands on the final amount. Players submit their own answer and their guess. The host marks Match or Miss for Jay and Kim separately.</p>
@@ -11270,8 +11373,8 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('quiz')) !== 'center'}
                   >
 	                <section
-                    className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--quiz"
-                    style={getLobbyTileImageStyle(quickFireQuizTileImage)}
+                    className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--quiz lobby-image-tile--arcade"
+                    style={getLobbyTileCardStyle('quiz', quickFireQuizTileImage)}
                   >
                       <div className={`lobby-image-tile-flip ${isQuizTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
@@ -11280,9 +11383,10 @@ function LobbyScreen({
                           title: 'Quick Fire Quiz',
                           statusText: `${quizQuestionCount} ready`,
                           description: 'Fast-answer quiz mode with its own scoring, timer pressure, and separate quiz points.',
+                          availableCount: lobbyCardAvailableCounts.quiz,
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
-                              <span>Questions</span>
+                              <span>Questions Per Round</span>
                               <input
                                 type="number"
                                 inputMode="numeric"
@@ -11294,6 +11398,7 @@ function LobbyScreen({
                             </label>
                           ),
                           onCreateAndInvite: () => handleCreateQuizGame(true),
+                          onPlayNow: () => handleCreateQuizGame(false),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isQuizTileFlipped} aria-hidden={!isQuizTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11311,6 +11416,7 @@ function LobbyScreen({
 	                            <p className="eyebrow">Quick Fire</p>
 	                            <h2>Quiz Mode</h2>
 	                          </div>
+                            <span className="status-pill">{remainingQuizQuestionCount} available</span>
 	                        </div>
                           {renderLobbyTileDetails('quiz')}
 	                        <p className="panel-copy">Start a speed quiz game with timer-based scoring and host judgement.</p>
@@ -11384,8 +11490,8 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('trueFalse')) !== 'center'}
                   >
                     <section
-                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--true-false"
-                      style={getLobbyTileImageStyle(trueOrFalseTileImage)}
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--true-false lobby-image-tile--arcade"
+                      style={getLobbyTileCardStyle('trueFalse', trueOrFalseTileImage)}
                     >
                       <div className={`lobby-image-tile-flip ${isTrueFalseTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
@@ -11394,9 +11500,10 @@ function LobbyScreen({
                           title: 'True or False',
                           statusText: `${trueFalseQuestionCount} ready`,
                           description: 'True or False rounds where you guess the other person, then lock your own answer too. Your first choice for each side is final.',
+                          availableCount: lobbyCardAvailableCounts.trueFalse,
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
-                              <span>Questions</span>
+                              <span>Questions Per Round</span>
                               <input
                                 type="number"
                                 inputMode="numeric"
@@ -11408,6 +11515,7 @@ function LobbyScreen({
                             </label>
                           ),
                           onCreateAndInvite: () => handleCreateTrueFalseGame(true),
+                          onPlayNow: () => handleCreateTrueFalseGame(false),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isTrueFalseTileFlipped} aria-hidden={!isTrueFalseTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11425,7 +11533,7 @@ function LobbyScreen({
                               <p className="eyebrow">Mirror Match</p>
                               <h2>True or False</h2>
                             </div>
-                            <span className="status-pill">{trueFalseQuestionCount} ready</span>
+                            <span className="status-pill">{remainingTrueFalseQuestionCount} available</span>
                           </div>
                           {renderLobbyTileDetails('trueFalse')}
                           <p className="panel-copy">Pick what you think the other person will answer, then lock your own answer. The first tap for each answer sticks.</p>
@@ -11476,8 +11584,8 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('thisOrThat')) !== 'center'}
                   >
                     <section
-                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--this-or-that"
-                      style={getLobbyTileImageStyle(thisOrThatTileImage)}
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--this-or-that lobby-image-tile--arcade"
+                      style={getLobbyTileCardStyle('thisOrThat', thisOrThatTileImage)}
                     >
                       <div className={`lobby-image-tile-flip ${isThisOrThatTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
@@ -11486,9 +11594,10 @@ function LobbyScreen({
                           title: 'This or That',
                           statusText: `${thisOrThatReadyCount} ready`,
                           description: 'A prediction-first mode where both players choose between two options, lock what they would pick, and also guess which option the other person will choose.',
+                          availableCount: lobbyCardAvailableCounts.thisOrThat,
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
-                              <span>Questions</span>
+                              <span>Questions Per Round</span>
                               <input
                                 type="number"
                                 inputMode="numeric"
@@ -11500,6 +11609,7 @@ function LobbyScreen({
                             </label>
                           ),
                           onCreateAndInvite: () => handleCreateThisOrThatGame(true),
+                          onPlayNow: () => handleCreateThisOrThatGame(false),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isThisOrThatTileFlipped} aria-hidden={!isThisOrThatTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11517,7 +11627,7 @@ function LobbyScreen({
                               <p className="eyebrow">Prediction Match</p>
                               <h2>This or That</h2>
                             </div>
-                            <span className="status-pill">{thisOrThatReadyCount} ready</span>
+                            <span className="status-pill">{remainingThisOrThatQuestionCount} available</span>
                           </div>
                           {renderLobbyTileDetails('thisOrThat')}
                           <p className="panel-copy">Each player locks what they think the other person will pick and what they would really choose. Wrong guesses add +10 penalty automatically.</p>
@@ -11568,8 +11678,8 @@ function LobbyScreen({
                     aria-hidden={getLobbyCarouselPosition(getLobbyCarouselCardIndex('mostLikely')) !== 'center'}
                   >
                     <section
-                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--most-likely"
-                      style={getLobbyTileImageStyle(mostLikelyTileImage)}
+                      className="panel lobby-panel lobby-panel--lobby join-game-card lobby-image-tile lobby-image-tile--most-likely lobby-image-tile--arcade"
+                      style={getLobbyTileCardStyle('mostLikely', mostLikelyTileImage)}
                     >
                       <div className={`lobby-image-tile-flip ${isMostLikelyTileFlipped ? 'is-flipped' : ''}`}>
                         {renderLobbyTileFront({
@@ -11578,9 +11688,10 @@ function LobbyScreen({
                           title: 'Most Likely To',
                           statusText: `${mostLikelyReadyCount} ready`,
                           description: 'Both players vote Jay, Kim, Both, or Neither for each prompt. Matching votes stay clear; split votes add a small automatic penalty.',
+                          availableCount: lobbyCardAvailableCounts.mostLikely,
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
-                              <span>Questions</span>
+                              <span>Questions Per Round</span>
                               <input
                                 type="number"
                                 inputMode="numeric"
@@ -11592,6 +11703,7 @@ function LobbyScreen({
                             </label>
                           ),
                           onCreateAndInvite: () => handleCreateMostLikelyGame(true),
+                          onPlayNow: () => handleCreateMostLikelyGame(false),
                         })}
                         <div className="lobby-image-tile-face lobby-image-tile-face--back" inert={!isMostLikelyTileFlipped} aria-hidden={!isMostLikelyTileFlipped}>
                           <div className="lobby-image-tile-back-toolbar">
@@ -11609,7 +11721,7 @@ function LobbyScreen({
                               <p className="eyebrow">Vote Match</p>
                               <h2>Most Likely To</h2>
                             </div>
-                            <span className="status-pill">{mostLikelyReadyCount} ready</span>
+                            <span className="status-pill">{remainingMostLikelyQuestionCount} available</span>
                           </div>
                           {renderLobbyTileDetails('mostLikely')}
                           <p className="panel-copy">Each player locks one vote: Jay, Kim, Both, or Neither. Matching votes add 0. Split votes add +10 to both players automatically.</p>

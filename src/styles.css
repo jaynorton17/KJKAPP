@@ -516,6 +516,52 @@ button:disabled {
   pointer-events: none;
 }
 
+.lobby-image-tile--arcade {
+  --arcade-primary: #7ad8ff;
+  --arcade-secondary: #4f7bff;
+  background-image:
+    radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--arcade-primary) 30%, transparent), transparent 32%),
+    radial-gradient(circle at 84% 20%, color-mix(in srgb, var(--arcade-secondary) 24%, transparent), transparent 30%),
+    linear-gradient(160deg, rgba(4, 10, 20, 0.98), rgba(8, 16, 30, 0.96) 40%, rgba(4, 8, 18, 0.98));
+  border: 1px solid color-mix(in srgb, var(--arcade-primary) 24%, rgba(255, 255, 255, 0.12));
+  box-shadow:
+    0 26px 48px rgba(1, 4, 10, 0.52),
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+
+.lobby-image-tile--arcade::before {
+  background:
+    linear-gradient(180deg, rgba(4, 9, 17, 0.08), rgba(4, 9, 17, 0.38) 36%, rgba(4, 9, 17, 0.82) 100%),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--arcade-secondary) 18%, transparent), transparent 36%),
+    radial-gradient(circle at left center, color-mix(in srgb, var(--arcade-primary) 22%, transparent), transparent 42%);
+}
+
+.lobby-image-tile--arcade::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 26% 24%, rgba(255, 255, 255, 0.12) 0 2px, transparent 3px),
+    radial-gradient(circle at 70% 30%, rgba(255, 255, 255, 0.08) 0 1.5px, transparent 2.5px),
+    radial-gradient(circle at 78% 74%, rgba(255, 255, 255, 0.08) 0 2px, transparent 3px),
+    linear-gradient(120deg, transparent 8%, color-mix(in srgb, var(--arcade-primary) 12%, transparent) 38%, transparent 58%),
+    linear-gradient(300deg, transparent 18%, color-mix(in srgb, var(--arcade-secondary) 12%, transparent) 52%, transparent 72%);
+  opacity: 0.82;
+  pointer-events: none;
+}
+
+.lobby-image-tile--arcade:hover,
+.lobby-image-tile--arcade:focus-within {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--arcade-primary) 38%, rgba(255, 255, 255, 0.16));
+  box-shadow:
+    0 30px 60px rgba(1, 4, 10, 0.58),
+    0 0 28px color-mix(in srgb, var(--arcade-primary) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
 .lobby-image-tile > * {
   position: relative;
   z-index: 1;
@@ -548,6 +594,12 @@ button:disabled {
 .lobby-image-tile-face--front {
   justify-content: flex-start;
   cursor: pointer;
+}
+
+.lobby-image-tile-face--arcade {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
 }
 
 .lobby-image-tile-face--back {
@@ -668,6 +720,185 @@ button:disabled {
   font-size: 0.98rem;
   font-weight: 800;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.lobby-arcade-card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lobby-arcade-card-kicker {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(218, 229, 255, 0.74);
+}
+
+.lobby-arcade-card-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--arcade-primary) 58%, rgba(255, 255, 255, 0.16));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--arcade-primary) 24%, transparent), color-mix(in srgb, var(--arcade-secondary) 18%, transparent)),
+    rgba(7, 14, 26, 0.9);
+  color: #f8fbff;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  box-shadow:
+    0 0 20px color-mix(in srgb, var(--arcade-primary) 16%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.lobby-arcade-card-hero {
+  display: grid;
+  place-items: center;
+  min-height: 168px;
+}
+
+.lobby-arcade-card-icon {
+  width: min(48%, 180px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(14, 24, 42, 0.88), rgba(8, 14, 26, 0.94)),
+    rgba(6, 12, 22, 0.88);
+  box-shadow:
+    0 0 36px color-mix(in srgb, var(--arcade-primary) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.lobby-arcade-card-icon svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.lobby-arcade-card-icon .arcade-icon-primary,
+.lobby-arcade-card-icon .arcade-icon-secondary,
+.lobby-arcade-card-icon .arcade-icon-glow {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lobby-arcade-card-icon .arcade-icon-primary {
+  stroke: var(--arcade-primary);
+  stroke-width: 7;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--arcade-primary) 36%, transparent));
+}
+
+.lobby-arcade-card-icon .arcade-icon-secondary {
+  stroke: var(--arcade-secondary);
+  stroke-width: 7;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--arcade-secondary) 32%, transparent));
+}
+
+.lobby-arcade-card-icon .arcade-icon-glow {
+  stroke: #f7fbff;
+  stroke-width: 5;
+  filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.36));
+}
+
+.lobby-arcade-card-icon .arcade-icon-fill {
+  fill: color-mix(in srgb, var(--arcade-primary) 72%, white 8%);
+  stroke: none;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--arcade-primary) 36%, transparent));
+}
+
+.lobby-arcade-card-icon .arcade-icon-fill-none {
+  fill: none;
+}
+
+.lobby-arcade-card-copy {
+  display: grid;
+  gap: 10px;
+  text-align: center;
+}
+
+.lobby-arcade-card-copy h2 {
+  margin: 0;
+  font-size: clamp(1.5rem, 2vw, 2.2rem);
+  line-height: 0.96;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f9fbff;
+  text-shadow:
+    0 0 16px color-mix(in srgb, var(--arcade-primary) 30%, transparent),
+    0 0 24px rgba(255, 255, 255, 0.08);
+}
+
+.lobby-arcade-card-copy p {
+  margin: 0 auto;
+  max-width: 28ch;
+  color: rgba(221, 230, 247, 0.82);
+  font-size: 0.94rem;
+  line-height: 1.45;
+}
+
+.lobby-arcade-card-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.lobby-arcade-card-stat {
+  display: grid;
+  gap: 6px;
+  min-height: 86px;
+  padding: 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(15, 27, 46, 0.86), rgba(8, 15, 28, 0.94)),
+    rgba(8, 14, 26, 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 14px 26px rgba(0, 0, 0, 0.18);
+}
+
+.lobby-arcade-card-stat span,
+.lobby-arcade-card-stat--editable .lobby-image-tile-front-control span {
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(219, 230, 248, 0.7);
+}
+
+.lobby-arcade-card-stat strong {
+  color: #fff;
+  font-size: clamp(1.5rem, 2vw, 2rem);
+  line-height: 1;
+  text-shadow: 0 0 16px color-mix(in srgb, var(--arcade-primary) 28%, transparent);
+}
+
+.lobby-arcade-card-stat--editable .lobby-image-tile-front-control {
+  min-width: 0;
+}
+
+.lobby-arcade-card-stat--editable .lobby-image-tile-front-control input {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 14px;
+  border-color: color-mix(in srgb, var(--arcade-primary) 24%, rgba(255, 255, 255, 0.14));
+  background:
+    linear-gradient(180deg, rgba(8, 15, 28, 0.98), rgba(10, 20, 36, 0.92)),
+    rgba(8, 15, 28, 0.88);
+  box-shadow:
+    0 0 16px color-mix(in srgb, var(--arcade-primary) 12%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .lobby-image-tile-front-control input:focus-visible {
@@ -934,6 +1165,12 @@ button:disabled {
   .lobby-image-tile-front-actions {
     align-items: stretch;
   }
+  .lobby-arcade-card-stats {
+    grid-template-columns: 1fr;
+  }
+  .lobby-arcade-card-icon {
+    width: min(54%, 170px);
+  }
   .lobby-image-tile-front-footer {
     flex-direction: column;
     align-items: stretch;
@@ -1003,6 +1240,11 @@ button:disabled {
     gap: 8px;
   }
 
+  .lobby-image-tile-face--arcade {
+    padding: 14px;
+    gap: 12px;
+  }
+
   .lobby-image-tile-front-heading-side {
     gap: 6px;
   }
@@ -1018,6 +1260,51 @@ button:disabled {
   .lobby-image-tile-front-footer,
   .lobby-image-tile-front-actions {
     gap: 8px;
+  }
+
+  .lobby-arcade-card-topline {
+    gap: 8px;
+  }
+
+  .lobby-arcade-card-kicker,
+  .lobby-arcade-card-badge {
+    font-size: 0.62rem;
+  }
+
+  .lobby-arcade-card-hero {
+    min-height: 124px;
+  }
+
+  .lobby-arcade-card-icon {
+    width: min(58%, 132px);
+    padding: 14px;
+    border-radius: 22px;
+  }
+
+  .lobby-arcade-card-copy {
+    gap: 8px;
+  }
+
+  .lobby-arcade-card-copy h2 {
+    font-size: clamp(1.15rem, 4vw, 1.55rem);
+  }
+
+  .lobby-arcade-card-copy p {
+    font-size: 0.82rem;
+  }
+
+  .lobby-arcade-card-stats {
+    gap: 8px;
+  }
+
+  .lobby-arcade-card-stat {
+    min-height: 72px;
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  .lobby-arcade-card-stat strong {
+    font-size: 1.3rem;
   }
 
   .lobby-image-tile-front-meta {
