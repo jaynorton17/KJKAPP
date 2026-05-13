@@ -56,6 +56,7 @@ import pokerTileImage from './assets/lobby-poker.webp';
 import putYourPointsTileImage from './assets/lobby-put-your-points.png';
 import quickFireQuizTileImage from './assets/lobby-quick-fire-quiz.webp';
 import randomTileImage from './assets/lobby-random.png';
+import randomGameLatestImage from './assets/random-game-latest.png';
 import redGreenFlagTileImage from './assets/lobby-red-green-flag.png';
 import thisOrThatTileImage from './assets/lobby-this-or-that.webp';
 import trueOrFalseTileImage from './assets/lobby-true-or-false.webp';
@@ -8217,6 +8218,20 @@ function LobbyScreen({
         return null;
     }
   };
+  const renderLobbyArcadeHero = (cardId) => {
+    if (cardId === 'random') {
+      return (
+        <div className="lobby-arcade-card-artframe lobby-arcade-card-artframe--random">
+          <img src={randomGameLatestImage} alt="" />
+        </div>
+      );
+    }
+    return (
+      <div className={`lobby-arcade-card-icon lobby-arcade-card-icon--${cardId}`}>
+        {renderLobbyArcadeIcon(cardId)}
+      </div>
+    );
+  };
   const lobbyChatDisplayName = profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Player';
   const lobbyChatUnreadCount = useChatUnreadCount(
     lobbyChatMessages,
@@ -10395,9 +10410,7 @@ function LobbyScreen({
               <span className="lobby-arcade-card-badge">READY</span>
             </div>
             <div className="lobby-arcade-card-hero" aria-hidden="true">
-              <div className={`lobby-arcade-card-icon lobby-arcade-card-icon--${cardId}`}>
-                {renderLobbyArcadeIcon(cardId)}
-              </div>
+              {renderLobbyArcadeHero(cardId)}
             </div>
             <div className="lobby-arcade-card-copy">
               <h2>{displayTitle}</h2>
@@ -10627,9 +10640,7 @@ function LobbyScreen({
                     <span className="lobby-arcade-card-badge">READY</span>
                   </div>
                   <div className="lobby-browser-card-hero" aria-hidden="true">
-                    <div className={`lobby-arcade-card-icon lobby-arcade-card-icon--${card.id}`}>
-                      {renderLobbyArcadeIcon(card.id)}
-                    </div>
+                    {renderLobbyArcadeHero(card.id)}
                   </div>
                   <div className="lobby-browser-card-copy">
                     <strong>{theme.title || card.label}</strong>

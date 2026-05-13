@@ -1125,6 +1125,48 @@ button:disabled {
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
+.lobby-arcade-card-artframe {
+  position: relative;
+  width: min(74%, 300px);
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  border-radius: 30px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--arcade-primary) 34%, rgba(255, 255, 255, 0.1));
+  background:
+    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--arcade-primary) 22%, transparent), transparent 60%),
+    linear-gradient(180deg, rgba(14, 24, 42, 0.94), rgba(8, 14, 26, 0.98)),
+    rgba(6, 12, 22, 0.92);
+  box-shadow:
+    0 0 54px color-mix(in srgb, var(--arcade-primary) 28%, transparent),
+    0 0 90px color-mix(in srgb, var(--arcade-secondary) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.lobby-arcade-card-artframe::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 20% 18%, rgba(192, 38, 255, 0.22), transparent 28%),
+    radial-gradient(circle at 82% 20%, rgba(255, 79, 216, 0.2), transparent 28%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.lobby-arcade-card-artframe img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lobby-arcade-card-artframe--random {
+  width: min(56%, 220px);
+  border-radius: 32px;
+}
+
 .lobby-arcade-card-icon svg {
   width: 100%;
   height: 100%;
@@ -1515,8 +1557,8 @@ button:disabled {
 
 .lobby-image-tile--random,
 .lobby-browser-card--random {
-  --arcade-primary: #a855f7;
-  --arcade-secondary: #ec4899;
+  --arcade-primary: #c026ff;
+  --arcade-secondary: #ff4fd8;
 }
 
 .lobby-image-tile--secret-auction,
@@ -1568,10 +1610,10 @@ button:disabled {
 .lobby-image-tile-face--arcade-random::after,
 .lobby-browser-card--random::after {
   background:
-    radial-gradient(circle at 18% 26%, rgba(236, 72, 153, 0.2) 0 2px, transparent 3px),
-    radial-gradient(circle at 74% 18%, rgba(168, 85, 247, 0.22) 0 3px, transparent 4px),
-    linear-gradient(120deg, transparent 10%, rgba(168, 85, 247, 0.2) 34%, transparent 52%),
-    linear-gradient(300deg, transparent 12%, rgba(236, 72, 153, 0.18) 48%, transparent 70%);
+    radial-gradient(circle at 18% 26%, rgba(255, 79, 216, 0.28) 0 2px, transparent 3px),
+    radial-gradient(circle at 74% 18%, rgba(192, 38, 255, 0.32) 0 3px, transparent 4px),
+    linear-gradient(120deg, transparent 10%, rgba(192, 38, 255, 0.26) 34%, transparent 52%),
+    linear-gradient(300deg, transparent 12%, rgba(255, 79, 216, 0.24) 48%, transparent 70%);
 }
 
 .lobby-image-tile-face--arcade-trueFalse::after,
@@ -1652,8 +1694,15 @@ button:disabled {
 
 .lobby-arcade-card-glow-stack--random .lobby-arcade-card-glow--outer {
   background:
-    radial-gradient(circle at 20% 18%, rgba(168, 85, 247, 0.44), transparent 42%),
-    radial-gradient(circle at 84% 24%, rgba(236, 72, 153, 0.36), transparent 44%);
+    radial-gradient(circle at 20% 18%, rgba(192, 38, 255, 0.62), transparent 44%),
+    radial-gradient(circle at 84% 24%, rgba(255, 79, 216, 0.52), transparent 46%);
+}
+
+.lobby-arcade-card-glow-stack--random .lobby-arcade-card-glow--inner {
+  background:
+    radial-gradient(circle at 18% 18%, rgba(192, 38, 255, 0.42), transparent 38%),
+    radial-gradient(circle at 82% 22%, rgba(255, 79, 216, 0.34), transparent 40%),
+    radial-gradient(circle at 50% 100%, rgba(255, 255, 255, 0.12), transparent 44%);
 }
 
 .lobby-arcade-card-glow-stack--trueFalse .lobby-arcade-card-glow--outer,
@@ -1705,8 +1754,14 @@ button:disabled {
 
 .lobby-arcade-card-glow-stack--random .lobby-arcade-card-glow--icon {
   background:
-    radial-gradient(circle, rgba(168, 85, 247, 0.46) 0%, rgba(168, 85, 247, 0.24) 34%, transparent 72%),
-    radial-gradient(circle at 64% 38%, rgba(236, 72, 153, 0.38) 0%, transparent 68%);
+    radial-gradient(circle, rgba(192, 38, 255, 0.62) 0%, rgba(192, 38, 255, 0.28) 36%, transparent 74%),
+    radial-gradient(circle at 64% 38%, rgba(255, 79, 216, 0.54) 0%, transparent 70%);
+}
+
+.lobby-arcade-card-glow-stack--random .lobby-arcade-card-glow--button {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(192, 38, 255, 0.4), transparent 56%),
+    radial-gradient(circle at 78% 58%, rgba(255, 79, 216, 0.34), transparent 54%);
 }
 
 .lobby-arcade-card-glow-stack--trueFalse .lobby-arcade-card-glow--icon,
