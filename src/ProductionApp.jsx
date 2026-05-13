@@ -10137,6 +10137,19 @@ function LobbyScreen({
     compatibilityMeter: compatibilityMeterQuestionCountDraft,
     random: randomQuestionCountDraft,
   };
+  const lobbyCardRequestedCountSetters = {
+    standard: setLobbyQuestionCount,
+    putYourPoints: setPutYourPointsQuestionCountDraft,
+    secretAuction: setSecretAuctionQuestionCountDraft,
+    quiz: setQuizQuestionCountDraft,
+    thisOrThat: setThisOrThatQuestionCountDraft,
+    memoryLane: setMemoryLaneQuestionCountDraft,
+    trueFalse: setTrueFalseQuestionCountDraft,
+    mostLikely: setMostLikelyQuestionCountDraft,
+    redFlagGreenFlag: setRedFlagGreenFlagQuestionCountDraft,
+    compatibilityMeter: setCompatibilityMeterQuestionCountDraft,
+    random: setRandomQuestionCountDraft,
+  };
   const lobbyAccessibleCards = lobbyCarouselCards.filter((card) => card.id !== 'holdem');
   const randomLobbyCard = lobbyAccessibleCards.find((card) => card.id === 'random') || null;
   const rotatingLobbyCards = lobbyAccessibleCards.filter((card) => card.id !== 'random');
@@ -10407,7 +10420,7 @@ function LobbyScreen({
     );
   };
 
-  const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, description, footerMeta, footerCountText = '', onCreateAndInvite, onPlayNow, availableCount = 0 }) => {
+  const renderLobbyTileFront = ({ cardId, eyebrow, title, statusText, description, footerMeta, footerActionControl = null, onCreateAndInvite, onPlayNow, availableCount = 0 }) => {
     const isFlipped = Boolean(flippedLobbyTiles?.[cardId]);
     const theme = lobbyArcadeCardThemes[cardId] || null;
     const displayTitle = theme?.title || title;
@@ -10452,14 +10465,9 @@ function LobbyScreen({
               <h2>{displayTitle}</h2>
               <p>{displayDescription}</p>
             </div>
-            <div className="lobby-arcade-card-stats">
-              <div className="lobby-arcade-card-stat lobby-arcade-card-stat--editable">
-                {footerMeta}
-              </div>
-            </div>
             <div className="lobby-arcade-card-footer">
               <div className="button-row lobby-image-tile-front-actions">
-                <span className="lobby-arcade-card-footer-pill">{footerCountText}</span>
+                {footerActionControl}
                 <Button
                   type="button"
                   className="primary-button compact lobby-primary-button lobby-image-tile-action"
@@ -10553,7 +10561,6 @@ function LobbyScreen({
             statusText: `${readyCount} ready`,
             description,
             availableCount: lobbyCardAvailableCounts[cardId] || 0,
-            footerCountText: `${questionCountValue || '10'} rounds`,
             footerMeta: (
               <label className="lobby-image-tile-front-control">
                 <span>Questions Per Round</span>
@@ -10564,6 +10571,19 @@ function LobbyScreen({
                   value={questionCountValue}
                   onChange={(event) => onQuestionCountChange(event.target.value)}
                   placeholder="10"
+                />
+              </label>
+            ),
+            footerActionControl: (
+              <label className="lobby-arcade-footer-control">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  value={questionCountValue}
+                  onChange={(event) => onQuestionCountChange(event.target.value)}
+                  placeholder="10"
+                  aria-label={`${title} questions per round`}
                 />
               </label>
             ),
@@ -10644,6 +10664,7 @@ function LobbyScreen({
           const isFavourite = favouriteLobbyCardIds.includes(card.id);
           const imageUrl = imageOverrides?.[card.id] || card.image;
           const actionHandlers = lobbyCardActionHandlers[card.id] || null;
+          const countSetter = lobbyCardRequestedCountSetters[card.id] || null;
           const theme = lobbyArcadeCardThemes[card.id] || null;
           const availableCount = lobbyCardAvailableCounts[card.id] || 0;
           return (
@@ -10674,7 +10695,17 @@ function LobbyScreen({
                   </div>
                   <div className="lobby-browser-card-footer">
                     <div className="button-row lobby-browser-card-actions">
-                      <span className="lobby-arcade-card-footer-pill">{lobbyCardRequestedCountDrafts[card.id] || '10'} rounds</span>
+                      <label className="lobby-arcade-footer-control">
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min="1"
+                          value={lobbyCardRequestedCountDrafts[card.id] || '10'}
+                          onChange={(event) => countSetter?.(event.target.value)}
+                          placeholder="10"
+                          aria-label={`${theme.title || card.label} questions per round`}
+                        />
+                      </label>
                       <Button
                         type="button"
                         className="primary-button compact"
