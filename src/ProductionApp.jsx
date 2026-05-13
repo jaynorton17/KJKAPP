@@ -8178,17 +8178,17 @@ function LobbyScreen({
     holdem: `${formatScore(HOLDEM_SMALL_BLIND)} / ${formatScore(HOLDEM_BIG_BLIND)}`,
   };
   const lobbyArcadeCardThemes = {
-    memoryLane: { title: 'MEMORY LANE', description: 'Relive shared moments and answer personal questions together.', primary: '#1DA1FF', secondary: '#6BE3FF' },
-    random: { title: 'RANDOM GAME', description: 'Let the computer choose a random game mode.', primary: '#A855F7', secondary: '#EC4899' },
-    trueFalse: { title: 'TRUE OR FALSE', description: 'Guess whether shocking statements are true or false.', primary: '#22C55E', secondary: '#EF4444' },
-    putYourPoints: { title: 'LUCK OF THE DRAW', description: 'Answer with confidence and put your points on the line.', primary: '#F97316', secondary: '#2563EB' },
-    standard: { title: 'NORMAL GAME', description: 'Classic straightforward questions for everyone.', primary: '#FACC15', secondary: '#3B82F6' },
-    mostLikely: { title: "WHO'S MORE LIKELY TO", description: 'Find out who in your group is most likely to do the wildest things.', primary: '#FB7185', secondary: '#60A5FA' },
-    compatibilityMeter: { title: 'COMPATIBILITY METER', description: 'Test how well you match with your partner or friends.', primary: '#EC4899', secondary: '#38BDF8' },
-    redFlagGreenFlag: { title: 'RED FLAG / GREEN FLAG', description: 'Spot the red flags and celebrate the green flags.', primary: '#EF4444', secondary: '#22C55E' },
-    quiz: { title: 'QUICK FIRE QUIZ', description: 'Fast-paced questions with instant answers.', primary: '#F97316', secondary: '#EF4444' },
-    secretAuction: { title: 'HOW SURE ARE YOU', description: 'Rate how confident you really are in your answers.', primary: '#F59E0B', secondary: '#2563EB' },
-    thisOrThat: { title: 'THIS OR THAT', description: 'Choose between two difficult options.', primary: '#3B82F6', secondary: '#EC4899' },
+    memoryLane: { title: 'MEMORY LANE', description: 'Relive shared experiences and answer personal questions about past moments together. A nostalgic mode focused on memories, stories, and inside jokes.', primary: '#1DA1FF', secondary: '#6BE3FF' },
+    random: { title: 'RANDOM GAME', description: 'A completely unpredictable game mode that selects a random game and category every round. No two sessions are ever the same.', primary: '#A855F7', secondary: '#EC4899' },
+    trueFalse: { title: 'TRUE OR FALSE', description: 'Decide whether each statement is completely true or entirely false. Quick thinking and sharp instincts are the key to scoring points.', primary: '#22C55E', secondary: '#EF4444' },
+    putYourPoints: { title: 'LUCK OF THE DRAW', description: 'Before each question, a random point value is drawn. Answer correctly to win the points, or lose them if you get the question wrong. Risk and luck decide everything.', primary: '#F97316', secondary: '#2563EB' },
+    standard: { title: 'NORMAL GAME', description: 'A classic answer-matching game where players guess each other’s responses and write their own. Features a wide variety of question styles across multiple categories.', primary: '#FACC15', secondary: '#3B82F6' },
+    mostLikely: { title: "WHO'S MORE LIKELY TO?", description: 'Vote on who in the group is most likely to do outrageous, funny, or unexpected things. Expect chaos, arguments, and plenty of laughs.', primary: '#FB7185', secondary: '#60A5FA' },
+    compatibilityMeter: { title: 'COMPATIBILITY METER', description: 'Test how closely your answers match with friends or partners. The better your compatibility, the higher your score climbs.', primary: '#EC4899', secondary: '#38BDF8' },
+    redFlagGreenFlag: { title: 'RED FLAG / GREEN FLAG', description: 'Decide whether each scenario is a major red flag or a definite green flag. Compare opinions and see how differently everyone thinks.', primary: '#EF4444', secondary: '#22C55E' },
+    quiz: { title: 'QUICK FIRE QUIZ', description: 'A fast-paced quiz mode covering general knowledge and multiple categories. You have 20 seconds to answer each question — the faster you respond, the more points you earn.', primary: '#F97316', secondary: '#EF4444' },
+    secretAuction: { title: 'HOW SURE ARE YOU?', description: 'Every question has a point value, and you decide how many points to risk based on how confident you are in your answer. The higher the confidence, the bigger the reward — or penalty.', primary: '#F59E0B', secondary: '#2563EB' },
+    thisOrThat: { title: 'THIS OR THAT', description: 'Choose between two options and predict what other players are most likely to pick. Simple choices can lead to surprisingly difficult decisions.', primary: '#3B82F6', secondary: '#EC4899' },
   };
   const getLobbyTileCardStyle = (cardId, imageUrl) => {
     const theme = lobbyArcadeCardThemes[cardId];
@@ -10446,14 +10446,6 @@ function LobbyScreen({
               <div className="button-row lobby-image-tile-front-actions">
                 <Button
                   type="button"
-                  className="ghost-button compact lobby-secondary-button lobby-image-tile-action"
-                  onClick={() => setLobbyTileFlipped(cardId, true)}
-                  disabled={isBusy}
-                >
-                  Details
-                </Button>
-                <Button
-                  type="button"
                   className="primary-button compact lobby-primary-button lobby-image-tile-action"
                   onClick={onPlayNow || onCreateAndInvite}
                   disabled={isBusy}
@@ -10665,14 +10657,6 @@ function LobbyScreen({
                   </div>
                   <div className="lobby-browser-card-footer">
                     <div className="button-row lobby-browser-card-actions">
-                      <Button
-                        type="button"
-                        className="ghost-button compact"
-                        onClick={() => focusLobbyCard(card.id)}
-                        disabled={isBusy}
-                      >
-                        Details
-                      </Button>
                       <Button
                         type="button"
                         className="primary-button compact"

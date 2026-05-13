@@ -579,8 +579,7 @@ button:disabled {
 }
 
 .lobby-browser-card--arcade .lobby-browser-card-actions .compact {
-  flex: 1 1 0;
-  min-width: 0;
+  width: 100%;
   min-height: 54px;
   border-radius: 16px;
   font-size: 0.84rem;
@@ -1238,7 +1237,7 @@ button:disabled {
 
 .lobby-arcade-card-stats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding-top: 12px;
   border-top: 1px solid color-mix(in srgb, var(--arcade-primary) 28%, rgba(255, 255, 255, 0.08));
@@ -1301,11 +1300,11 @@ button:disabled {
 .lobby-image-tile-face--arcade .lobby-image-tile-front-actions {
   gap: 12px;
   margin-top: 0;
+  justify-content: stretch;
 }
 
 .lobby-image-tile-face--arcade .lobby-image-tile-action {
-  flex: 1 1 0;
-  min-width: 0;
+  width: 100%;
   min-height: 56px;
   border-radius: 18px;
   font-size: 0.86rem;
