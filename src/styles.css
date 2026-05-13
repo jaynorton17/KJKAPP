@@ -202,6 +202,42 @@ button:disabled {
   width: 100%;
 }
 
+.lobby-tab-panel--game-lobby {
+  display: grid;
+  gap: 18px;
+}
+
+.lobby-surface-panel,
+.lobby-quick-actions-panel,
+.lobby-browser-panel,
+.join-invite-panel--arcade {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(104, 186, 255, 0.22);
+  background:
+    radial-gradient(circle at top left, rgba(29, 161, 255, 0.1), transparent 28%),
+    radial-gradient(circle at top right, rgba(236, 72, 153, 0.1), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+    rgba(5, 11, 22, 0.9);
+  box-shadow:
+    0 24px 38px rgba(1, 5, 12, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.lobby-surface-panel::after,
+.lobby-quick-actions-panel::after,
+.lobby-browser-panel::after,
+.join-invite-panel--arcade::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(120deg, transparent 0%, rgba(107, 227, 255, 0.05) 24%, transparent 44%),
+    linear-gradient(320deg, transparent 10%, rgba(168, 85, 247, 0.05) 42%, transparent 70%);
+  pointer-events: none;
+}
+
 .lobby-showcase-menu-shell {
   width: min(100%, 920px);
   margin: 0 auto 0;
@@ -237,6 +273,19 @@ button:disabled {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
     rgba(6, 14, 28, 0.7);
+}
+
+.lobby-quick-action-card {
+  min-height: 172px;
+  padding: 18px;
+  border-color: rgba(96, 165, 250, 0.22);
+  background:
+    radial-gradient(circle at 18% 18%, rgba(29, 161, 255, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(12, 23, 42, 0.94), rgba(7, 14, 28, 0.96)),
+    rgba(6, 14, 28, 0.82);
+  box-shadow:
+    0 18px 32px rgba(1, 5, 12, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .lobby-quick-action-card strong,
@@ -286,10 +335,25 @@ button:disabled {
 
 .lobby-showcase-menu {
   justify-content: center;
+  gap: 10px;
 }
 
 .lobby-showcase-pill {
   min-width: 148px;
+  border-color: rgba(112, 194, 255, 0.22);
+  background:
+    linear-gradient(180deg, rgba(17, 30, 57, 0.9), rgba(8, 16, 30, 0.94)),
+    rgba(6, 12, 22, 0.88);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 20px rgba(1, 5, 12, 0.18);
+}
+
+.lobby-showcase-pill.is-active {
+  border-color: rgba(107, 227, 255, 0.42);
+  box-shadow:
+    0 0 24px rgba(29, 161, 255, 0.14),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
 .lobby-browse-toggle-row {
@@ -327,6 +391,20 @@ button:disabled {
   padding: 14px;
 }
 
+.lobby-browser-card--arcade {
+  min-height: 420px;
+  padding: 0;
+  border-color: color-mix(in srgb, var(--arcade-primary) 24%, rgba(255, 255, 255, 0.12));
+  background:
+    radial-gradient(circle at 18% 16%, color-mix(in srgb, var(--arcade-primary) 26%, transparent), transparent 30%),
+    radial-gradient(circle at 82% 18%, color-mix(in srgb, var(--arcade-secondary) 20%, transparent), transparent 28%),
+    linear-gradient(160deg, rgba(4, 10, 20, 0.98), rgba(8, 16, 30, 0.96) 40%, rgba(4, 8, 18, 0.98));
+  box-shadow:
+    0 24px 38px rgba(1, 5, 12, 0.36),
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
 .lobby-browser-card-actions {
   width: auto;
   align-items: flex-end;
@@ -348,11 +426,28 @@ button:disabled {
     linear-gradient(180deg, rgba(4, 9, 17, 0.18), rgba(4, 9, 17, 0.58));
 }
 
+.lobby-browser-card--arcade::before {
+  z-index: 0;
+  background:
+    radial-gradient(circle at 22% 24%, rgba(255, 255, 255, 0.1) 0 2px, transparent 3px),
+    radial-gradient(circle at 72% 28%, rgba(255, 255, 255, 0.08) 0 1.5px, transparent 2.5px),
+    linear-gradient(120deg, transparent 4%, color-mix(in srgb, var(--arcade-primary) 10%, transparent) 34%, transparent 58%),
+    linear-gradient(300deg, transparent 10%, color-mix(in srgb, var(--arcade-secondary) 10%, transparent) 50%, transparent 72%);
+}
+
 .lobby-browser-card.is-active {
   border-color: rgba(255, 223, 140, 0.48);
   box-shadow:
     0 0 0 1px rgba(255, 223, 140, 0.16) inset,
     0 14px 28px rgba(45, 91, 255, 0.16);
+}
+
+.lobby-browser-card--arcade.is-active {
+  border-color: color-mix(in srgb, var(--arcade-primary) 42%, rgba(255, 255, 255, 0.14));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--arcade-primary) 18%, transparent) inset,
+    0 0 32px color-mix(in srgb, var(--arcade-primary) 14%, transparent),
+    0 22px 42px rgba(1, 5, 12, 0.4);
 }
 
 .lobby-browser-card strong {
@@ -372,6 +467,104 @@ button:disabled {
   color: inherit;
   text-align: center;
   cursor: pointer;
+}
+
+.lobby-browser-card-main--arcade {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto auto auto auto auto;
+  gap: 14px;
+  align-content: start;
+  justify-items: stretch;
+  min-height: 100%;
+  padding: 18px;
+}
+
+.lobby-browser-card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lobby-browser-card-kicker {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(219, 230, 248, 0.74);
+}
+
+.lobby-browser-card-hero {
+  display: grid;
+  place-items: center;
+  min-height: 132px;
+}
+
+.lobby-browser-card-copy {
+  display: grid;
+  gap: 8px;
+  text-align: center;
+}
+
+.lobby-browser-card-copy strong {
+  font-size: clamp(1.2rem, 1.8vw, 1.7rem);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #f7fbff;
+  text-shadow: 0 0 16px color-mix(in srgb, var(--arcade-primary) 22%, transparent);
+}
+
+.lobby-browser-card-copy span {
+  color: rgba(219, 230, 248, 0.8);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.lobby-browser-card-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lobby-browser-card-stat {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(15, 27, 46, 0.86), rgba(8, 15, 28, 0.94)),
+    rgba(8, 14, 26, 0.92);
+}
+
+.lobby-browser-card-stat small {
+  color: rgba(219, 230, 248, 0.68);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.lobby-browser-card-stat b {
+  color: #fff;
+  font-size: 1.3rem;
+  line-height: 1;
+  text-shadow: 0 0 14px color-mix(in srgb, var(--arcade-primary) 20%, transparent);
+}
+
+.lobby-browser-card--arcade .lobby-browser-card-actions {
+  margin-top: auto;
+  width: 100%;
+  justify-content: stretch;
+}
+
+.lobby-browser-card--arcade .lobby-browser-card-actions .compact {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .lobby-browser-card span {
@@ -398,6 +591,16 @@ button:disabled {
   border-radius: 14px;
   background: rgba(7, 17, 35, 0.78);
   backdrop-filter: blur(8px);
+}
+
+.lobby-browser-card--arcade .lobby-browser-favourite {
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  border-color: rgba(255, 255, 255, 0.16);
+  background:
+    linear-gradient(135deg, rgba(13, 24, 43, 0.92), rgba(8, 16, 30, 0.96)),
+    rgba(7, 17, 35, 0.9);
 }
 
 .lobby-browser-favourite.is-on {
@@ -1143,6 +1346,12 @@ button:disabled {
   .lobby-browser-grid {
     grid-template-columns: 1fr;
   }
+  .lobby-browser-card--arcade {
+    min-height: 0;
+  }
+  .lobby-browser-card-stats {
+    grid-template-columns: 1fr 1fr;
+  }
   .lobby-friends-grid {
     grid-template-columns: 1fr;
   }
@@ -1164,6 +1373,12 @@ button:disabled {
   }
   .lobby-image-tile-front-actions {
     align-items: stretch;
+  }
+  .lobby-browser-card-main--arcade {
+    padding: 16px;
+  }
+  .lobby-browser-card-hero {
+    min-height: 116px;
   }
   .lobby-arcade-card-stats {
     grid-template-columns: 1fr;
@@ -1198,6 +1413,10 @@ button:disabled {
   .lobby-browser-card {
     padding: 12px;
     border-radius: 16px;
+  }
+
+  .lobby-browser-card--arcade {
+    padding: 0;
   }
 
   .lobby-quick-action-row {
@@ -1238,6 +1457,37 @@ button:disabled {
 
   .lobby-image-tile-front-copy {
     gap: 8px;
+  }
+
+  .lobby-browser-card-main--arcade {
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .lobby-browser-card-hero {
+    min-height: 102px;
+  }
+
+  .lobby-browser-card-copy strong {
+    font-size: 1.05rem;
+  }
+
+  .lobby-browser-card-copy span {
+    font-size: 0.8rem;
+  }
+
+  .lobby-browser-card-stats {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .lobby-browser-card-stat {
+    padding: 10px 12px;
+    border-radius: 14px;
+  }
+
+  .lobby-browser-card-stat b {
+    font-size: 1.12rem;
   }
 
   .lobby-image-tile-face--arcade {
@@ -1416,6 +1666,26 @@ button:disabled {
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.join-invite-panel--arcade {
+  margin-top: 0;
+  padding: 16px;
+  border-top: 0;
+  border-radius: 22px;
+}
+
+.join-invite-panel--arcade .game-invite-row,
+.lobby-quick-actions-panel .mini-list-row,
+.lobby-browser-panel .activity-empty-state {
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(15, 27, 46, 0.84), rgba(8, 15, 28, 0.94)),
+    rgba(8, 14, 26, 0.9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 14px 28px rgba(1, 5, 12, 0.18);
 }
 
 .quiz-card-hero {

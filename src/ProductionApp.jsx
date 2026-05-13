@@ -10576,14 +10576,39 @@ function LobbyScreen({
           const isFavourite = favouriteLobbyCardIds.includes(card.id);
           const imageUrl = imageOverrides?.[card.id] || card.image;
           const actionHandlers = lobbyCardActionHandlers[card.id] || null;
+          const theme = lobbyArcadeCardThemes[card.id] || null;
+          const availableCount = lobbyCardAvailableCounts[card.id] || 0;
           return (
             <article
               key={card.id}
-              className={`lobby-browser-card ${isActive ? 'is-active' : ''} ${compactArtwork ? 'lobby-browser-card--compact-art' : ''}`}
-              style={{ '--lobby-browser-image': `url("${imageUrl}")` }}
+              className={`lobby-browser-card ${isActive ? 'is-active' : ''} ${compactArtwork ? 'lobby-browser-card--compact-art' : ''} ${theme ? 'lobby-browser-card--arcade' : ''}`}
+              style={theme ? { '--arcade-primary': theme.primary, '--arcade-secondary': theme.secondary } : { '--lobby-browser-image': `url("${imageUrl}")` }}
             >
-              {compactArtwork ? (
-                <div className="lobby-browser-card-main lobby-browser-card-main--compact-art">
+              {theme ? (
+                <div className={`lobby-browser-card-main lobby-browser-card-main--arcade ${compactArtwork ? 'lobby-browser-card-main--compact-art' : ''}`}>
+                  <div className="lobby-browser-card-topline">
+                    <span className="lobby-browser-card-kicker">{eyebrow}</span>
+                    <span className="lobby-arcade-card-badge">READY</span>
+                  </div>
+                  <div className="lobby-browser-card-hero" aria-hidden="true">
+                    <div className={`lobby-arcade-card-icon lobby-arcade-card-icon--${card.id}`}>
+                      {renderLobbyArcadeIcon(card.id)}
+                    </div>
+                  </div>
+                  <div className="lobby-browser-card-copy">
+                    <strong>{theme.title || card.label}</strong>
+                    <span>{theme.description || details?.name || 'Open setup'}</span>
+                  </div>
+                  <div className="lobby-browser-card-stats">
+                    <article className="lobby-browser-card-stat">
+                      <small>Questions Available</small>
+                      <b>{availableCount}</b>
+                    </article>
+                    <article className="lobby-browser-card-stat">
+                      <small>Status</small>
+                      <b>{isActive ? 'Featured' : 'Ready'}</b>
+                    </article>
+                  </div>
                   <div className="button-row lobby-browser-card-actions">
                     <Button
                       type="button"
@@ -10596,10 +10621,10 @@ function LobbyScreen({
                     <Button
                       type="button"
                       className="primary-button compact"
-                      onClick={() => actionHandlers?.invite ? actionHandlers.invite() : focusLobbyCard(card.id)}
+                      onClick={() => actionHandlers?.create ? actionHandlers.create() : focusLobbyCard(card.id)}
                       disabled={isBusy}
                     >
-                      Create + Invite
+                      Play Now
                     </Button>
                   </div>
                 </div>
@@ -11020,7 +11045,7 @@ function LobbyScreen({
       <section className="lobby-dashboard">
         {activeTab === 'gameLobby' ? (
           <section className="lobby-tab-panel lobby-tab-panel--game-lobby">
-            <section className="dashboard-subnav-shell dashboard-subnav-shell--activity dashboard-subnav-shell--lobby-menu lobby-showcase-menu-shell">
+            <section className="dashboard-subnav-shell dashboard-subnav-shell--activity dashboard-subnav-shell--lobby-menu lobby-showcase-menu-shell lobby-surface-panel">
               <div className="dashboard-subnav activity-subnav lobby-showcase-menu" role="tablist" aria-label="Lobby sections">
                 {[
                   { id: 'trending', label: 'Trending Games', icon: 'trend' },
@@ -11041,7 +11066,7 @@ function LobbyScreen({
               </div>
             </section>
             {featuredActiveGame ? (
-            <section className="panel lobby-panel lobby-panel--lobby lobby-quick-actions-panel">
+            <section className="panel lobby-panel lobby-panel--lobby lobby-quick-actions-panel lobby-surface-panel">
               <div className="panel-heading">
                 <div>
                   <p className="eyebrow">Current Active Game</p>
@@ -11066,7 +11091,7 @@ function LobbyScreen({
             </section>
             ) : null}
             {gameInvites.length ? (
-              <section className="lobby-invite-top">
+              <section className="lobby-invite-top lobby-surface-wrap">
                 <GameInvitesPanel
                   invites={gameInvites}
                   onJoinInvite={onJoinGameInvite}
@@ -18729,7 +18754,7 @@ function GameInvitesPanel({ invites = [], onJoinInvite, onDismissInvite, isBusy,
 
   if (compact) {
     return (
-      <section className="join-invite-panel">
+      <section className="join-invite-panel join-invite-panel--arcade">
         <div className="mini-heading">
           <div>
             <span>Game Requests</span>
