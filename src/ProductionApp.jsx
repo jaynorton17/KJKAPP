@@ -266,6 +266,44 @@ const getQuestionBankSyncTarget = (targetBankType = 'game') => {
   return QUESTION_BANK_SYNC_TARGETS.find((target) => normalizeQuestionBankType(target.bankType) === normalizedTargetBankType)
     || QUESTION_BANK_SYNC_TARGETS[0];
 };
+const getQuestionBankValidationConfig = (targetBankType = 'game') => {
+  const target = getQuestionBankSyncTarget(targetBankType);
+  const normalizedBankType = normalizeQuestionBankType(target.bankType);
+  const profile = QUESTION_BANK_GENERATION_PROFILES[normalizedBankType] || QUESTION_BANK_GENERATION_PROFILES.game;
+  return {
+    target,
+    bankType: normalizedBankType,
+    requiredSheet: target.sheetName,
+    requiredGameName: target.gameName,
+    allowedQuestionTypeIds: new Set((profile.questionTypes || []).map((type) => normalizeQuestionType(type, 'text'))),
+    allowedQuestionTypeLabels: profile.questionTypes || [],
+    allowedCategories: profile.categories || [],
+    isFixedChoiceGame: [
+      normalizeQuestionBankType(TRUE_FALSE_GAME_MODE),
+      normalizeQuestionBankType(MOST_LIKELY_GAME_MODE),
+      normalizeQuestionBankType(RED_FLAG_GREEN_FLAG_GAME_MODE),
+    ].includes(normalizedBankType),
+    blankCorrectAnswerGame: [
+      normalizeQuestionBankType(TRUE_FALSE_GAME_MODE),
+      normalizeQuestionBankType(MOST_LIKELY_GAME_MODE),
+      normalizeQuestionBankType(RED_FLAG_GREEN_FLAG_GAME_MODE),
+      normalizeQuestionBankType(THIS_OR_THAT_GAME_MODE),
+      normalizeQuestionBankType(SECRET_AUCTION_GAME_MODE),
+    ].includes(normalizedBankType),
+  };
+};
+const getRequiredSheet = (targetBankType = 'game') => getQuestionBankValidationConfig(targetBankType).requiredSheet;
+const getRequiredGameName = (targetBankType = 'game') => getQuestionBankValidationConfig(targetBankType).requiredGameName;
+const isFixedChoiceGame = (targetBankType = 'game') => getQuestionBankValidationConfig(targetBankType).isFixedChoiceGame;
+const allowsBlankCorrectAnswerForGame = (targetBankType = 'game') => getQuestionBankValidationConfig(targetBankType).blankCorrectAnswerGame;
+const requiresOptions = (questionType = '', targetBankType = 'game', question = '') => {
+  const normalizedType = normalizeQuestionType(questionType, 'text');
+  if (!QUESTION_BANK_UPLOAD_OPTION_TYPES.has(normalizedType)) return false;
+  if (isFixedChoiceGame(targetBankType)) return false;
+  if (normalizeQuestionBankType(targetBankType) === normalizeQuestionBankType(THIS_OR_THAT_GAME_MODE)) return true;
+  if (isPutYourPointsPlayerChoicePreflightRow(targetBankType, questionType, question)) return false;
+  return true;
+};
 const QUESTION_BANK_UPLOAD_COLUMNS = [
   'Sheet',
   'Game',
@@ -1146,7 +1184,7 @@ const findGeneratedQuestionBankQuestionBoundary = ({
   categoryKeys = new Set(),
   allowedTypeIds = new Set(),
 } = {}) => {
-  const fixedChoiceGeneratedGame = QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType);
+  const fixedChoiceGeneratedGame = isFixedChoiceGame(normalizedBankType);
   const searchLimit = Math.min(cells.length, 14);
   for (let index = 3; index < searchLimit; index += 1) {
     const value = normalizeText(cells[index]);
@@ -1186,7 +1224,7 @@ const normalizeGeneratedQuestionBankRowShape = ({
     && boundary.index > 3
     && (
       cells.length !== expectedColumnCount
-      || QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType)
+      || isFixedChoiceGame(normalizedBankType)
     );
 
   if (!shouldRebuildFromQuestionBoundary) return [...cells];
@@ -1228,7 +1266,7 @@ const normalizeGeneratedQuestionBankCsvColumns = (rawText = '', target = QUESTIO
     const activeIndex = columnIndex.Active;
     if (
       workingCells.length < QUESTION_BANK_UPLOAD_COLUMNS.length
-      && QUESTION_BANK_BLANK_CORRECT_ANSWER_TARGETS.has(normalizedBankType)
+      && allowsBlankCorrectAnswerForGame(normalizedBankType)
       && /^yes$/i.test(normalizeText(workingCells[correctAnswerIndex]))
       && !/^yes$/i.test(normalizeText(workingCells[activeIndex]))
     ) {
@@ -1257,10 +1295,10 @@ const normalizeGeneratedQuestionBankCsvColumns = (rawText = '', target = QUESTIO
       paddedCells[columnIndex['Question Type']] = defaultTypeLabel;
     }
 
-    if (QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType)) {
+    if (isFixedChoiceGame(normalizedBankType)) {
       paddedCells[columnIndex.Options] = '';
     }
-    if (QUESTION_BANK_BLANK_CORRECT_ANSWER_TARGETS.has(normalizedBankType)) {
+    if (allowsBlankCorrectAnswerForGame(normalizedBankType)) {
       paddedCells[columnIndex['Correct Answer']] = '';
     }
 
@@ -1475,8 +1513,9 @@ const parseQuestionBankCsvForTarget = ({
   });
 };
 const validateQuestionBankUploadResult = (result, targetBankType = 'game') => {
-  const target = getQuestionBankSyncTarget(targetBankType);
-  const normalizedTargetBankType = normalizeQuestionBankType(target.bankType);
+  const validationConfig = getQuestionBankValidationConfig(targetBankType);
+  const target = validationConfig.target;
+  const normalizedTargetBankType = validationConfig.bankType;
   const invalidRows = (result?.preview || []).filter((row) => row?.errors?.length || row?.status === 'invalid');
   if (invalidRows.length) {
     const firstRows = invalidRows
@@ -1518,8 +1557,9 @@ const validateQuestionBankUploadResult = (result, targetBankType = 'game') => {
   const missingOptionRows = [];
   activeRows.forEach((row) => {
     const question = row?.question || {};
-    const roundType = normalizeQuestionType(question.roundType, 'text');
-    if (!QUESTION_BANK_UPLOAD_OPTION_TYPES.has(roundType)) return;
+    const roundType = normalizeQuestionType(question.roundType || question.originalQuestionType, 'text');
+    const exportedQuestionType = formatQuestionBankQuestionTypeForExport(roundType);
+    if (!requiresOptions(exportedQuestionType, normalizedTargetBankType, question.question || '')) return;
     const options = Array.isArray(question.multipleChoiceOptions)
       ? question.multipleChoiceOptions.map(normalizeText).filter(Boolean)
       : [];
@@ -1533,18 +1573,6 @@ const validateQuestionBankUploadResult = (result, targetBankType = 'game') => {
     );
   }
 };
-const QUESTION_BANK_FIXED_OPTION_TARGETS = new Set([
-  TRUE_FALSE_GAME_MODE,
-  MOST_LIKELY_GAME_MODE,
-  RED_FLAG_GREEN_FLAG_GAME_MODE,
-]);
-const QUESTION_BANK_BLANK_CORRECT_ANSWER_TARGETS = new Set([
-  TRUE_FALSE_GAME_MODE,
-  MOST_LIKELY_GAME_MODE,
-  RED_FLAG_GREEN_FLAG_GAME_MODE,
-  THIS_OR_THAT_GAME_MODE,
-  SECRET_AUCTION_GAME_MODE,
-]);
 const QUESTION_BANK_UPLOAD_PLACEHOLDER_VALUE = /^(?:n\/?a|none|null|tbc|unknown|placeholder)$/i;
 const QUESTION_BANK_UPLOAD_OPTIONAL_COLUMNS = [
   'Correct Answer',
@@ -1640,8 +1668,9 @@ const buildQuestionBankUploadPreflightReport = ({
   existingQuestions = [],
   generationConstraints = null,
 } = {}) => {
-  const selectedTarget = getQuestionBankSyncTarget(target?.bankType || 'game');
-  const normalizedBankType = normalizeQuestionBankType(selectedTarget.bankType);
+  const validationConfig = getQuestionBankValidationConfig(target?.bankType || 'game');
+  const selectedTarget = validationConfig.target;
+  const normalizedBankType = validationConfig.bankType;
   const shouldReplace = mode === 'replace';
   const shouldUpdateMatches = mode === 'upsert';
   const singleTypeRequested = normalizeText(generationConstraints?.questionTypeMode).toLowerCase() === 'single';
@@ -1678,7 +1707,7 @@ const buildQuestionBankUploadPreflightReport = ({
   }
 
   const profile = QUESTION_BANK_GENERATION_PROFILES[normalizedBankType] || QUESTION_BANK_GENERATION_PROFILES.game;
-  const allowedTypeIds = new Set((profile.questionTypes || []).map((type) => normalizeQuestionType(type, 'text')));
+  const allowedTypeIds = validationConfig.allowedQuestionTypeIds;
   const questionRows = new Map();
   const templateRows = new Map();
   const optionRows = new Map();
@@ -1705,11 +1734,11 @@ const buildQuestionBankUploadPreflightReport = ({
     addPreflightCount(toneCounts, values.Tone);
     addPreflightCount(intensityCounts, values.Intensity);
 
-    if (normalizeText(values.Sheet) !== selectedTarget.sheetName) {
-      errors.push(`Row ${rowNumber}: Sheet must be "${selectedTarget.sheetName}".`);
+    if (normalizeText(values.Sheet) !== getRequiredSheet(normalizedBankType)) {
+      errors.push(`Row ${rowNumber}: Sheet must be "${getRequiredSheet(normalizedBankType)}".`);
     }
-    if (normalizeText(values.Game) !== selectedTarget.gameName) {
-      errors.push(`Row ${rowNumber}: Game must be "${selectedTarget.gameName}".`);
+    if (normalizeText(values.Game) !== getRequiredGameName(normalizedBankType)) {
+      errors.push(`Row ${rowNumber}: Game must be "${getRequiredGameName(normalizedBankType)}".`);
     }
     if (!question) errors.push(`Row ${rowNumber}: Question is missing.`);
     if (!questionType) {
@@ -1742,10 +1771,10 @@ const buildQuestionBankUploadPreflightReport = ({
       }
     });
 
-    if (QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType) && options) {
+    if (isFixedChoiceGame(normalizedBankType) && options) {
       errors.push(`Row ${rowNumber}: Options should be blank because the app supplies this game's choices.`);
     }
-    if (QUESTION_BANK_BLANK_CORRECT_ANSWER_TARGETS.has(normalizedBankType) && normalizeText(values['Correct Answer'])) {
+    if (allowsBlankCorrectAnswerForGame(normalizedBankType) && normalizeText(values['Correct Answer'])) {
       errors.push(`Row ${rowNumber}: Correct Answer should be blank for ${selectedTarget.gameName}.`);
     }
     if (normalizedBankType === 'quiz' && !normalizeText(values['Correct Answer'])) {
@@ -1755,7 +1784,7 @@ const buildQuestionBankUploadPreflightReport = ({
       const optionCount = options ? options.split('|').map((entry) => normalizeText(entry)).filter(Boolean).length : 0;
       if (optionCount !== 2) errors.push(`Row ${rowNumber}: This or That needs exactly two pipe-separated options.`);
     }
-    if (!QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType) && QUESTION_BANK_UPLOAD_OPTION_TYPES.has(normalizedType) && !isPutYourPointsPlayerChoiceRow) {
+    if (requiresOptions(questionType, normalizedBankType, question) && !isPutYourPointsPlayerChoiceRow) {
       const optionCount = options ? options.split('|').map((entry) => normalizeText(entry)).filter(Boolean).length : 0;
       if (optionCount < 2) errors.push(`Row ${rowNumber}: ${questionType} needs at least two pipe-separated options.`);
     }
@@ -1783,7 +1812,7 @@ const buildQuestionBankUploadPreflightReport = ({
       openerRows.set(openerKey, rows);
     }
     const optionPairKey = makeQuestionBankOptionPairKey(options);
-    if (optionPairKey && !QUESTION_BANK_FIXED_OPTION_TARGETS.has(normalizedBankType) && !isPutYourPointsPlayerChoiceRow) {
+    if (optionPairKey && !isFixedChoiceGame(normalizedBankType) && !isPutYourPointsPlayerChoiceRow) {
       if (optionRows.has(optionPairKey)) {
         errors.push(`Rows ${optionRows.get(optionPairKey)} and ${rowNumber}: duplicate option set.`);
       } else {
@@ -10059,6 +10088,7 @@ function LobbyScreen({
         fileSize: file.size,
         rawText,
         rowCount,
+        targetBankType: questionUploadTarget.bankType,
         previewQuestions: buildQuestionBankUploadOutcomeQuestions(report.result),
       });
       applyQuestionUploadReport(report);
@@ -10091,6 +10121,7 @@ function LobbyScreen({
         fileSize: rawJson.length,
         rawText,
         rowCount,
+        targetBankType: questionUploadTarget.bankType,
         sourceType: 'structured-json',
         previewQuestions,
       });
