@@ -1994,8 +1994,8 @@ const parseQuestionBankStructuredUploadJson = (rawText = '') => {
   if (!parsed.length) {
     throw new Error('Structured upload JSON is empty.');
   }
-  if (parsed.length > 20) {
-    throw new Error(`Structured upload JSON has ${parsed.length} rows. Paste 20 questions or fewer at a time.`);
+  if (parsed.length > 55) {
+    throw new Error(`Structured upload JSON has ${parsed.length} rows. Paste 55 questions or fewer at a time.`);
   }
   parsed.forEach((entry, index) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
