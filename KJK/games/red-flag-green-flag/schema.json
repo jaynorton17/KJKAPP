@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Red Flag Green Flag Question",
+  "type": "object",
+  "required": [
+    "sheet",
+    "game",
+    "question",
+    "category",
+    "questionType",
+    "active",
+    "defaultAnswerType",
+    "answerType",
+    "sourceLabel",
+    "addedBy"
+  ],
+  "properties": {
+    "sheet": { "const": "Red Flag Green Flag", "description": "Spreadsheet tab name" },
+    "game": { "const": "Red Flag Green Flag", "description": "Game name" },
+    "question": { "type": "string", "minLength": 1, "description": "Behaviour or scenario" },
+    "category": { "type": "string", "enum": [
+      "Trust", "Communication", "Boundaries", "Lifestyle", "Money", "Habits", "Romance", "Family & Friends", "Career", "Spicy"
+    ], "description": "Content category" },
+    "questionType": { "type": "string", "enum": ["Multiple Choice"], "description": "Question type" },
+    "options": { "type": ["string", "null"], "pattern": "^$", "description": "Always blank" },
+    "correctAnswer": { "type": ["string", "null"], "pattern": "^$", "description": "Always blank" },
+    "active": { "const": "Yes", "description": "Row is active" },
+    "intensity": { "type": ["string", "null"], "pattern": "^[1-5]$", "description": "Optional intensity 1–5" },
+    "tone": { "type": ["string", "null"], "enum": [
+      "Warm", "Funny", "Playful", "Cheeky", "Deep", "Spicy", "Reflective", "Competitive"
+    ], "description": "Optional tone" },
+    "relationshipArea": { "type": ["string", "null"], "enum": [
+      "Trust", "Intimacy", "Communication", "Memories", "Lifestyle", "Conflict", "Future"
+    ], "description": "Optional relationship area" },
+    "tags": { "type": ["string", "null"], "description": "Keywords for indexing" },
+    "notes": { "type": ["string", "null"], "description": "Notes" },
+    "memoryLaneMode": { "type": ["string", "null"], "enum": ["memoryPrompt", "pastAnswerRecall"], "description": "Unused" },
+    "avoidIf": { "type": ["string", "null"], "description": "Avoid conditions" },
+    "gameSuitability": { "type": ["string", "null"], "description": "Suitability for other games" },
+    "aiUseCase": { "type": ["string", "null"], "description": "AI use case tags" },
+    "repeatGroup": { "type": ["string", "null"], "description": "Repeat group identifier" },
+    "defaultAnswerType": { "const": "multipleChoice", "description": "Answer type is multipleChoice" },
+    "answerType": { "const": "multipleChoice", "description": "Answer type is multipleChoice" },
+    "unitLabel": { "type": ["string", "null"], "description": "Unit for numeric answers (unused)" },
+    "scoringDivisor": { "type": ["number", "null"], "description": "Unused scoring field" },
+    "roundingMode": { "type": ["string", "null"], "enum": ["nearest", "up", "down"], "description": "Unused scoring field" },
+    "roundPenaltyValue": { "type": ["number", "null"], "description": "Unused scoring field" },
+    "fixedPenalty": { "type": ["number", "null"], "description": "Unused scoring field" },
+    "scoringMode": { "type": ["string", "null"], "description": "Unused scoring field" },
+    "scoringOutcomeType": { "type": ["string", "null"], "description": "Unused scoring field" },
+    "sourceLabel": { "const": "generated:Red Flag Green Flag", "description": "Origin label" },
+    "addedBy": { "const": "ChatGPT", "description": "Creator" },
+    "originalSheet": { "type": ["string", "null"], "description": "Original sheet if imported" },
+    "originalQuestionType": { "type": ["string", "null"], "description": "Original question type if imported" }
+  },
+  "additionalProperties": false
+}

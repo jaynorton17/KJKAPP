@@ -1,0 +1,18 @@
+Create a KJK app question‑bank CSV for the game “Put Your Points Where Your Mouth Is”.
+Generate exactly 50 fresh data rows.
+
+Mandatory question maker agent file. These rules are non‑negotiable and override creativity whenever there is a conflict:
+
+– Sheet must be Put Your Money Where Your Mouth Is.  Game must be Put Your Points Where Your Mouth Is.
+– Active must be Yes.
+– Use the allowed question types: Favourite, Fill in the Blank, Multiple Choice, Numeric, Open Answer, Pet Peeve, Preference, Ranked / Top 3, Ranking, Rating, Text Answer, True or False, Who is more likely to, Would you rather, Sort Into Order.
+– Categories should come from: Affection, Attraction, Secrets, Habits, Memory, Conflict, Future, Money, Playful, Spicy, Embarrassing, Comfort.
+– Mix at least five different question types and at least four categories.
+– Tone must be a short mood word (Warm, Funny, Playful, Cheeky, Deep, Spicy, Reflective, Competitive).  Use at least two tones.
+– Intensity must be 1, 2, 3, 4 or 5.  Use at least two intensity levels.
+– Do not repeat questions or option sets.  Avoid filler phrases and numbering.
+– For Multiple Choice and other choice‑based types, supply unique, question‑specific options separated by pipes.  For True or False and Who is more likely to, leave options and correct answer blank.
+– Do not mention stake amounts; the app provides the stake deck and handles scoring.  Scoring fields should be filled as follows: Scoring Divisor = 1, Rounding Mode = nearest, Round Penalty Value = 5, Fixed Penalty = 5, Scoring Mode = direct_penalty_entry, Scoring Outcome Type = exact_match_else_fixed_penalty.
+– Use Default Answer Type and Answer Type mappings based on question type (text for free‑text prompts, multipleChoice for choice prompts, number for numeric/rating, ranked for ranking/sort).
+– Leave unused optional fields blank.
+– Output raw CSV only: first row must be the exact header and must be followed by exactly 50 data rows.

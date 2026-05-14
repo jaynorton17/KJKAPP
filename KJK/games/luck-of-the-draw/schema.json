@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Put Your Points Where Your Mouth Is Question",
+  "type": "object",
+  "required": [
+    "sheet",
+    "game",
+    "question",
+    "category",
+    "questionType",
+    "active",
+    "defaultAnswerType",
+    "answerType",
+    "sourceLabel",
+    "addedBy"
+  ],
+  "properties": {
+    "sheet": { "const": "Put Your Money Where Your Mouth Is", "description": "Spreadsheet tab name" },
+    "game": { "const": "Put Your Points Where Your Mouth Is", "description": "Game name" },
+    "question": { "type": "string", "minLength": 1, "description": "Natural question shown to players" },
+    "category": { "type": "string", "enum": [
+      "Affection", "Attraction", "Secrets", "Habits", "Memory", "Conflict", "Future", "Money", "Playful", "Spicy", "Embarrassing", "Comfort"
+    ] },
+    "questionType": { "type": "string", "enum": [
+      "Favourite", "Fill in the Blank", "Multiple Choice", "Numeric", "Open Answer", "Pet Peeve", "Preference", "Ranked / Top 3", "Ranking", "Rating", "Text Answer", "True or False", "Who is more likely to", "Would you rather", "Sort Into Order"
+    ] },
+    "options": { "type": ["string", "null"], "description": "Pipe‑separated answer choices for choice‑based types" },
+    "correctAnswer": { "type": ["string", "null"], "description": "Factual answer; unused in this game" },
+    "active": { "const": "Yes" },
+    "intensity": { "type": ["string", "null"], "pattern": "^[1-5]$", "description": "Numeric intensity 1–5; may be blank" },
+    "tone": { "type": ["string", "null"], "enum": [
+      "Warm", "Funny", "Playful", "Cheeky", "Deep", "Spicy", "Reflective", "Competitive"
+    ], "description": "Emotional tone of the prompt" },
+    "relationshipArea": { "type": ["string", "null"], "enum": [
+      "Trust", "Intimacy", "Communication", "Memories", "Lifestyle", "Conflict", "Future"
+    ], "description": "Aspect of the relationship addressed" },
+    "tags": { "type": ["string", "null"], "description": "Pipe‑separated keywords" },
+    "notes": { "type": ["string", "null"], "description": "Internal notes" },
+    "memoryLaneMode": { "type": ["string", "null"], "enum": ["memoryPrompt", "pastAnswerRecall"], "description": "Used only in Memory Lane" },
+    "avoidIf": { "type": ["string", "null"], "description": "Pipe‑separated conditions for avoiding this question" },
+    "gameSuitability": { "type": ["string", "null"], "description": "Alternative games where the question could fit" },
+    "aiUseCase": { "type": ["string", "null"], "description": "AI use case tags" },
+    "repeatGroup": { "type": ["string", "null"], "description": "Group identifier for near‑duplicate prompts" },
+    "defaultAnswerType": { "type": "string", "enum": ["text", "multipleChoice", "number", "ranked"], "description": "Default answer type inferred from question type" },
+    "answerType": { "type": "string", "enum": ["text", "multipleChoice", "number", "ranked"], "description": "Explicit answer type" },
+    "unitLabel": { "type": ["string", "null"], "description": "Units for numeric answers" },
+    "scoringDivisor": { "const": 1, "description": "Divisor used in scoring; fixed for this game" },
+    "roundingMode": { "const": "nearest", "description": "Rounding method for numeric scoring; fixed" },
+    "roundPenaltyValue": { "const": 5, "description": "Penalty value applied for rounding" },
+    "fixedPenalty": { "const": 5, "description": "Fixed penalty applied when rules require it" },
+    "scoringMode": { "const": "direct_penalty_entry", "description": "How penalties are applied" },
+    "scoringOutcomeType": { "const": "exact_match_else_fixed_penalty", "description": "Outcome type used in scoring" },
+    "sourceLabel": { "const": "generated:Put Your Points", "description": "Origin label" },
+    "addedBy": { "const": "ChatGPT", "description": "Author of the question" },
+    "originalSheet": { "type": ["string", "null"], "description": "If imported from another sheet" },
+    "originalQuestionType": { "type": ["string", "null"], "description": "If imported, the original question type" }
+  },
+  "additionalProperties": false
+}

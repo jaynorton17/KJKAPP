@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Normal Game Question",
+  "type": "object",
+  "required": [
+    "sheet",
+    "game",
+    "question",
+    "category",
+    "questionType",
+    "active",
+    "defaultAnswerType",
+    "answerType",
+    "sourceLabel",
+    "addedBy"
+  ],
+  "properties": {
+    "sheet": { "const": "Questions", "description": "Spreadsheet tab name" },
+    "game": { "const": "Normal Game", "description": "Game name" },
+    "question": { "type": "string", "minLength": 1, "description": "Player‑facing question" },
+    "category": { "type": "string", "enum": [
+      "Affection", "Communication", "Everyday Life", "Memories", "Future", "Money", "Habits", "Family & Friends", "Playful", "Spicy"
+    ] },
+    "questionType": { "type": "string", "enum": [
+      "Favourite", "Fill in the Blank", "Multiple Choice", "Numeric", "Open Answer", "Pet Peeve", "Preference", "Ranked / Top 3", "Ranking", "Rating", "Text Answer", "True or False", "Who is more likely to", "Would you rather", "Sort Into Order"
+    ] },
+    "options": { "type": ["string", "null"], "description": "Pipe‑separated options for choice questions" },
+    "correctAnswer": { "type": ["string", "null"], "description": "Factual answer; unused in this game" },
+    "active": { "const": "Yes" },
+    "intensity": { "type": ["string", "null"], "pattern": "^[1-5]$", "description": "Numeric intensity 1–5; may be blank" },
+    "tone": { "type": ["string", "null"], "enum": [
+      "Warm", "Funny", "Playful", "Cheeky", "Deep", "Spicy", "Reflective", "Competitive"
+    ], "description": "Mood of the question" },
+    "relationshipArea": { "type": ["string", "null"], "enum": [
+      "Trust", "Intimacy", "Communication", "Memories", "Lifestyle", "Conflict", "Future"
+    ], "description": "Aspect of the relationship" },
+    "tags": { "type": ["string", "null"], "description": "Pipe‑separated keywords" },
+    "notes": { "type": ["string", "null"], "description": "Internal notes" },
+    "memoryLaneMode": { "type": ["string", "null"], "enum": ["memoryPrompt", "pastAnswerRecall"], "description": "Used only in Memory Lane" },
+    "avoidIf": { "type": ["string", "null"], "description": "Conditions under which to avoid this question" },
+    "gameSuitability": { "type": ["string", "null"], "description": "Alternative games where this question could work" },
+    "aiUseCase": { "type": ["string", "null"], "description": "AI use case tags" },
+    "repeatGroup": { "type": ["string", "null"], "description": "Repeat group identifier" },
+    "defaultAnswerType": { "type": "string", "enum": ["text", "multipleChoice", "number", "ranked"], "description": "Default answer type inferred from question type" },
+    "answerType": { "type": "string", "enum": ["text", "multipleChoice", "number", "ranked"], "description": "Answer type" },
+    "unitLabel": { "type": ["string", "null"], "description": "Units for numeric questions" },
+    "scoringDivisor": { "type": ["number", "null"], "description": "Divisor used in scoring; unused in this game" },
+    "roundingMode": { "type": ["string", "null"], "enum": ["nearest", "up", "down"], "description": "Rounding mode; unused in this game" },
+    "roundPenaltyValue": { "type": ["number", "null"], "description": "Penalty for rounding; unused" },
+    "fixedPenalty": { "type": ["number", "null"], "description": "Fixed penalty; unused" },
+    "scoringMode": { "type": ["string", "null"], "description": "Scoring mode; unused" },
+    "scoringOutcomeType": { "type": ["string", "null"], "description": "Scoring outcome type; unused" },
+    "sourceLabel": { "const": "generated:Normal Game", "description": "Origin label" },
+    "addedBy": { "const": "ChatGPT", "description": "Creator" },
+    "originalSheet": { "type": ["string", "null"], "description": "If imported from another sheet" },
+    "originalQuestionType": { "type": ["string", "null"], "description": "Original question type if imported" }
+  },
+  "additionalProperties": false
+}

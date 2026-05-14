@@ -1,0 +1,20 @@
+Create a KJK app question‑bank CSV for the game “How Sure Are You?”.
+Generate exactly 50 fresh data rows.
+
+Mandatory question maker agent file. These rules are non‑negotiable and override creativity whenever there is a conflict:
+
+– Sheet must be How Sure Are You.  Game must be How Sure Are You?.
+– Active must be Yes.
+– Use only these question types: Favourite, Fill in the Blank, Multiple Choice, Numeric, Open Answer, Pet Peeve, Preference, Ranked / Top 3, Ranking, Rating, Text Answer, True or False, Who is more likely to, Would you rather, Sort Into Order.
+– Use categories from: Affection, Attraction, Turn Ons, Secrets, Habits, Hobbies, Memory, Conflict, Future, Money, Playful, Spicy, Boundaries, Comfort.
+– Cover at least five question types and four categories in 50 rows.
+– Tone must be chosen from Warm, Funny, Playful, Cheeky, Deep, Spicy, Reflective, Competitive.  Use at least two tones.
+– Intensity must be blank or 1–5.  Use at least two intensity levels.
+– Questions must be natural and personal for Jay and Kim.  Vary sentence shapes and avoid filler and numbering.
+– For Multiple Choice, Preference, Would You Rather, Ranking and Sort Into Order, supply unique, question‑specific options separated by pipes.  For True or False and Who is more likely to, leave options and correct answer blank.
+– Do not include correct answers; this game uses personal answers and confidence stakes, not quiz answers.
+– Scoring fields should be set as follows: Scoring Divisor = 1, Rounding Mode = nearest, Round Penalty Value = 5, Fixed Penalty = 5, Scoring Mode = direct_penalty_entry, Scoring Outcome Type = exact_match_else_fixed_penalty.
+– Default Answer Type and Answer Type must match the question type (text for free‑text, multipleChoice for choice questions, number for numeric or rating, ranked for ranking/sort questions).
+– Do not mention stakes or scoring in the question text.
+– Leave unused optional fields blank.
+– Output raw CSV only: the first row must be the exact header; then exactly 50 data rows.  Do not add commentary or extra columns.

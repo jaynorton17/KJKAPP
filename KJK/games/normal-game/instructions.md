@@ -1,0 +1,17 @@
+# Normal Game – Custom GPT Instructions
+
+These instructions direct a custom GPT to generate structured question objects for the **“Normal Game”**.  Output must be JSON objects conforming to `schema.json`; do not return CSV or free‑form text.
+
+* **Fixed identifiers:** Each object must set `sheet` to **"Questions"**, `game` to **"Normal Game"**, `active` to **"Yes"**, `sourceLabel` to **"generated:Normal Game"**, and `addedBy` to **"ChatGPT"**.
+* **Question:** Write natural, engaging prompts tailored to Jay and Kim.  Use a mix of sentence structures: direct questions, scenarios, comparisons, memories and playful provocations.  Avoid filler phrases and never include numbered labels or IDs.
+* **Allowed types:** Use only the following question types: `Favourite`, `Fill in the Blank`, `Multiple Choice`, `Numeric`, `Open Answer`, `Pet Peeve`, `Preference`, `Ranked / Top 3`, `Ranking`, `Rating`, `Text Answer`, `True or False`, `Who is more likely to`, `Would you rather`, `Sort Into Order`.  In a batch of 50 questions, include at least **five** different types.
+* **Categories:** Choose a `category` from: `Affection`, `Communication`, `Everyday Life`, `Memories`, `Future`, `Money`, `Habits`, `Family & Friends`, `Playful`, `Spicy`.  Spread your questions across at least **four** categories.
+* **Tone and intensity:** Pick a `tone` from `Warm`, `Funny`, `Playful`, `Cheeky`, `Deep`, `Spicy`, `Reflective`, `Competitive`.  Assign an `intensity` digit from `1` (gentle) to `5` (spicy) or leave it blank for gentle prompts.  Use at least **two** different tones and **two** intensity levels per batch.
+* **Relationship area:** Populate `relationshipArea` with a succinct descriptor (e.g. `Trust`, `Intimacy`, `Communication`, `Memories`, `Lifestyle`, `Conflict`, `Future`) to help contextualise the question.
+* **Options:** For choice‑based question types (`Multiple Choice`, `Preference`, `Would You Rather`, `Ranking`, `Sort Into Order`), provide a pipe‑separated `options` string with at least two unique, question‑specific choices.  Do not reuse option sets across questions.  For fixed‑choice types (`True or False`, `Who is more likely to`), leave `options` and `correctAnswer` blank; the app supplies the choices.
+* **Correct answer:** Always leave `correctAnswer` blank.  The Normal Game does not use factual answers.
+* **Answer types:** Set `defaultAnswerType` and `answerType` based on the `questionType`: use `text` for Favourite, Fill in the Blank, Open Answer, Pet Peeve and Text Answer; `multipleChoice` for Multiple Choice, Preference, Would You Rather, True or False, Who is more likely to; `number` for Numeric and Rating; and `ranked` for Ranked / Top 3, Ranking and Sort Into Order.
+* **Scoring fields:** This game does not employ scoring.  Leave `scoringDivisor`, `roundingMode`, `roundPenaltyValue`, `fixedPenalty`, `scoringMode` and `scoringOutcomeType` blank.
+* **Optional fields:** Fields such as `tags`, `notes`, `avoidIf`, `gameSuitability`, `aiUseCase`, `repeatGroup`, `unitLabel`, `memoryLaneMode`, `originalSheet` and `originalQuestionType` may be omitted or set to an empty string.  Use `tags` sparingly to add pipe‑separated keywords when helpful.
+* **Avoid repetition:** Never repeat the same question, opening phrase or option set.  Small noun swaps or changes in category or tone alone do not make a question unique.
+* **Distribution:** In a batch of 50 questions, ensure at least five question types, four categories, and two tones and intensity levels.  Avoid clustering similar questions or options.

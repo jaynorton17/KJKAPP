@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Quick Fire Quiz Question",
+  "type": "object",
+  "required": [
+    "sheet",
+    "game",
+    "question",
+    "category",
+    "questionType",
+    "active",
+    "defaultAnswerType",
+    "answerType",
+    "correctAnswer",
+    "sourceLabel",
+    "addedBy"
+  ],
+  "properties": {
+    "sheet": { "const": "Quiz", "description": "Spreadsheet tab name" },
+    "game": { "const": "Quick Fire Quiz", "description": "Game name" },
+    "question": { "type": "string", "minLength": 1, "description": "Quiz question" },
+    "category": { "type": "string", "enum": [
+      "Personal Trivia", "Relationship History", "Dates & Places", "Preferences", "Memories", "Funny Facts", "Cheeky Facts", "Household"
+    ] },
+    "questionType": { "type": "string", "enum": [
+      "Multiple Choice", "True or False", "Text Answer"
+    ] },
+    "options": { "type": ["string", "null"], "description": "Pipe‑separated answer choices" },
+    "correctAnswer": { "type": "string", "minLength": 1, "description": "Factual correct answer" },
+    "active": { "const": "Yes" },
+    "intensity": { "type": ["string", "null"], "pattern": "^[1-5]$", "description": "Intensity 1–5; optional" },
+    "tone": { "type": ["string", "null"], "enum": [
+      "Warm", "Funny", "Playful", "Cheeky", "Deep", "Spicy", "Reflective", "Competitive"
+    ], "description": "Mood of the question" },
+    "relationshipArea": { "type": ["string", "null"], "enum": [
+      "Trust", "Intimacy", "Communication", "Memories", "Lifestyle", "Conflict", "Future"
+    ], "description": "Area of relationship the quiz touches" },
+    "tags": { "type": ["string", "null"], "description": "Keywords" },
+    "notes": { "type": ["string", "null"], "description": "Internal notes" },
+    "memoryLaneMode": { "type": ["string", "null"], "enum": ["memoryPrompt", "pastAnswerRecall"], "description": "Unused in this game" },
+    "avoidIf": { "type": ["string", "null"], "description": "Avoid conditions" },
+    "gameSuitability": { "type": ["string", "null"], "description": "Alternative games" },
+    "aiUseCase": { "type": ["string", "null"], "description": "AI use case tags" },
+    "repeatGroup": { "type": ["string", "null"], "description": "Repeat group identifier" },
+    "defaultAnswerType": { "type": "string", "enum": ["text", "multipleChoice"], "description": "Default answer type" },
+    "answerType": { "type": "string", "enum": ["text", "multipleChoice"], "description": "Explicit answer type" },
+    "unitLabel": { "type": ["string", "null"], "description": "Units for numeric answers (unused here)" },
+    "scoringDivisor": { "type": ["number", "null"], "description": "Unused scoring" },
+    "roundingMode": { "type": ["string", "null"], "enum": ["nearest", "up", "down"], "description": "Unused scoring" },
+    "roundPenaltyValue": { "type": ["number", "null"], "description": "Unused scoring" },
+    "fixedPenalty": { "type": ["number", "null"], "description": "Unused scoring" },
+    "scoringMode": { "type": ["string", "null"], "description": "Unused scoring" },
+    "scoringOutcomeType": { "type": ["string", "null"], "description": "Unused scoring" },
+    "sourceLabel": { "const": "generated:Quick Fire Quiz", "description": "Origin label" },
+    "addedBy": { "const": "ChatGPT", "description": "Creator" },
+    "originalSheet": { "type": ["string", "null"], "description": "If imported from another sheet" },
+    "originalQuestionType": { "type": ["string", "null"], "description": "Original question type if imported" }
+  },
+  "additionalProperties": false
+}
