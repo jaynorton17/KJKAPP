@@ -1368,6 +1368,62 @@ const downloadTextFile = (filename, text, type = 'text/plain;charset=utf-8') => 
   link.remove();
   URL.revokeObjectURL(url);
 };
+const dedupeQuestionBankUploadResultByQuestion = (result = {}, targetBankType = 'game') => {
+  const normalizedTargetBankType = normalizeQuestionBankType(targetBankType);
+  const previewRows = Array.isArray(result?.preview) ? result.preview : [];
+  const seenQuestionRows = new Map();
+  const keptIds = new Set();
+  let duplicateCount = 0;
+
+  const preview = previewRows.map((row) => {
+    const question = row?.question || null;
+    if (
+      !question
+      || row?.status === 'invalid'
+      || row?.status === 'inactive'
+      || row?.errors?.length
+      || normalizeQuestionBankType(question.bankType) !== normalizedTargetBankType
+    ) {
+      return row;
+    }
+    const questionKey = normalizeText(question.question).toLowerCase();
+    if (!questionKey) return row;
+    if (seenQuestionRows.has(questionKey)) {
+      duplicateCount += 1;
+      return {
+        ...row,
+        status: 'duplicate',
+        duplicateOfRow: seenQuestionRows.get(questionKey),
+      };
+    }
+    seenQuestionRows.set(questionKey, Number(row?.index || 0) + 2);
+    if (question.id) keptIds.add(question.id);
+    return row;
+  });
+
+  const keepQuestion = (question) => {
+    if (!question) return false;
+    if (question.id && keptIds.size) return keptIds.has(question.id);
+    const questionKey = normalizeText(question.question).toLowerCase();
+    if (!questionKey) return true;
+    if (!seenQuestionRows.has(questionKey)) {
+      seenQuestionRows.set(questionKey, 0);
+      return true;
+    }
+    return false;
+  };
+
+  return {
+    ...result,
+    preview,
+    imports: (result?.imports || []).filter(keepQuestion),
+    updates: (result?.updates || []).filter(keepQuestion),
+    summary: {
+      ...(result?.summary || {}),
+      duplicates: Number(result?.summary?.duplicates || 0) + duplicateCount,
+    },
+  };
+};
 const parseQuestionBankCsvForTarget = ({
   rawText,
   existingQuestions = [],
@@ -1386,7 +1442,7 @@ const parseQuestionBankCsvForTarget = ({
   const resolvedSourceLabel = sourceLabel || `firestoreUpload:${target.sheetName}`;
 
   if (normalizedTargetBankType === 'quiz') {
-    return parseGoogleSheetQuizImport({
+    return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetQuizImport({
       rawText,
       existingQuestions: nextExistingQuestions,
       overwriteExisting,
@@ -1394,10 +1450,10 @@ const parseQuestionBankCsvForTarget = ({
       sourceLabel: resolvedSourceLabel,
       allowIdMatch,
       allowTemplateMatch,
-    });
+    }), normalizedTargetBankType);
   }
   if (normalizedTargetBankType === THIS_OR_THAT_GAME_MODE) {
-    return parseGoogleSheetThisOrThatImport({
+    return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetThisOrThatImport({
       rawText,
       existingQuestions: nextExistingQuestions,
       overwriteExisting,
@@ -1405,10 +1461,10 @@ const parseQuestionBankCsvForTarget = ({
       sourceLabel: resolvedSourceLabel,
       allowIdMatch,
       allowTemplateMatch,
-    });
+    }), normalizedTargetBankType);
   }
   if (normalizedTargetBankType === MOST_LIKELY_GAME_MODE) {
-    return parseGoogleSheetMostLikelyImport({
+    return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetMostLikelyImport({
       rawText,
       existingQuestions: nextExistingQuestions,
       overwriteExisting,
@@ -1416,10 +1472,10 @@ const parseQuestionBankCsvForTarget = ({
       sourceLabel: resolvedSourceLabel,
       allowIdMatch,
       allowTemplateMatch,
-    });
+    }), normalizedTargetBankType);
   }
   if (normalizedTargetBankType === PUT_YOUR_POINTS_GAME_MODE) {
-    return parseGoogleSheetPutYourPointsImport({
+    return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetPutYourPointsImport({
       rawText,
       existingQuestions: nextExistingQuestions,
       overwriteExisting,
@@ -1427,10 +1483,10 @@ const parseQuestionBankCsvForTarget = ({
       sourceLabel: resolvedSourceLabel,
       allowIdMatch,
       allowTemplateMatch,
-    });
+    }), normalizedTargetBankType);
   }
   if (normalizedTargetBankType === SECRET_AUCTION_GAME_MODE) {
-    return parseGoogleSheetModeImport({
+    return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetModeImport({
       rawText,
       existingQuestions: nextExistingQuestions,
       overwriteExisting,
@@ -1442,10 +1498,10 @@ const parseQuestionBankCsvForTarget = ({
       source: 'firestoreUploadSecretAuction',
       defaultCategory: HOW_SURE_ARE_YOU_GAME_NAME,
       defaultRoundType: 'text',
-    });
+    }), normalizedTargetBankType);
   }
   if (normalizedTargetBankType === TRUE_FALSE_GAME_MODE) {
-    return parseGoogleSheetTrueFalseImport({
+    return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetTrueFalseImport({
       rawText,
       existingQuestions: nextExistingQuestions,
       overwriteExisting,
@@ -1453,10 +1509,10 @@ const parseQuestionBankCsvForTarget = ({
       sourceLabel: resolvedSourceLabel,
       allowIdMatch,
       allowTemplateMatch,
-    });
+    }), normalizedTargetBankType);
   }
   if (normalizedTargetBankType === RED_FLAG_GREEN_FLAG_GAME_MODE) {
-    return parseGoogleSheetModeImport({
+    return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetModeImport({
       rawText,
       existingQuestions: nextExistingQuestions,
       overwriteExisting,
@@ -1469,10 +1525,10 @@ const parseQuestionBankCsvForTarget = ({
       defaultCategory: 'Red Flag Green Flag',
       defaultRoundType: 'multipleChoice',
       fixedOptions: RED_FLAG_GREEN_FLAG_OPTIONS,
-    });
+    }), normalizedTargetBankType);
   }
   if (normalizedTargetBankType === COMPATIBILITY_METER_GAME_MODE) {
-    return parseGoogleSheetModeImport({
+    return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetModeImport({
       rawText,
       existingQuestions: nextExistingQuestions,
       overwriteExisting,
@@ -1484,10 +1540,10 @@ const parseQuestionBankCsvForTarget = ({
       source: 'firestoreUploadCompatibility',
       defaultCategory: 'Compatibility',
       defaultRoundType: 'text',
-    });
+    }), normalizedTargetBankType);
   }
   if (normalizedTargetBankType === MEMORY_LANE_GAME_MODE) {
-    return parseGoogleSheetModeImport({
+    return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetModeImport({
       rawText,
       existingQuestions: nextExistingQuestions,
       overwriteExisting,
@@ -1499,10 +1555,10 @@ const parseQuestionBankCsvForTarget = ({
       source: 'firestoreUploadMemoryLane',
       defaultCategory: 'Memory Lane',
       defaultRoundType: 'text',
-    });
+    }), normalizedTargetBankType);
   }
 
-  return parseGoogleSheetImport({
+  return dedupeQuestionBankUploadResultByQuestion(parseGoogleSheetImport({
     rawText,
     existingQuestions: nextExistingQuestions,
     overwriteExisting,
@@ -1510,7 +1566,7 @@ const parseQuestionBankCsvForTarget = ({
     sourceLabel: resolvedSourceLabel,
     allowIdMatch,
     allowTemplateMatch,
-  });
+  }), normalizedTargetBankType);
 };
 const validateQuestionBankUploadResult = (result, targetBankType = 'game') => {
   const validationConfig = getQuestionBankValidationConfig(targetBankType);
@@ -1527,6 +1583,7 @@ const validateQuestionBankUploadResult = (result, targetBankType = 'game') => {
 
   const activeRows = (result?.preview || []).filter((row) =>
     row?.status !== 'inactive'
+    && row?.status !== 'duplicate'
     && row?.status !== 'invalid'
     && !row?.errors?.length
     && row?.question?.id
@@ -1534,24 +1591,6 @@ const validateQuestionBankUploadResult = (result, targetBankType = 'game') => {
   );
   if (!activeRows.length) {
     throw new Error(`${target.gameName} upload did not contain any active valid questions.`);
-  }
-
-  const seenQuestionRows = new Map();
-  const duplicateRows = [];
-  activeRows.forEach((row) => {
-    const questionKey = normalizeText(row?.question?.question).toLowerCase();
-    if (!questionKey) return;
-    const rowNumber = Number(row?.index || 0) + 2;
-    if (seenQuestionRows.has(questionKey)) {
-      duplicateRows.push(`${seenQuestionRows.get(questionKey)} and ${rowNumber}`);
-    } else {
-      seenQuestionRows.set(questionKey, rowNumber);
-    }
-  });
-  if (duplicateRows.length) {
-    throw new Error(
-      `${target.gameName} upload contains duplicate question text. First duplicate row pairs: ${duplicateRows.slice(0, 5).join(', ')}.`,
-    );
   }
 
   const missingOptionRows = [];
@@ -1792,7 +1831,7 @@ const buildQuestionBankUploadPreflightReport = ({
     const questionKey = makeQuestionBankPreflightKey(question);
     if (questionKey) {
       if (questionRows.has(questionKey)) {
-        errors.push(`Rows ${questionRows.get(questionKey)} and ${rowNumber}: duplicate question text.`);
+        warnings.push(`Rows ${questionRows.get(questionKey)} and ${rowNumber}: duplicate question text will be skipped during upload.`);
       } else {
         questionRows.set(questionKey, rowNumber);
       }
