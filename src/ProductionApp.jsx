@@ -1904,6 +1904,80 @@ const buildQuestionBankUploadOutcomeQuestions = (result = {}) => {
     ...makeRows(result?.updates || [], 'Updated'),
   ];
 };
+const buildStructuredQuestionPreviewQuestions = (questions = []) =>
+  (Array.isArray(questions) ? questions : [])
+    .map((question, index) => ({
+      key: `Structured-${index}-${makeQuestionBankPreflightKey(question?.question || '')}`,
+      action: 'Queued',
+      question: normalizeText(question?.question),
+      category: normalizeText(question?.category),
+      type: normalizeText(question?.questionType || formatQuestionBankQuestionTypeForExport(question?.answerType || 'text')),
+    }))
+    .filter((item) => item.question);
+const buildQuestionBankStructuredUploadCsv = (questions = [], target = QUESTION_BANK_SYNC_TARGETS[0]) => {
+  const rows = (Array.isArray(questions) ? questions : []).map((question) => {
+    const questionType = normalizeText(question?.questionType || formatQuestionBankQuestionTypeForExport(question?.roundType || 'text'));
+    const roundType = normalizeQuestionType(questionType || question?.roundType, 'text');
+    const defaultAnswerType = normalizeText(question?.defaultAnswerType || getDefaultAnswerType(roundType));
+    const answerType = normalizeText(question?.answerType || defaultAnswerType);
+    const row = {
+      Sheet: normalizeText(question?.sheet || target.sheetName || ''),
+      Game: normalizeText(question?.game || target.gameName || ''),
+      Question: normalizeText(question?.question || ''),
+      Category: normalizeText(question?.category || ''),
+      'Question Type': questionType || formatQuestionBankQuestionTypeForExport(roundType),
+      Options: joinQuestionBankExportList(question?.options ?? question?.multipleChoiceOptions ?? ''),
+      'Correct Answer': normalizeText(question?.correctAnswer || ''),
+      Active: normalizeText(question?.active || 'Yes'),
+      Intensity: question?.intensity == null || question?.intensity === '' ? '' : String(question.intensity),
+      Tone: normalizeText(question?.tone || ''),
+      'Relationship Area': normalizeText(question?.relationshipArea || ''),
+      Tags: joinQuestionBankExportList(question?.tags || ''),
+      Notes: normalizeText(question?.notes || ''),
+      'Memory Lane Mode': normalizeText(question?.memoryLaneMode || ''),
+      'Avoid If': joinQuestionBankExportList(question?.avoidIf || ''),
+      'Game Suitability': joinQuestionBankExportList(question?.gameSuitability || ''),
+      'AI Use Case': joinQuestionBankExportList(question?.aiUseCase || ''),
+      'Repeat Group': normalizeText(question?.repeatGroup || ''),
+      'Default Answer Type': defaultAnswerType,
+      'Answer Type': answerType,
+      'Unit Label': normalizeText(question?.unitLabel || ''),
+      'Scoring Divisor': question?.scoringDivisor == null || question?.scoringDivisor === '' ? '' : String(question.scoringDivisor),
+      'Rounding Mode': normalizeText(question?.roundingMode || ''),
+      'Round Penalty Value': question?.roundPenaltyValue == null || question?.roundPenaltyValue === '' ? '' : String(question.roundPenaltyValue),
+      'Fixed Penalty': question?.fixedPenalty == null || question?.fixedPenalty === '' ? '' : String(question.fixedPenalty),
+      'Scoring Mode': normalizeText(question?.scoringMode || ''),
+      'Scoring Outcome Type': normalizeText(question?.scoringOutcomeType || ''),
+      'Source Label': normalizeText(question?.sourceLabel || `generated:${target.gameName || target.sheetName || 'Question Bank'}`),
+      'Added By': normalizeText(question?.addedBy || 'ChatGPT'),
+      'Original Sheet': normalizeText(question?.originalSheet || question?.sheet || target.sheetName || ''),
+      'Original Question Type': normalizeText(question?.originalQuestionType || questionType || formatQuestionBankQuestionTypeForExport(roundType)),
+    };
+    return QUESTION_BANK_UPLOAD_COLUMNS.map((column) => escapeCsvCell(row[column] ?? '')).join(',');
+  });
+  return `${QUESTION_BANK_UPLOAD_COLUMNS.map(escapeCsvCell).join(',')}\n${rows.join('\n')}${rows.length ? '\n' : ''}`;
+};
+const parseQuestionBankStructuredUploadJson = (rawText = '') => {
+  const parsed = JSON.parse(String(rawText || ''));
+  if (!Array.isArray(parsed)) {
+    throw new Error('Structured upload JSON must be an array of question objects.');
+  }
+  if (!parsed.length) {
+    throw new Error('Structured upload JSON is empty.');
+  }
+  if (parsed.length > 20) {
+    throw new Error(`Structured upload JSON has ${parsed.length} rows. Paste 20 questions or fewer at a time.`);
+  }
+  parsed.forEach((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`Row ${index + 1} must be a JSON object.`);
+    }
+    if (!normalizeText(entry.question)) {
+      throw new Error(`Row ${index + 1} is missing "question".`);
+    }
+  });
+  return parsed;
+};
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const MOST_LIKELY_STARTER_QUESTIONS = [
   'Who is most likely to turn a tiny plan into a full adventure?',
@@ -8080,6 +8154,7 @@ function LobbyScreen({
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
   const [questionUploadBankType, setQuestionUploadBankType] = useState('game');
   const [questionUploadMode, setQuestionUploadMode] = useState('add');
+  const [questionUploadJsonText, setQuestionUploadJsonText] = useState('');
   const [questionUploadDraft, setQuestionUploadDraft] = useState(null);
   const [questionUploadReport, setQuestionUploadReport] = useState(null);
   const [questionUploadProgress, setQuestionUploadProgress] = useState({ status: 'idle', percent: 0, message: '' });
@@ -9568,6 +9643,7 @@ function LobbyScreen({
     'When I give you a current-questions CSV, treat every existing Question and Options set as forbidden. Return only fresh rows that are ready to upload.',
   ].join('\n'), [questionUploadTarget]);
   const clearQuestionUploadSelection = () => {
+    setQuestionUploadJsonText('');
     setQuestionUploadDraft(null);
     setQuestionUploadReport(null);
     setQuestionUploadProgress({ status: 'idle', percent: 0, message: '' });
@@ -9983,6 +10059,7 @@ function LobbyScreen({
         fileSize: file.size,
         rawText,
         rowCount,
+        previewQuestions: buildQuestionBankUploadOutcomeQuestions(report.result),
       });
       applyQuestionUploadReport(report);
     } catch (error) {
@@ -9992,6 +10069,39 @@ function LobbyScreen({
         status: 'error',
         percent: 0,
         message: error?.message || 'Could not read that CSV file.',
+      });
+    }
+  };
+  const handleConvertQuestionUploadJson = () => {
+    const rawJson = String(questionUploadJsonText || '').trim();
+    if (!rawJson) {
+      setQuestionUploadProgress({ status: 'error', percent: 0, message: 'Paste a JSON array first.' });
+      return;
+    }
+    setQuestionUploadOutcomeQuestions([]);
+    try {
+      const structuredQuestions = parseQuestionBankStructuredUploadJson(rawJson);
+      const rawText = buildQuestionBankStructuredUploadCsv(structuredQuestions, questionUploadTarget);
+      const fileName = `${String(questionUploadTarget.sheetName || questionUploadTarget.gameName || 'question-bank').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}-structured.json`;
+      const report = buildQuestionUploadReport({ rawText, fileName });
+      const rowCount = report.rowCount || structuredQuestions.length;
+      const previewQuestions = buildStructuredQuestionPreviewQuestions(structuredQuestions);
+      setQuestionUploadDraft({
+        fileName,
+        fileSize: rawJson.length,
+        rawText,
+        rowCount,
+        sourceType: 'structured-json',
+        previewQuestions,
+      });
+      applyQuestionUploadReport(report);
+    } catch (error) {
+      setQuestionUploadDraft(null);
+      setQuestionUploadReport(null);
+      setQuestionUploadProgress({
+        status: 'error',
+        percent: 0,
+        message: error?.message || 'Could not parse that JSON batch.',
       });
     }
   };
@@ -12191,6 +12301,19 @@ function LobbyScreen({
                       <Button className="ghost-button compact" onClick={handleCopyQuestionUploadPrompt} disabled={questionBankGenerationBusy}>
                         Copy Prompt
                       </Button>
+                      <label className="field field-wide question-bank-upload-json-field">
+                        <span>Structured JSON</span>
+                        <textarea
+                          value={questionUploadJsonText}
+                          onChange={(event) => setQuestionUploadJsonText(event.target.value)}
+                          placeholder='Paste a JSON array of question objects here, then click Convert JSON'
+                          rows={10}
+                          disabled={questionBankGenerationBusy}
+                        />
+                      </label>
+                      <Button className="ghost-button compact" onClick={handleConvertQuestionUploadJson} disabled={questionBankGenerationBusy || !questionUploadJsonText.trim()}>
+                        Convert JSON
+                      </Button>
                       <input
                         ref={questionUploadInputRef}
                         className="question-bank-upload-input"
@@ -12310,7 +12433,7 @@ function LobbyScreen({
                     </div>
                     <p>{questionUploadProgress.message}</p>
                     {questionUploadDraft ? (
-                      <small>{`${questionUploadDraft.rowCount} generated row${questionUploadDraft.rowCount === 1 ? '' : 's'} checked for ${questionUploadTarget.gameName}.`}</small>
+                      <small>{`${questionUploadDraft.rowCount} ${questionUploadDraft.sourceType === 'structured-json' ? 'pasted' : 'generated'} row${questionUploadDraft.rowCount === 1 ? '' : 's'} checked for ${questionUploadTarget.gameName}.`}</small>
                     ) : null}
                     {questionUploadOutcomeQuestions.length ? (
                       <div className="question-bank-upload-outcome" aria-label="Questions added in this upload">
@@ -12320,6 +12443,23 @@ function LobbyScreen({
                         </div>
                         <ol>
                           {questionUploadOutcomeQuestions.map((item) => (
+                            <li key={item.key}>
+                              <span>{item.action}</span>
+                              <p>{item.question}</p>
+                              <small>{[item.category, item.type].filter(Boolean).join(' · ')}</small>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    ) : null}
+                    {!questionUploadOutcomeQuestions.length && questionUploadDraft?.previewQuestions?.length ? (
+                      <div className="question-bank-upload-outcome question-bank-upload-preview" aria-label="Questions queued from structured JSON">
+                        <div className="question-bank-upload-outcome-head">
+                          <strong>{questionUploadDraft.previewQuestions.length} queued from paste</strong>
+                          <span>{questionUploadTarget.gameName}</span>
+                        </div>
+                        <ol>
+                          {questionUploadDraft.previewQuestions.map((item) => (
                             <li key={item.key}>
                               <span>{item.action}</span>
                               <p>{item.question}</p>
