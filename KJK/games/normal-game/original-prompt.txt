@@ -1,0 +1,17 @@
+Create a KJK app question‑bank CSV for the Normal Game.
+Generate exactly 50 fresh data rows.
+
+Mandatory rules:
+– Sheet must be Questions.  Game must be Normal Game.
+– Active must be Yes.
+– Use these question types only: Favourite, Fill in the Blank, Multiple Choice, Numeric, Open Answer, Pet Peeve, Preference, Ranked / Top 3, Ranking, Rating, Text Answer, True or False, Who is more likely to, Would you rather, Sort Into Order.
+– Categories must come from: Affection, Communication, Everyday Life, Memories, Future, Money, Habits, Family & Friends, Playful, Spicy.
+– Use at least five question types and four categories in a 50‑row batch.
+– Tone must be a short mood word: Warm, Funny, Playful, Cheeky, Deep, Spicy, Reflective, Competitive.  Use at least two tones.
+– Intensity must be blank or 1–5; use at least two intensity levels.
+– Questions must be unique, natural, and ready for couples.  Avoid filler phrases, numbering and duplicates.
+– For Multiple Choice, Preference, Would You Rather, Ranking and Sort Into Order, provide unique options separated by pipes.  For True or False and Who is more likely to, leave Options and Correct Answer blank.
+– Do not include a correct answer; this game is not a quiz.
+– Default Answer Type and Answer Type should match the question type (text for free‑text prompts, multipleChoice for choice prompts, number for numeric or rating, ranked for ranking/sort prompts).
+– Leave unused optional fields blank.
+– Return raw CSV only: first row must be the exact header and exactly 50 data rows follow.  No extra commentary or columns.

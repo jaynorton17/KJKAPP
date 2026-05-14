@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "This or That Question",
+  "type": "object",
+  "required": [
+    "sheet",
+    "game",
+    "question",
+    "category",
+    "questionType",
+    "active",
+    "defaultAnswerType",
+    "answerType",
+    "sourceLabel",
+    "addedBy"
+  ],
+  "properties": {
+    "sheet": { "const": "This or That", "description": "Spreadsheet tab name" },
+    "game": { "const": "This or That", "description": "Game name" },
+    "question": { "type": "string", "minLength": 1, "description": "Preference prompt" },
+    "category": { "type": "string", "enum": [
+      "Date Night", "Comfort", "Flirting", "Food & Drink", "Travel", "Home Life", "Conflict Style", "Spicy", "Future"
+    ] },
+    "questionType": { "type": "string", "enum": ["Preference"] },
+    "options": { "type": "string", "description": "Pipe‑separated options", "minLength": 1 },
+    "correctAnswer": { "type": ["string", "null"], "description": "Always blank for this game" },
+    "active": { "const": "Yes" },
+    "intensity": { "type": ["string", "null"], "pattern": "^[1-5]$", "description": "Intensity 1–5; optional" },
+    "tone": { "type": ["string", "null"], "enum": [
+      "Warm", "Funny", "Playful", "Cheeky", "Deep", "Spicy", "Reflective", "Competitive"
+    ], "description": "Mood of the question" },
+    "relationshipArea": { "type": ["string", "null"], "enum": [
+      "Trust", "Intimacy", "Communication", "Memories", "Lifestyle", "Conflict", "Future"
+    ], "description": "Aspect of relationship" },
+    "tags": { "type": ["string", "null"], "description": "Keywords" },
+    "notes": { "type": ["string", "null"], "description": "Notes" },
+    "memoryLaneMode": { "type": ["string", "null"], "enum": ["memoryPrompt", "pastAnswerRecall"], "description": "Unused" },
+    "avoidIf": { "type": ["string", "null"], "description": "Avoid conditions" },
+    "gameSuitability": { "type": ["string", "null"], "description": "Other games" },
+    "aiUseCase": { "type": ["string", "null"], "description": "AI use case tags" },
+    "repeatGroup": { "type": ["string", "null"], "description": "Repeat group" },
+    "defaultAnswerType": { "const": "multipleChoice", "description": "Default answer type is multipleChoice" },
+    "answerType": { "const": "multipleChoice", "description": "Answer type is multipleChoice" },
+    "unitLabel": { "type": ["string", "null"], "description": "Units; unused" },
+    "scoringDivisor": { "type": ["number", "null"], "description": "Unused scoring" },
+    "roundingMode": { "type": ["string", "null"], "enum": ["nearest", "up", "down"], "description": "Unused scoring" },
+    "roundPenaltyValue": { "type": ["number", "null"], "description": "Unused scoring" },
+    "fixedPenalty": { "type": ["number", "null"], "description": "Unused scoring" },
+    "scoringMode": { "type": ["string", "null"], "description": "Unused scoring" },
+    "scoringOutcomeType": { "type": ["string", "null"], "description": "Unused scoring" },
+    "sourceLabel": { "const": "generated:This or That", "description": "Origin label" },
+    "addedBy": { "const": "ChatGPT", "description": "Creator" },
+    "originalSheet": { "type": ["string", "null"], "description": "If imported" },
+    "originalQuestionType": { "type": ["string", "null"], "description": "Original question type" }
+  },
+  "additionalProperties": false
+}

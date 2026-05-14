@@ -23,6 +23,11 @@
 - `codexstore`: forfeits, redemption, AMA, diary, profile, private notes.
 - `codexui`: header, nav, pills, icons, spacing, responsiveness, CSS-only visual changes.
 
+## Clarification Rules
+- If the target element, feature, or screen is unclear, ask a concise clarification question before routing. Do not infer the element from nearby wording or from likely owner areas.
+- This applies especially when the user references positional or generic UI terms such as "left side", "right side", "boxes", "frame", "button", "wheel", "panel", or "section" without naming the exact feature/screen.
+- If the user says a request is for the quiz, route to `codexquiz` unless the request is purely CSS-only; for CSS-only quiz requests, use `codexui` and include `Coordinate with codexquiz` inside the paste-ready prompt.
+
 ## Allowed Edits
 - Documentation and owner setup files only, when explicitly requested.
 - Routing recommendations and ready-to-paste prompts.

@@ -7,62 +7,21 @@ import {
   ROUND_TYPE_LABEL,
 } from '../utils/game.js';
 import { parseQuestionImport } from '../utils/importers.js';
+import { QUESTION_TYPE_CONFIGS, getGoogleSheetQuestionTypeOptions } from '../utils/questionTypes.js';
 
 const categoryColorMap = CATEGORY_COLOR_MAP;
 const CUSTOM_CATEGORY_VALUE = '__custom__';
 
-const QUESTION_TYPE_DETAILS = {
-  numeric: {
-    title: 'Numeric',
-    summary: 'Great for totals, counts, amounts, or number guesses.',
-    playFlow: 'Later play uses the numeric helper flow.',
-  },
-  multipleChoice: {
-    title: 'Multiple Choice',
-    summary: 'Use this when the live round should present selectable options.',
-    playFlow: 'Later play opens the multiple choice UI.',
-  },
-  trueFalse: {
-    title: 'True or False',
-    summary: 'Built-in binary question type.',
-    playFlow: 'Later play uses a simple True / False choice flow.',
-  },
-  text: {
-    title: 'Text Answer',
-    summary: 'Open text response without preloading the answer now.',
-    playFlow: 'Later play uses the text answer UI.',
-  },
-  sortIntoOrder: {
-    title: 'Sort Into Order',
-    summary: 'Best for sequence or ordering rounds.',
-    playFlow: 'Later play uses the ordering/list flow.',
-  },
-  preference: {
-    title: 'Preference / This-or-That',
-    summary: 'For personal preference or side-vs-side prompts.',
-    playFlow: 'Later play uses the preference text flow.',
-  },
-  favourite: {
-    title: 'Favourite',
-    summary: 'Ask for a favourite item, place, person, or thing.',
-    playFlow: 'Later play uses the favourite text flow.',
-  },
-  petPeeve: {
-    title: 'Pet Peeve',
-    summary: 'Ask for annoyances, turn-offs, or irritations.',
-    playFlow: 'Later play uses the pet peeve text flow.',
-  },
-  ranked: {
-    title: 'Ranked / Top 3',
-    summary: 'For ranked lists, top 3 answers, or shortlist rounds.',
-    playFlow: 'Later play uses the ranked list flow.',
-  },
-  manual: {
-    title: 'Manual / Custom',
-    summary: 'Use when the host wants to judge the round live.',
-    playFlow: 'Later play goes straight to direct penalty entry.',
-  },
-};
+const QUESTION_TYPE_DETAILS = Object.fromEntries(
+  QUESTION_TYPE_CONFIGS.map((config) => [
+    config.id,
+    {
+      title: config.title,
+      summary: config.summary,
+      playFlow: config.playFlow,
+    },
+  ]),
+);
 
 const QUESTION_TYPE_BEHAVIOURS = {
   numeric: [
@@ -173,6 +132,22 @@ const QUESTION_TYPE_BEHAVIOURS = {
       hint: 'Judge the ranked list manually during play.',
       scoringMode: 'direct_penalty_entry',
       scoringOutcomeType: 'direct_manual',
+    },
+  ],
+  rating: [
+    {
+      id: 'type-default',
+      label: 'Manual judgement',
+      hint: 'Later play keeps ratings manual unless you override scoring.',
+      scoringMode: '',
+      scoringOutcomeType: '',
+    },
+    {
+      id: 'exact-match',
+      label: 'Exact match',
+      hint: 'Only the exact same rating gets zero later.',
+      scoringMode: 'direct_penalty_entry',
+      scoringOutcomeType: 'exact_match_else_fixed_penalty',
     },
   ],
   preference: [
@@ -323,18 +298,7 @@ const hasAdvancedValues = (draft) =>
       draft.scoringOutcomeType,
   );
 
-const GOOGLE_SHEET_TYPE_OPTIONS = [
-  'Numeric',
-  'Multiple Choice',
-  'True or False',
-  'Text Answer',
-  'Sort Into Order',
-  'Preference',
-  'Favourite',
-  'Pet Peeve',
-  'Ranked / Top 3',
-  'Manual / Custom',
-];
+const GOOGLE_SHEET_TYPE_OPTIONS = getGoogleSheetQuestionTypeOptions();
 
 const formatRelativeSyncTime = (value) => {
   if (!value) return 'Last synced never';

@@ -1,0 +1,16 @@
+# Compatibility Meter – Custom GPT Instructions
+
+These instructions define how to generate structured question objects for the **“Compatibility Meter”** game.  The generator must output JSON objects only.
+
+* **Identifiers:** Set `sheet` to **"Compatibility"** and `game` to **"Compatibility Meter"**.  Set `active` to **"Yes"**, `sourceLabel` to **"generated:Compatibility Meter"**, and `addedBy` to **"ChatGPT"**.
+* **Question:** Ask a question where each player provides a private answer and their answers can be compared for compatibility.  Questions may be about preferences, values, plans, feelings, or behaviours.  Use open‑ended phrasing or provide a set of options depending on the type.
+* **Question types:** Allowed `questionType` values for this game are: `Favourite`, `Fill in the Blank`, `Multiple Choice`, `Numeric`, `Open Answer`, `Pet Peeve`, `Preference`, `Ranked / Top 3`, `Ranking`, `Rating`, `Text Answer`, `True or False`, `Who is more likely to`, `Would you rather`, and `Sort Into Order`.  Use at least five different types in a batch when possible.
+* **Categories:** Choose a `category` from: `Practical`, `Romantic`, `Emotional`, `Lifestyle`, `Future`, `Conflict`, `Money`, `Intimacy`.  Cover a variety of categories.
+* **Options:** For choice‑based question types (`Multiple Choice`, `Preference`, `Would you rather`, `Ranking`, `Sort Into Order`), provide a pipe‑separated list of unique options relevant to the question.  Do not reuse option sets across questions.  For free‑text question types (`Favourite`, `Fill in the Blank`, `Open Answer`, `Pet Peeve`, `Ranked / Top 3`, `Text Answer`), leave `options` blank.  For numeric or rating types, leave `options` blank and use `unitLabel` if a unit is relevant.
+* **Correct answer:** Leave `correctAnswer` blank.  There is no factual answer for compatibility questions.
+* **Answer types:** Set `defaultAnswerType` and `answerType` according to the `questionType`: `text` for free‑text questions, `multipleChoice` for choice‑based and true/false types, `number` for numeric and rating, and `ranked` for ranking or sort‑into‑order questions.
+* **Tone and intensity:** Choose a `tone` (Warm, Funny, Playful, Cheeky, Deep, Spicy, Reflective, Competitive) and an `intensity` digit (1–5) or leave blank.  Mix light and serious questions.
+* **Relationship area:** Optionally set `relationshipArea` (e.g. Trust, Intimacy, Communication, Memories, Lifestyle, Conflict, Future).
+* **Optional fields:** Fields such as `tags`, `notes`, `avoidIf`, `gameSuitability`, `aiUseCase`, `repeatGroup`, `unitLabel`, `memoryLaneMode`, `originalSheet`, and `originalQuestionType` may be blank.  Use `unitLabel` when a numeric question has units (e.g. minutes, dollars, days).
+* **Avoid repetition:** Each question must be unique.  Do not repeat the same concept with minor variations.  Avoid overlapping option pools across questions.
+* **Distribution:** In a 50‑question batch, cover at least four categories, use at least five question types, and vary tone and intensity.

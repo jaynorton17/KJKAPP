@@ -1,0 +1,18 @@
+{
+  "sheet": "Quiz",
+  "game": "Quick Fire Quiz",
+  "question": "Where did Jay and Kim first say ‘I love you’?",
+  "category": "Relationship History",
+  "questionType": "Multiple Choice",
+  "options": "At the beach | On a mountain hike | Over video call | In a restaurant",
+  "correctAnswer": "In a restaurant",
+  "active": "Yes",
+  "intensity": "2",
+  "tone": "Warm",
+  "relationshipArea": "Memories",
+  "tags": "Firsts|Romance",
+  "defaultAnswerType": "multipleChoice",
+  "answerType": "multipleChoice",
+  "sourceLabel": "generated:Quick Fire Quiz",
+  "addedBy": "ChatGPT"
+}

@@ -1,0 +1,18 @@
+{
+  "sheet": "Questions",
+  "game": "Normal Game",
+  "question": "What is the other person's favourite small gesture that makes them feel loved during a busy day?",
+  "category": "Affection",
+  "questionType": "Favourite",
+  "options": null,
+  "correctAnswer": null,
+  "active": "Yes",
+  "intensity": "2",
+  "tone": "Warm",
+  "relationshipArea": "Intimacy",
+  "tags": "Gestures|Daily life",
+  "defaultAnswerType": "text",
+  "answerType": "text",
+  "sourceLabel": "generated:Normal Game",
+  "addedBy": "ChatGPT"
+}

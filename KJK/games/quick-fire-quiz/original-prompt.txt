@@ -1,0 +1,14 @@
+Create a KJK app question‑bank CSV for the game “Quick Fire Quiz”.
+Generate exactly 50 fresh data rows.
+
+Rules:
+– Sheet must be Quiz.  Game must be Quick Fire Quiz.
+– Active must be Yes.
+– Use only question types Multiple Choice, True or False and Text Answer.
+– Categories should be Personal Trivia, Relationship History, Dates & Places, Preferences, Memories, Funny Facts, Cheeky Facts or Household.
+– Every row must include a Correct Answer.  For multiple choice questions, include the correct answer among the options.  For true or false questions, set Correct Answer to True or False and leave Options blank.  For text answer questions, leave Options blank and supply a short factual Correct Answer.
+– Tone must be one of Warm, Funny, Playful, Cheeky, Deep, Spicy, Reflective or Competitive.  Intensity must be blank or a digit 1–5.
+– Use Default Answer Type and Answer Type values: multipleChoice for multiple choice and true or false questions, text for text answer questions.
+– Do not repeat questions or option sets.  Keep questions short for quick answering.
+– Leave unused optional columns blank.  Do not fill scoring fields; the quiz does not use them.
+– Return raw CSV only: header row followed by exactly 50 data rows.  No extra commentary or columns.
