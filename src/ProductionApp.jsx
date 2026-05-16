@@ -7538,6 +7538,92 @@ function Button({ children, className = 'ghost-button compact', ...props }) {
   );
 }
 
+const getQuestionSearchText = (question = {}) =>
+  [
+    question?.question,
+    question?.category,
+    question?.roundType,
+    question?.correctAnswer,
+    ...(parseAnswerList(question?.multipleChoiceOptions || question?.options || [])),
+  ]
+    .map((entry) => normalizeText(entry).toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+
+function QuickFireUnusedQuestionManager({
+  questions = [],
+  selectedIds = [],
+  onSelectedIdsChange,
+  onRemoveSelected,
+  isBusy = false,
+}) {
+  const [searchText, setSearchText] = useState('');
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const normalizedSearch = normalizeText(searchText).toLowerCase();
+  const visibleQuestions = useMemo(() => {
+    if (!normalizedSearch) return questions;
+    return questions.filter((question) => getQuestionSearchText(question).includes(normalizedSearch));
+  }, [normalizedSearch, questions]);
+  const visibleQuestionIds = useMemo(() => visibleQuestions.map((question) => question.id).filter(Boolean), [visibleQuestions]);
+  const selectedVisibleCount = visibleQuestionIds.filter((questionId) => selectedIdSet.has(questionId)).length;
+
+  const updateSelectedIds = (nextIds = []) => {
+    onSelectedIdsChange?.(mergeUniqueIds(nextIds));
+  };
+
+  const handleSelectChange = (event) => {
+    updateSelectedIds([...event.target.selectedOptions].map((option) => option.value).filter(Boolean));
+  };
+
+  const handleSelectVisible = () => {
+    updateSelectedIds([...selectedIds, ...visibleQuestionIds]);
+  };
+
+  const handleClearSelection = () => {
+    updateSelectedIds([]);
+  };
+
+  return (
+    <section className="quiz-unused-manager" aria-label="Unused Quick Fire questions">
+      <div className="quiz-unused-manager__head">
+        <div>
+          <p className="eyebrow">Question Filter</p>
+          <h3>Unused Quick Fire</h3>
+        </div>
+        <span className="status-pill">{questions.length} left</span>
+      </div>
+      <label className="field quiz-unused-manager__search">
+        <span>Search unused questions</span>
+        <input type="search" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search Jay, Kim, category, answer..." />
+      </label>
+      <label className="field quiz-unused-manager__select">
+        <span>{visibleQuestions.length ? `${visibleQuestions.length} matching` : 'No matches'}</span>
+        <select multiple value={selectedIds} onChange={handleSelectChange} disabled={isBusy || !questions.length} size={Math.min(8, Math.max(4, visibleQuestions.length || 4))}>
+          {visibleQuestions.map((question) => (
+            <option value={question.id} key={question.id}>
+              {`${question.category ? `${question.category}: ` : ''}${question.question || 'Untitled question'}`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="button-row quiz-unused-manager__actions">
+        <Button className="ghost-button compact" onClick={handleSelectVisible} disabled={isBusy || !visibleQuestionIds.length || selectedVisibleCount === visibleQuestionIds.length}>
+          Select Matches
+        </Button>
+        <Button className="ghost-button compact" onClick={handleClearSelection} disabled={isBusy || !selectedIds.length}>
+          Clear
+        </Button>
+        <Button className="primary-button compact" onClick={() => onRemoveSelected?.(selectedIds)} disabled={isBusy || !selectedIds.length}>
+          Remove Selected
+        </Button>
+      </div>
+      <p className="panel-copy quiz-unused-manager__copy">
+        {selectedIds.length ? `${selectedIds.length} selected. Removed questions leave the unused Quick Fire pool.` : 'Search a player name or word, select the matches, then remove them from the unused pool.'}
+      </p>
+    </section>
+  );
+}
+
 function useMediaQuery(query) {
   const [matches, setMatches] = useState(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return false;
@@ -21549,6 +21635,8 @@ function GameRoomView({
   onSetQuizAnswerResult,
   quizWagerDraft,
   setQuizWagerDraft,
+  unusedQuizQuestions = [],
+  onRemoveUnusedQuizQuestions,
 }) {
   const activePalette = PALETTES[loadThemeIndex() % PALETTES.length];
   const analytics = useMemo(() => calculateAnalytics(rounds), [rounds]);
@@ -21723,6 +21811,7 @@ function GameRoomView({
   const scoreboardColumnRef = useRef(null);
   const [chatColumnHeight, setChatColumnHeight] = useState(0);
   const [quizSidebarOpen, setQuizSidebarOpen] = useState(false);
+  const [selectedUnusedQuizQuestionIds, setSelectedUnusedQuizQuestionIds] = useState([]);
   const [noteModalRound, setNoteModalRound] = useState(null);
   const [questionNoteDraft, setQuestionNoteDraft] = useState('');
   const [mobileRoomChatOpen, setMobileRoomChatOpen] = useState(false);
@@ -21804,6 +21893,11 @@ function GameRoomView({
     setMobileHostDrawerOpen(false);
   }, [gameEnded, role]);
 
+  useEffect(() => {
+    const availableIds = new Set(unusedQuizQuestions.map((question) => question.id).filter(Boolean));
+    setSelectedUnusedQuizQuestionIds((current) => current.filter((questionId) => availableIds.has(questionId)));
+  }, [unusedQuizQuestions]);
+
   const closeRoomMenu = () => {
     roomMenuRef.current?.removeAttribute('open');
   };
@@ -21849,6 +21943,32 @@ function GameRoomView({
       </div>
     </details>
   );
+
+  const canManageUnusedQuizQuestions = Boolean(isAdmin && role === 'host' && isQuizGame && !gameEnded);
+  const renderQuickFireUnusedQuestionManager = () => (
+    canManageUnusedQuizQuestions ? (
+      <QuickFireUnusedQuestionManager
+        questions={unusedQuizQuestions}
+        selectedIds={selectedUnusedQuizQuestionIds}
+        onSelectedIdsChange={setSelectedUnusedQuizQuestionIds}
+        onRemoveSelected={async (questionIds) => {
+          const removed = await onRemoveUnusedQuizQuestions?.(questionIds);
+          if (removed) setSelectedUnusedQuizQuestionIds([]);
+        }}
+        isBusy={isBusy}
+      />
+    ) : null
+  );
+  const quickFireUnusedQuestionMenu = canManageUnusedQuizQuestions ? (
+    <details className="top-menu settings-menu quiz-unused-menu">
+      <summary aria-label="Manage unused Quick Fire questions">
+        <span className="settings-label">Questions</span>
+      </summary>
+      <div className="top-menu-panel settings-menu-panel quiz-unused-menu-panel">
+        {renderQuickFireUnusedQuestionManager()}
+      </div>
+    </details>
+  ) : null;
 
   const openQuestionNoteModal = (round) => {
     if (!round) return;
@@ -21918,6 +22038,7 @@ function GameRoomView({
     return (
       <>
         {renderMobileHostControls()}
+        {renderQuickFireUnusedQuestionManager()}
         {isAdmin ? (
           <details className="panel mobile-host-drawer__details">
             <summary>Question Bank</summary>
@@ -22146,6 +22267,7 @@ function GameRoomView({
             <>
               {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
               {roomPlayerScorePills}
+              {quickFireUnusedQuestionMenu}
               {renderRoomOverflowMenu()}
             </>
           ) : (
@@ -22156,6 +22278,7 @@ function GameRoomView({
                   End Game
                 </Button>
               ) : null}
+              {quickFireUnusedQuestionMenu}
               <Button className="ghost-button compact" onClick={onLeaveGame}>
                 Leave
               </Button>
@@ -22368,6 +22491,7 @@ function GameRoomView({
             <>
               {showTestModeBanner ? <span className="status-pill status-pill--test-mode">TEST MODE</span> : null}
               {roomPlayerScorePills}
+              {quickFireUnusedQuestionMenu}
               {renderRoomOverflowMenu()}
             </>
           ) : (
@@ -22383,6 +22507,7 @@ function GameRoomView({
                   End Game
                 </Button>
               ) : null}
+              {quickFireUnusedQuestionMenu}
               <Button className="ghost-button compact" onClick={onLeaveGame}>
                 Leave
               </Button>
@@ -24805,6 +24930,30 @@ function ProductionApp() {
     thisOrThatBankQuestions,
     trueFalseBankQuestions,
   ]);
+  const removeUnusedQuizQuestions = async (questionIds = []) =>
+    withBusy(async () => {
+      if (!firestore) throw new Error('Firebase is not configured.');
+      if (!isAdminUser) throw new Error('Only the admin account can remove Quick Fire questions.');
+      const requestedIds = new Set(mergeUniqueIds(questionIds));
+      if (!requestedIds.size) throw new Error('Select at least one unused Quick Fire question to remove.');
+      const removableQuestions = (questionBankExportQuestionsByType.quiz || []).filter((question) => requestedIds.has(question.id));
+      if (!removableQuestions.length) {
+        throw new Error('Those questions are no longer in the unused Quick Fire pool.');
+      }
+      const confirmed = window.confirm(`Remove ${removableQuestions.length} unused Quick Fire question${removableQuestions.length === 1 ? '' : 's'} from the question bank?`);
+      if (!confirmed) return false;
+      for (const chunk of chunkArray(removableQuestions, 400)) {
+        const batch = writeBatch(firestore);
+        chunk.forEach((question) => {
+          batch.delete(doc(firestore, 'questionBank', question.id));
+        });
+        await batch.commit();
+      }
+      const removedIds = new Set(removableQuestions.map((question) => question.id));
+      setBankQuestions((current) => current.filter((question) => !removedIds.has(question.id)));
+      setNotice(`Removed ${removableQuestions.length} unused Quick Fire question${removableQuestions.length === 1 ? '' : 's'}.`);
+      return true;
+    }, 'Could not remove unused Quick Fire questions.');
   const previousCompletedGames = useMemo(
     () =>
       previousGames.filter(
@@ -34473,6 +34622,8 @@ function ProductionApp() {
       onSetQuizAnswerResult={setQuizAnswerResult}
       quizWagerDraft={quizWagerDraft}
       setQuizWagerDraft={setQuizWagerDraft}
+      unusedQuizQuestions={questionBankExportQuestionsByType.quiz || []}
+      onRemoveUnusedQuizQuestions={removeUnusedQuizQuestions}
     />
     {surpriseRoomPickerState ? (
       <section className="random-lobby-picker-backdrop" role="presentation">

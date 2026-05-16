@@ -7301,6 +7301,63 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.quiz-unused-menu {
+  position: relative;
+}
+
+.quiz-unused-menu > summary {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
+.quiz-unused-menu-panel {
+  right: 0;
+  width: min(92vw, 560px);
+  max-height: min(76vh, 720px);
+  overflow: auto;
+}
+
+.quiz-unused-manager {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.quiz-unused-manager__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.quiz-unused-manager__head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.quiz-unused-manager__search,
+.quiz-unused-manager__select {
+  min-width: 0;
+}
+
+.quiz-unused-manager__select select {
+  min-height: 154px;
+  overflow: auto;
+}
+
+.quiz-unused-manager__select option {
+  padding: 6px 8px;
+  white-space: normal;
+}
+
+.quiz-unused-manager__actions {
+  justify-content: flex-start;
+}
+
+.quiz-unused-manager__copy {
+  margin: 0;
+}
+
 .host-queue-panel {
   display: grid;
   gap: 10px;
