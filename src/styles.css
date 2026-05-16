@@ -7120,7 +7120,7 @@ button:disabled {
 
 .game-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 0.2fr) minmax(0, 0.6fr) minmax(280px, 0.2fr);
+  grid-template-columns: minmax(220px, 2fr) minmax(0, 6fr) minmax(280px, 2fr);
   gap: 10px;
   align-items: start;
 }
@@ -7132,6 +7132,7 @@ button:disabled {
 
 .chat-column {
   align-self: start;
+  min-width: 0;
 }
 
 .room-answer-row {
@@ -8177,6 +8178,7 @@ button:disabled {
   height: auto;
   min-height: 0;
   padding: clamp(14px, 1.9vw, 22px);
+  container: room-active-stage / inline-size;
 }
 
 .room-active-header {
@@ -10372,7 +10374,8 @@ button:disabled {
   display: block;
   font-size: clamp(0.95rem, 1.4vw, 1.3rem);
   line-height: 1.18;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
   text-wrap: balance;
 }
 
@@ -10381,7 +10384,8 @@ button:disabled {
   font-size: 0.98rem;
   font-weight: 900;
   line-height: 1.18;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
   text-wrap: balance;
 }
 
@@ -10412,7 +10416,8 @@ button:disabled {
 
 .room-reveal-answer-list li {
   padding-left: 0.08em;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .room-reveal-answer-text--center {
@@ -10500,7 +10505,8 @@ button:disabled {
   font-size: 0.86rem;
   font-weight: 900;
   line-height: 1.16;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
   text-wrap: wrap;
 }
 
@@ -10869,9 +10875,66 @@ button:disabled {
   }
 }
 
+@container room-active-stage (max-width: 920px) {
+  .room-reveal-layout,
+  .room-reveal-layout--quiz,
+  .room-active-frame--true-false .room-reveal-layout,
+  .room-active-frame--this-or-that .room-reveal-layout,
+  .room-active-frame--most-likely .room-reveal-layout,
+  .room-active-frame--red-flag-green-flag .room-reveal-layout,
+  .room-active-frame--put-points .room-reveal-layout,
+  .room-active-frame--compatibility-meter .room-reveal-layout,
+  .room-active-frame--memory-lane .room-reveal-layout {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .room-reveal-center-card {
+    grid-column: 1 / -1;
+    order: -1;
+  }
+
+  .room-reveal-player-card {
+    padding: clamp(10px, 1.8vw, 14px);
+  }
+
+  .room-reveal-player-body {
+    grid-template-rows: repeat(2, minmax(86px, auto));
+  }
+
+  .room-reveal-answer-copy {
+    overflow-y: visible;
+  }
+}
+
+@container room-active-stage (max-width: 560px) {
+  .room-reveal-layout,
+  .room-reveal-layout--quiz,
+  .room-active-frame--true-false .room-reveal-layout,
+  .room-active-frame--this-or-that .room-reveal-layout,
+  .room-active-frame--most-likely .room-reveal-layout,
+  .room-active-frame--red-flag-green-flag .room-reveal-layout,
+  .room-active-frame--put-points .room-reveal-layout,
+  .room-active-frame--compatibility-meter .room-reveal-layout,
+  .room-active-frame--memory-lane .room-reveal-layout,
+  .room-reveal-penalty-grid,
+  .room-reveal-score-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .room-reveal-center-card {
+    grid-column: auto;
+  }
+}
+
 @media (max-width: 760px) {
   .room-reveal-layout {
     grid-template-columns: 1fr;
+  }
+
+  .room-reveal-center-card {
+    grid-column: auto;
+    order: 0;
   }
 }
 
@@ -15162,7 +15225,7 @@ select:focus-visible {
   }
 
   .game-grid {
-    grid-template-columns: minmax(180px, 0.18fr) minmax(0, 0.64fr) minmax(200px, 0.18fr);
+    grid-template-columns: minmax(180px, 18fr) minmax(0, 64fr) minmax(200px, 18fr);
     gap: 8px;
   }
 
