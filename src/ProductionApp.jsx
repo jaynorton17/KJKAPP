@@ -5545,6 +5545,7 @@ const getQuestionDensityClass = (question = '') => {
   const normalizedQuestion = String(question || '').replace(/\s+/g, ' ').trim();
   const questionLength = normalizedQuestion.length;
   const questionWordCount = normalizedQuestion ? normalizedQuestion.split(' ').length : 0;
+  if (questionLength > 220 || questionWordCount > 36) return 'is-extra-dense';
   if (questionLength > 150 || questionWordCount > 24) return 'is-dense';
   if (questionLength > 96 || questionWordCount > 16) return 'is-long';
   if (questionLength > 60 || questionWordCount > 10) return 'is-medium';
@@ -7544,18 +7545,43 @@ const getQuestionSearchText = (question = {}) =>
     question?.category,
     question?.roundType,
     question?.correctAnswer,
+    question?.sourceLabel,
+    question?.notes,
+    ...(Array.isArray(question?.tags) ? question.tags : parseAnswerList(question?.tags || [])),
     ...(parseAnswerList(question?.multipleChoiceOptions || question?.options || [])),
   ]
     .map((entry) => normalizeText(entry).toLowerCase())
     .filter(Boolean)
     .join(' ');
 
-function QuickFireUnusedQuestionManager({
+const EMPTY_QUESTION_LIST = [];
+
+const getQuestionOptionLabel = (question = {}, { showBankType = false } = {}) => {
+  const meta = [
+    showBankType ? getQuestionBankSyncTarget(question?.bankType || 'game').gameName : '',
+    question?.category,
+    question?.roundType,
+  ].map(normalizeText).filter(Boolean);
+  return `${meta.length ? `${meta.join(' / ')}: ` : ''}${question?.question || 'Untitled question'}`;
+};
+
+function QuestionBankQuestionManager({
   questions = [],
   selectedIds = [],
   onSelectedIdsChange,
   onRemoveSelected,
   isBusy = false,
+  title = 'Questions',
+  eyebrow = 'Question Bank',
+  statusLabel = '',
+  searchLabel = 'Search questions',
+  searchPlaceholder = 'Search by word, player, category, answer...',
+  selectLabel = '',
+  helperCopy = '',
+  emptyCopy = 'No questions are loaded for this bank.',
+  removeLabel = 'Remove Selected',
+  className = '',
+  showBankType = false,
 }) {
   const [searchText, setSearchText] = useState('');
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -7584,29 +7610,30 @@ function QuickFireUnusedQuestionManager({
   };
 
   return (
-    <section className="quiz-unused-manager" aria-label="Unused Quick Fire questions">
-      <div className="quiz-unused-manager__head">
+    <section className={`question-bank-question-manager ${className}`.trim()} aria-label={title}>
+      <div className="question-bank-question-manager__head">
         <div>
-          <p className="eyebrow">Question Filter</p>
-          <h3>Unused Quick Fire</h3>
+          <p className="eyebrow">{eyebrow}</p>
+          <h3>{title}</h3>
         </div>
-        <span className="status-pill">{questions.length} left</span>
+        <span className="status-pill">{statusLabel || `${questions.length} loaded`}</span>
       </div>
-      <label className="field quiz-unused-manager__search">
-        <span>Search unused questions</span>
-        <input type="search" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search Jay, Kim, category, answer..." />
+      <label className="field question-bank-question-manager__search">
+        <span>{searchLabel}</span>
+        <input type="search" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={searchPlaceholder} />
       </label>
-      <label className="field quiz-unused-manager__select">
-        <span>{visibleQuestions.length ? `${visibleQuestions.length} matching` : 'No matches'}</span>
+      <label className="field question-bank-question-manager__select">
+        <span>{selectLabel || (visibleQuestions.length ? `${visibleQuestions.length} matching` : 'No matches')}</span>
         <select multiple value={selectedIds} onChange={handleSelectChange} disabled={isBusy || !questions.length} size={Math.min(8, Math.max(4, visibleQuestions.length || 4))}>
           {visibleQuestions.map((question) => (
             <option value={question.id} key={question.id}>
-              {`${question.category ? `${question.category}: ` : ''}${question.question || 'Untitled question'}`}
+              {getQuestionOptionLabel(question, { showBankType })}
             </option>
           ))}
         </select>
       </label>
-      <div className="button-row quiz-unused-manager__actions">
+      {!questions.length ? <p className="panel-copy question-bank-question-manager__copy">{emptyCopy}</p> : null}
+      <div className="button-row question-bank-question-manager__actions">
         <Button className="ghost-button compact" onClick={handleSelectVisible} disabled={isBusy || !visibleQuestionIds.length || selectedVisibleCount === visibleQuestionIds.length}>
           Select Matches
         </Button>
@@ -7614,13 +7641,30 @@ function QuickFireUnusedQuestionManager({
           Clear
         </Button>
         <Button className="primary-button compact" onClick={() => onRemoveSelected?.(selectedIds)} disabled={isBusy || !selectedIds.length}>
-          Remove Selected
+          {removeLabel}
         </Button>
       </div>
-      <p className="panel-copy quiz-unused-manager__copy">
-        {selectedIds.length ? `${selectedIds.length} selected. Removed questions leave the unused Quick Fire pool.` : 'Search a player name or word, select the matches, then remove them from the unused pool.'}
+      <p className="panel-copy question-bank-question-manager__copy">
+        {selectedIds.length ? `${selectedIds.length} selected.` : helperCopy || 'Search by word, select matching questions, then remove the selected rows.'}
       </p>
     </section>
+  );
+}
+
+function QuickFireUnusedQuestionManager(props) {
+  return (
+    <QuestionBankQuestionManager
+      {...props}
+      className="quiz-unused-manager"
+      eyebrow="Question Filter"
+      title="Unused Quick Fire"
+      statusLabel={`${props.questions?.length || 0} left`}
+      searchLabel="Search unused questions"
+      searchPlaceholder="Search Jay, Kim, category, answer..."
+      helperCopy="Search a player name or word, select the matches, then remove them from the unused pool."
+      emptyCopy="There are no unused Quick Fire questions available."
+      removeLabel="Remove Selected"
+    />
   );
 }
 
@@ -8190,6 +8234,7 @@ function LobbyScreen({
   pendingActivityCount,
   bankQuestions,
   questionBankExportQuestionsByType = {},
+  questionBankManageQuestionsByType = {},
   questionCategories,
   createCode,
   joinCode,
@@ -8217,6 +8262,7 @@ function LobbyScreen({
   onSyncCompatibilityMeterBank,
   onSyncMemoryLaneBank,
   onSyncAllQuestionBanks,
+  onRemoveQuestionBankQuestions,
   onUploadQuestionBankCsv,
   onImportQuestions,
   onImportQuizQuestions,
@@ -8369,6 +8415,7 @@ function LobbyScreen({
   const [featuredLobbyCardIds, setFeaturedLobbyCardIds] = useState([]);
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
+  const [selectedQuestionBankQuestionIds, setSelectedQuestionBankQuestionIds] = useState([]);
   const [questionUploadBankType, setQuestionUploadBankType] = useState('game');
   const [questionUploadMode, setQuestionUploadMode] = useState('add');
   const [questionUploadJsonText, setQuestionUploadJsonText] = useState('');
@@ -9851,6 +9898,7 @@ function LobbyScreen({
     || QUESTION_BANK_GENERATION_PROFILES.game;
   const questionBankGenerationBusy = isBusy || isGeneratingQuestionBankCsv;
   const questionBankRemainingExportQuestions = questionBankExportQuestionsByType[normalizeQuestionBankType(questionUploadTarget.bankType)] || [];
+  const questionBankManageQuestions = questionBankManageQuestionsByType[normalizedQuestionBankTargetType] || EMPTY_QUESTION_LIST;
   const questionGenerationConstraints = {
     questionTypeMode: questionGenerationType === 'surprise' || questionGenerationType === 'all' ? questionGenerationType : 'single',
     categoryMode: questionGenerationCategory === 'surprise' || questionGenerationCategory === 'all' ? questionGenerationCategory : 'single',
@@ -9870,6 +9918,10 @@ function LobbyScreen({
     () => questionUploadSelectableRows.filter((row) => questionUploadSelectedKeys.has(row.key)).length,
     [questionUploadSelectableRows, questionUploadSelectedKeys],
   );
+  useEffect(() => {
+    const availableIds = new Set(questionBankManageQuestions.map((question) => question.id).filter(Boolean));
+    setSelectedQuestionBankQuestionIds((current) => current.filter((questionId) => availableIds.has(questionId)));
+  }, [questionBankManageQuestions]);
   const questionUploadPromptText = useMemo(() => [
     buildQuestionBankGenerationPrompt(questionUploadTarget, {
       questionCount: 50,
@@ -12698,6 +12750,31 @@ function LobbyScreen({
                   <span>{syncNotice || 'Firebase database ready'}</span>
                 </article>
               </div>
+
+              {questionBankSegment !== 'upload' ? (
+                <QuestionBankQuestionManager
+                  className="question-bank-browser"
+                  questions={questionBankManageQuestions}
+                  selectedIds={selectedQuestionBankQuestionIds}
+                  onSelectedIdsChange={setSelectedQuestionBankQuestionIds}
+                  onRemoveSelected={async (questionIds) => {
+                    const removed = await onRemoveQuestionBankQuestions?.({
+                      targetBankType: questionBankTarget.bankType,
+                      questionIds,
+                    });
+                    if (removed) setSelectedQuestionBankQuestionIds([]);
+                  }}
+                  isBusy={questionBankGenerationBusy || typeof onRemoveQuestionBankQuestions !== 'function'}
+                  eyebrow="Browse Bank"
+                  title={`${questionBankTarget.gameName} Questions`}
+                  statusLabel={`${questionBankManageQuestions.length} loaded`}
+                  searchLabel="Search loaded questions"
+                  searchPlaceholder="Search by word, Jay, Kim, category, answer..."
+                  helperCopy={`Search this ${questionBankTarget.gameName} bank, select matching questions, then remove selected rows.`}
+                  emptyCopy={`No active ${questionBankTarget.gameName} questions are loaded.`}
+                  removeLabel="Remove Selected"
+                />
+              ) : null}
 
               <div className="question-bank-upload-panel" aria-label={questionBankSegment === 'upload' ? 'Question upload tools' : 'AI question generator'}>
                 {questionBankSegment === 'upload' ? (
@@ -24930,6 +25007,29 @@ function ProductionApp() {
     thisOrThatBankQuestions,
     trueFalseBankQuestions,
   ]);
+  const questionBankManageQuestionsByType = useMemo(() => ({
+    game: gameBankQuestions,
+    quiz: quizBankQuestions,
+    [THIS_OR_THAT_GAME_MODE]: thisOrThatBankQuestions,
+    [MOST_LIKELY_GAME_MODE]: mostLikelyBankQuestions,
+    [PUT_YOUR_POINTS_GAME_MODE]: putYourPointsBankQuestions,
+    [SECRET_AUCTION_GAME_MODE]: secretAuctionBankQuestions,
+    [TRUE_FALSE_GAME_MODE]: trueFalseBankQuestions,
+    [RED_FLAG_GREEN_FLAG_GAME_MODE]: redFlagGreenFlagBankQuestions,
+    [COMPATIBILITY_METER_GAME_MODE]: compatibilityMeterBankQuestions,
+    [MEMORY_LANE_GAME_MODE]: memoryLaneBankQuestions,
+  }), [
+    compatibilityMeterBankQuestions,
+    gameBankQuestions,
+    memoryLaneBankQuestions,
+    mostLikelyBankQuestions,
+    putYourPointsBankQuestions,
+    quizBankQuestions,
+    redFlagGreenFlagBankQuestions,
+    secretAuctionBankQuestions,
+    thisOrThatBankQuestions,
+    trueFalseBankQuestions,
+  ]);
   const removeUnusedQuizQuestions = async (questionIds = []) =>
     withBusy(async () => {
       if (!firestore) throw new Error('Firebase is not configured.');
@@ -33889,6 +33989,68 @@ function ProductionApp() {
     return displayUsedStandardQuestionIds;
   };
 
+  const removeQuestionBankQuestions = async ({
+    targetBankType = 'game',
+    questionIds = [],
+  } = {}) =>
+    withBusy(async () => {
+      if (!firestore) throw new Error('Firebase is not configured.');
+      if (!isAdminUser) throw new Error('Question Bank tools are only available to the admin account.');
+      const requestedIds = new Set(mergeUniqueIds(questionIds));
+      if (!requestedIds.size) throw new Error('Select at least one question to remove.');
+
+      const target = getQuestionBankSyncTarget(targetBankType);
+      const normalizedTargetBankType = normalizeQuestionBankType(target.bankType);
+      const activeTargetQuestions = bankQuestions.filter((question) =>
+        question?.id
+        && normalizeQuestionBankType(question?.bankType) === normalizedTargetBankType
+        && isQuestionActiveInBank(question),
+      );
+      const selectedQuestions = activeTargetQuestions.filter((question) => requestedIds.has(question.id));
+      if (!selectedQuestions.length) {
+        throw new Error(`Those questions are no longer active in ${target.gameName}.`);
+      }
+
+      const usedQuestionIdsForBank = getUsedQuestionIdsForBankType(normalizedTargetBankType);
+      const retiredQuestions = selectedQuestions
+        .filter((question) => isQuestionUsedInHistory(question, usedQuestionIdsForBank))
+        .map((question) => retireQuestionBankRecordFromSheet(question));
+      const retiredIds = new Set(retiredQuestions.map((question) => question.id));
+      const deletedQuestions = selectedQuestions.filter((question) => !retiredIds.has(question.id));
+      const confirmMessage = retiredQuestions.length
+        ? `Remove ${selectedQuestions.length} question${selectedQuestions.length === 1 ? '' : 's'} from ${target.gameName}? ${retiredQuestions.length} used question${retiredQuestions.length === 1 ? '' : 's'} will be retired so history is preserved; ${deletedQuestions.length} unused question${deletedQuestions.length === 1 ? '' : 's'} will be deleted.`
+        : `Remove ${selectedQuestions.length} question${selectedQuestions.length === 1 ? '' : 's'} from ${target.gameName}? This deletes the selected unused question${selectedQuestions.length === 1 ? '' : 's'} from the question bank.`;
+      if (typeof window !== 'undefined' && !window.confirm(confirmMessage)) return false;
+
+      for (const chunk of chunkArray(retiredQuestions, 400)) {
+        const batch = writeBatch(firestore);
+        chunk.forEach((question) => {
+          batch.set(doc(firestore, 'questionBank', question.id), question, { merge: true });
+        });
+        await batch.commit();
+      }
+
+      for (const chunk of chunkArray(deletedQuestions, 400)) {
+        const batch = writeBatch(firestore);
+        chunk.forEach((question) => {
+          batch.delete(doc(firestore, 'questionBank', question.id));
+        });
+        await batch.commit();
+      }
+
+      const deletedIds = new Set(deletedQuestions.map((question) => question.id));
+      setBankQuestions((current) => mergeQuestionBankRecords(
+        current.filter((question) => !deletedIds.has(question?.id)),
+        retiredQuestions,
+      ));
+      setNotice(
+        retiredQuestions.length
+          ? `Removed ${selectedQuestions.length} ${target.gameName} question${selectedQuestions.length === 1 ? '' : 's'}: ${deletedQuestions.length} deleted, ${retiredQuestions.length} retired.`
+          : `Removed ${selectedQuestions.length} ${target.gameName} question${selectedQuestions.length === 1 ? '' : 's'}.`,
+      );
+      return true;
+    }, 'Could not remove question bank questions.');
+
   const replaceQuestionBankFromSheet = async ({
     targetBankType = 'game',
     actionLabel = 'Synced',
@@ -34416,6 +34578,7 @@ function ProductionApp() {
         pendingActivityCount={pendingActivityCount}
         bankQuestions={bankQuestions}
         questionBankExportQuestionsByType={questionBankExportQuestionsByType}
+        questionBankManageQuestionsByType={questionBankManageQuestionsByType}
         questionCategories={lobbyCategoryOptions}
         gameName={lobbyGameName}
         gameQuestionCount={lobbyQuestionCount}
@@ -34443,6 +34606,7 @@ function ProductionApp() {
         onSyncCompatibilityMeterBank={syncCompatibilityMeterSheet}
         onSyncMemoryLaneBank={syncMemoryLaneSheet}
         onSyncAllQuestionBanks={syncAllQuestionBanks}
+        onRemoveQuestionBankQuestions={removeQuestionBankQuestions}
         onUploadQuestionBankCsv={uploadQuestionBankCsv}
         onImportQuestions={importSheet}
         onImportQuizQuestions={importQuizSheet}

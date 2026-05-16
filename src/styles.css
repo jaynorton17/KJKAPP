@@ -7301,6 +7301,47 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.question-bank-question-manager {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.question-bank-question-manager__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.question-bank-question-manager__head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.question-bank-question-manager__search,
+.question-bank-question-manager__select {
+  min-width: 0;
+}
+
+.question-bank-question-manager__select select {
+  min-height: 154px;
+  overflow: auto;
+}
+
+.question-bank-question-manager__select option {
+  padding: 6px 8px;
+  white-space: normal;
+}
+
+.question-bank-question-manager__actions {
+  justify-content: flex-start;
+}
+
+.question-bank-question-manager__copy {
+  margin: 0;
+}
+
 .quiz-unused-menu {
   position: relative;
 }
@@ -7317,45 +7358,17 @@ button:disabled {
   overflow: auto;
 }
 
-.quiz-unused-manager {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
+.question-bank-browser {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--section-accent, var(--accent)) 12%, transparent), transparent 58%),
+    rgba(0, 0, 0, 0.18);
 }
 
-.quiz-unused-manager__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.quiz-unused-manager__head h3 {
-  margin: 0;
-  font-size: 1rem;
-}
-
-.quiz-unused-manager__search,
-.quiz-unused-manager__select {
-  min-width: 0;
-}
-
-.quiz-unused-manager__select select {
-  min-height: 154px;
-  overflow: auto;
-}
-
-.quiz-unused-manager__select option {
-  padding: 6px 8px;
-  white-space: normal;
-}
-
-.quiz-unused-manager__actions {
-  justify-content: flex-start;
-}
-
-.quiz-unused-manager__copy {
-  margin: 0;
+.question-bank-browser .question-bank-question-manager__select select {
+  min-height: clamp(220px, 32vh, 360px);
 }
 
 .host-queue-panel {
@@ -7438,7 +7451,9 @@ button:disabled {
 
 .chat-column--locked {
   height: var(--chat-column-height, auto);
+  max-height: min(720px, calc(100dvh - 132px));
   grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .chat-column--locked .chat-panel.compact-chat {
@@ -8314,9 +8329,9 @@ button:disabled {
   display: grid;
   width: 100%;
   min-width: 0;
-  min-height: clamp(420px, calc(100dvh - 220px), 720px);
-  height: auto;
-  overflow: visible;
+  min-height: min(420px, calc(100dvh - 132px));
+  height: min(720px, calc(100dvh - 132px));
+  overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--accent) 76%, white 10%);
   border-radius: 8px;
   background:
@@ -8334,10 +8349,27 @@ button:disabled {
   display: grid;
   grid-template-rows: auto auto;
   gap: clamp(10px, 1.4vw, 14px);
-  height: auto;
+  height: 100%;
   min-height: 0;
   padding: clamp(14px, 1.9vw, 22px);
+  overflow: hidden;
   container: room-active-stage / inline-size;
+}
+
+.room-active-frame--answering:not(.room-active-frame--quiz) .room-active-stage {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.room-active-frame--reveal:not(.room-active-frame--quiz) .room-active-stage {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.room-active-frame--true-false .room-active-stage,
+.room-active-frame--this-or-that .room-active-stage,
+.room-active-frame--most-likely .room-active-stage,
+.room-active-frame--red-flag-green-flag .room-active-stage,
+.room-active-frame--put-points .room-active-stage {
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .room-active-header {
@@ -8537,12 +8569,13 @@ button:disabled {
 .room-active-reveal-stack {
   display: grid;
   min-height: 0;
+  overflow: hidden;
 }
 
 .room-active-answer-stack {
-  grid-template-rows: auto auto;
+  grid-template-rows: minmax(0, auto) auto;
   gap: clamp(10px, 1.4vw, 14px);
-  align-content: start;
+  align-content: stretch;
 }
 
 .room-active-answer-stack--quiz {
@@ -8928,7 +8961,7 @@ button:disabled {
   width: 100%;
   height: 100%;
   min-height: 0;
-  min-height: clamp(360px, 48vh, 610px);
+  min-height: clamp(260px, 34vh, 420px);
   padding: 12px;
 }
 
@@ -9999,6 +10032,12 @@ button:disabled {
   line-height: 1.12;
 }
 
+.room-active-question--answering.is-extra-dense p {
+  max-width: min(100%, 78ch);
+  font-size: clamp(0.82rem, 1.55vw, 1.24rem);
+  line-height: 1.12;
+}
+
 .room-active-question--reveal {
   align-content: start;
   max-height: clamp(82px, 15vh, 132px);
@@ -10015,6 +10054,12 @@ button:disabled {
 .room-active-question--reveal.is-dense p {
   max-width: min(100%, 84ch);
   font-size: clamp(0.86rem, 1.45vw, 1.18rem);
+}
+
+.room-active-question--reveal.is-extra-dense p {
+  max-width: min(100%, 92ch);
+  font-size: clamp(0.74rem, 1.2vw, 1rem);
+  line-height: 1.1;
 }
 
 .room-answer-entry {
@@ -10143,6 +10188,15 @@ button:disabled {
   max-width: min(100%, 66ch);
   font-size: clamp(0.98rem, 2.05vw, 1.55rem);
   line-height: 1.14;
+}
+
+.room-active-frame--true-false .room-active-question--answering.is-extra-dense p,
+.room-active-frame--this-or-that .room-active-question--answering.is-extra-dense p,
+.room-active-frame--most-likely .room-active-question--answering.is-extra-dense p,
+.room-active-frame--red-flag-green-flag .room-active-question--answering.is-extra-dense p {
+  max-width: min(100%, 72ch);
+  font-size: clamp(0.78rem, 1.55vw, 1.16rem);
+  line-height: 1.13;
 }
 
 .room-active-frame--true-false .room-answer-entry--true-false,
@@ -10339,6 +10393,11 @@ button:disabled {
     font-size: clamp(0.98rem, 1.9vw, 1.65rem);
   }
 
+  .room-active-frame--quiz.room-active-frame--answering .room-active-question--answering.is-extra-dense p {
+    font-size: clamp(0.76rem, 1.45vw, 1.18rem);
+    line-height: 1.12;
+  }
+
   .room-active-frame--quiz.room-active-frame--answering .room-answer-entry--quiz {
     align-items: stretch;
     gap: 8px;
@@ -10369,6 +10428,12 @@ button:disabled {
 .live-round-grid--embedded,
 .answer-section--embedded {
   min-width: 0;
+}
+
+.room-active-frame .room-answer-entry,
+.room-active-frame .live-round-grid--embedded,
+.room-active-frame .answer-section--embedded {
+  min-height: 0;
 }
 
 .room-seat-flag {
@@ -16197,18 +16262,30 @@ select:focus-visible {
   .mobile-board-panel .room-active-frame--true-false .room-active-question--answering.is-medium p,
   .mobile-board-panel .room-active-frame--true-false .room-active-question--answering.is-long p,
   .mobile-board-panel .room-active-frame--true-false .room-active-question--answering.is-dense p,
+  .mobile-board-panel .room-active-frame--true-false .room-active-question--answering.is-extra-dense p,
   .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering.is-medium p,
   .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering.is-long p,
   .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering.is-dense p,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering.is-extra-dense p,
   .mobile-board-panel .room-active-frame--most-likely .room-active-question--answering.is-medium p,
   .mobile-board-panel .room-active-frame--most-likely .room-active-question--answering.is-long p,
   .mobile-board-panel .room-active-frame--most-likely .room-active-question--answering.is-dense p,
+  .mobile-board-panel .room-active-frame--most-likely .room-active-question--answering.is-extra-dense p,
   .mobile-board-panel .room-active-frame--red-flag-green-flag .room-active-question--answering.is-medium p,
   .mobile-board-panel .room-active-frame--red-flag-green-flag .room-active-question--answering.is-long p,
-  .mobile-board-panel .room-active-frame--red-flag-green-flag .room-active-question--answering.is-dense p {
+  .mobile-board-panel .room-active-frame--red-flag-green-flag .room-active-question--answering.is-dense p,
+  .mobile-board-panel .room-active-frame--red-flag-green-flag .room-active-question--answering.is-extra-dense p {
     max-width: 100%;
     font-size: clamp(0.84rem, 3.3vw, 1.02rem);
     line-height: 1.16;
+  }
+
+  .mobile-board-panel .room-active-frame--true-false .room-active-question--answering.is-extra-dense p,
+  .mobile-board-panel .room-active-frame--this-or-that .room-active-question--answering.is-extra-dense p,
+  .mobile-board-panel .room-active-frame--most-likely .room-active-question--answering.is-extra-dense p,
+  .mobile-board-panel .room-active-frame--red-flag-green-flag .room-active-question--answering.is-extra-dense p {
+    font-size: clamp(0.7rem, 2.65vw, 0.9rem);
+    line-height: 1.12;
   }
 
   .mobile-board-panel .room-active-question--answering p {
@@ -16224,6 +16301,12 @@ select:focus-visible {
   .mobile-board-panel .room-active-question--answering.is-dense p {
     max-width: 100%;
     font-size: clamp(0.92rem, 3.5vw, 1.18rem);
+  }
+
+  .mobile-board-panel .room-active-question--answering.is-extra-dense p {
+    max-width: 100%;
+    font-size: clamp(0.74rem, 2.8vw, 0.92rem);
+    line-height: 1.12;
   }
 
   .mobile-board-panel .room-active-question--reveal p {
@@ -16938,6 +17021,12 @@ select:focus-visible {
 
   .mobile-board-panel .room-active-frame--quiz .room-active-question--answering p {
     font-size: clamp(0.98rem, 3.9vw, 1.32rem);
+  }
+
+  .mobile-board-panel .room-active-question--answering.is-extra-dense p,
+  .mobile-board-panel .room-active-frame--quiz .room-active-question--answering.is-extra-dense p {
+    font-size: clamp(0.68rem, 2.55vw, 0.86rem);
+    line-height: 1.12;
   }
 
   .mobile-board-panel .room-reveal-player-card,
