@@ -183,8 +183,10 @@ export const generateGeminiDiaryWriteup = async ({
     `Prompt version: ${String(promptVersion || '').trim() || 'unspecified'}`,
     'Make the headline feel distinct to this specific chapter. Avoid repeating the same title structure from one chapter to the next.',
     'Write the writeup like a warm relationship story with a beginning, middle, and ending. Avoid a mechanical recap.',
+    'Do not structure the writeup as a scoreboard recap, repeated labels, or a list of facts. Vary paragraph openings between chapters.',
     'If Facts JSON contains gameChat.highlights, weave in 1-3 shared chat details as personal color, with speakers named and only short quoted snippets.',
-    'Use answers, score turns, chat, feedback, replay requests, and AMA story details to make it feel personal to Jay and Kim without inventing anything.',
+    'Use answers, score turns, chat, feedback, replay requests, and AMA question-answer-story details to make it feel personal to Jay and Kim without inventing anything.',
+    'For AMA source type, make the question, answer, and supplied story the heart of the chapter rather than an appendix.',
     `Facts JSON:\n${JSON.stringify(facts || {}, null, 2)}${reservedHeadlineLines}`,
   ].join('\n\n');
 

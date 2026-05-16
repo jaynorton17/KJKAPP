@@ -139,6 +139,7 @@ import {
   generateGeminiRelationshipReply,
 } from './lib/gemini.js';
 import {
+  getQuickFireQuizContentErrors,
   parseGoogleSheetImport,
   parseGoogleSheetModeImport,
   parseGoogleSheetMostLikelyImport,
@@ -569,20 +570,23 @@ const QUESTION_BANK_GENERATION_PROFILES = {
     ],
   },
   quiz: {
-    howItWorks: 'Quick Fire Quiz asks fast factual or personal-trivia questions. Players answer within the timer, then the host marks correct or incorrect. Points depend on the timer value.',
+    howItWorks: 'Quick Fire Quiz asks fast factual general quiz questions. Players answer within the timer, then the host marks correct or incorrect. Points depend on the timer value.',
     questionTypes: ['Multiple Choice', 'True or False', 'Text Answer'],
-    categories: ['Personal Trivia', 'Relationship History', 'Dates & Places', 'Preferences', 'Memories', 'Funny Facts', 'Cheeky Facts', 'Household'],
+    categories: ['General Knowledge', 'Science', 'Countries', 'Capital Cities', 'Geography', 'History', 'Sport', 'Film & TV', 'Celebrities', 'Musicians', 'Food & Drink', 'Animals', 'Technology'],
     rules: [
       'Correct Answer is mandatory for every row.',
+      'Every row must be factual general quiz trivia with one objective correct answer.',
+      'Never ask who is more likely, who would, which player, Jay vs Kim, relationship memories, personal preferences, or player-specific questions.',
+      'Never use Jay, Kim, Eva, Both, Neither, or Either as the correct answer or as player-vote options.',
       'For Multiple Choice rows, Options must include the correct answer plus believable distractors.',
       'For True or False rows, put Correct Answer as True or False and leave Options blank.',
       'Keep questions short enough to answer quickly.',
       'Do not create a run of questions with the same opener, category, or answer pattern.',
     ],
     examples: [
-      'Multiple Choice | Relationship History | Where did Jay and Kim first go for a proper date? | The correct place | A believable place | Another believable place | A funny wrong place',
-      'True or False | Preferences | Kim would pick a cosy night in over a crowded bar most of the time. |',
-      'Text Answer | Personal Trivia | What drink does Kim most often reach for to unwind? |',
+      'Multiple Choice | Capital Cities | What is the capital city of Canada? | Ottawa | Toronto | Vancouver | Montreal',
+      'True or False | Science | Lightning is hotter than the surface of the Sun. |',
+      'Text Answer | Musicians | Which singer released the album 1989? |',
     ],
   },
   [THIS_OR_THAT_GAME_MODE]: {
@@ -1819,6 +1823,17 @@ const buildQuestionBankUploadPreflightReport = ({
     if (normalizedBankType === 'quiz' && !normalizeText(values['Correct Answer'])) {
       errors.push(`Row ${rowNumber}: Correct Answer is required for Quick Fire Quiz.`);
     }
+    if (normalizedBankType === 'quiz') {
+      const optionList = options ? options.split('|').map((entry) => normalizeText(entry)).filter(Boolean) : [];
+      getQuickFireQuizContentErrors({
+        questionText: question,
+        category: values.Category,
+        correctAnswer: values['Correct Answer'],
+        options: optionList,
+      }).forEach((issue) => {
+        errors.push(`Row ${rowNumber}: ${issue}.`);
+      });
+    }
     if (normalizedBankType === THIS_OR_THAT_GAME_MODE) {
       const optionCount = options ? options.split('|').map((entry) => normalizeText(entry)).filter(Boolean).length : 0;
       if (optionCount !== 2) errors.push(`Row ${rowNumber}: This or That needs exactly two pipe-separated options.`);
@@ -1972,16 +1987,62 @@ const buildQuestionBankUploadOutcomeQuestions = (result = {}) => {
     ...makeRows(result?.updates || [], 'Updated'),
   ];
 };
-const buildStructuredQuestionPreviewQuestions = (questions = []) =>
-  (Array.isArray(questions) ? questions : [])
-    .map((question, index) => ({
-      key: `Structured-${index}-${makeQuestionBankPreflightKey(question?.question || '')}`,
-      action: 'Queued',
-      question: normalizeText(question?.question),
-      category: normalizeText(question?.category),
-      type: normalizeText(question?.questionType || formatQuestionBankQuestionTypeForExport(question?.answerType || 'text')),
-    }))
+const QUESTION_UPLOAD_REVIEW_SELECTABLE_STATUSES = new Set(['import', 'update']);
+const formatQuestionUploadReviewStatus = (status = '') => {
+  if (status === 'import') return 'New';
+  if (status === 'update') return 'Update';
+  if (status === 'duplicate') return 'Duplicate';
+  if (status === 'skipped') return 'Unchanged';
+  if (status === 'invalid') return 'Issue';
+  return normalizeText(status) || 'Review';
+};
+const formatQuestionUploadReviewList = (value = '') => {
+  if (Array.isArray(value)) return value.map(normalizeText).filter(Boolean).join(' | ');
+  return normalizeText(value);
+};
+const buildQuestionBankUploadReviewRows = (result = {}) =>
+  (Array.isArray(result?.preview) ? result.preview : [])
+    .map((entry, index) => {
+      const question = entry?.question || {};
+      const questionText = normalizeText(question?.question);
+      const status = normalizeText(entry?.status || '');
+      const errors = Array.isArray(entry?.errors) ? entry.errors.map(normalizeText).filter(Boolean) : [];
+      const key = `${status || 'row'}-${entry?.index ?? index}-${question?.id || ''}-${makeQuestionBankPreflightKey(questionText)}`;
+      const type = formatQuestionBankQuestionTypeForExport(question?.roundType || question?.originalQuestionType || question?.questionType || question?.answerType || 'text');
+      const options = formatQuestionUploadReviewList(question?.multipleChoiceOptions ?? question?.options ?? '');
+      const tags = formatQuestionUploadReviewList(question?.tags || '');
+      const selectable = QUESTION_UPLOAD_REVIEW_SELECTABLE_STATUSES.has(status) && !errors.length && Boolean(questionText);
+      return {
+        key,
+        sourceQuestion: question,
+        selectable,
+        status,
+        action: formatQuestionUploadReviewStatus(status),
+        question: questionText || '(missing question)',
+        category: normalizeText(question?.category || 'Uncategorised'),
+        type,
+        options,
+        correctAnswer: normalizeText(question?.correctAnswer || ''),
+        answerType: normalizeText(question?.answerType || question?.defaultAnswerType || ''),
+        relationshipArea: normalizeText(question?.relationshipArea || ''),
+        tags,
+        errors,
+      };
+    })
     .filter((item) => item.question);
+const getQuickFireQuestionBankErrors = (question = {}) =>
+  getQuickFireQuizContentErrors({
+    questionText: question?.question || '',
+    category: question?.category || '',
+    correctAnswer: question?.correctAnswer || question?.answer || '',
+    options: Array.isArray(question?.multipleChoiceOptions)
+      ? question.multipleChoiceOptions
+      : Array.isArray(question?.options)
+        ? question.options
+        : parseAnswerList(question?.options || ''),
+  });
+const isPlayableQuickFireQuizQuestion = (question = {}) =>
+  isQuestionActiveInBank(question) && getQuickFireQuestionBankErrors(question).length === 0;
 const buildQuestionBankStructuredUploadCsv = (questions = [], target = QUESTION_BANK_SYNC_TARGETS[0]) => {
   const rows = (Array.isArray(questions) ? questions : []).map((question) => {
     const questionType = normalizeText(question?.questionType || formatQuestionBankQuestionTypeForExport(question?.roundType || 'text'));
@@ -2388,7 +2449,7 @@ const QUIZ_SETUP_COUNTDOWN_MS = 3000;
 const QUIZ_REVEAL_FLASH_MS = 3000;
 const AI_CHAT_MESSAGE_LIMIT = 160;
 const AI_EVIDENCE_PREVIEW_LIMIT = 4;
-const AI_DIARY_PROMPT_VERSION = '2026-05-06-most-likely-votes-v1';
+const AI_DIARY_PROMPT_VERSION = '2026-05-16-story-chapters-v1';
 const AI_DIARY_GAME_HIGHLIGHT_LIMIT = 8;
 const AI_DIARY_SIGNAL_LIMIT = 4;
 const AI_DIARY_CHAT_HIGHLIGHT_LIMIT = 8;
@@ -4264,8 +4325,10 @@ const buildAiDiarySystemInstruction = (sourceType = 'game') => [
     ? 'Turn the supplied AMA facts into a funny, warm, affectionate diary chapter.'
     : 'Turn the supplied game facts into a funny, warm, affectionate diary chapter.',
   'Write like a keepsake story with a beginning, middle, and ending, not like a stats report.',
+  'Avoid repeated recap structures, scoreboard-first paragraphs, bullet-list energy, and chapter openings that sound copied from earlier diary entries.',
   'Use small personal details, turning points, answer contrasts, and shared jokes from the supplied facts to make the chapter feel specific to Jay and Kim.',
   'When facts.gameChat.highlights contains messages, weave one to three of those shared room-chat moments into the story as personal color, with the speaker named. Do not dump the chat as a transcript.',
+  'For AMA chapters, make the question, answer, and supplied story feel like one remembered scene rather than a form response.',
   'Use only the supplied facts. Do not invent hidden events, feelings, scores, or questions.',
   'When facts.existingChapterTitles is a non-empty array, your JSON headline must not match any listed title when compared case-insensitively (ignore extra spaces). Invent a fresh headline if the obvious choice would collide.',
   'Make the headline short, playful, and specific to this exact chapter. Vary the wording between chapters and avoid repetitive winner-template titles.',
@@ -4304,7 +4367,7 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
 
   const sessionCount = Math.max(1, Number(isHoldemDiary ? (holdemStats?.handsPlayed || game?.holdemHandsPlayed || game?.roundsPlayed || 0) : (game?.roundsPlayed || 0)));
   const sessionUnitLabel = isHoldemDiary ? 'hands at the table' : 'rounds of answers, second-guesses, and little moments worth keeping';
-  const opening = `By the time ${game?.name || 'this game'} became a diary chapter, the scoreboard already had a plot. ${summary} ${game?.name ? `${game.name} gave them ${sessionCount} ${sessionUnitLabel}.` : ''}`.trim();
+  const opening = `${game?.name || 'This game'} did not end as a plain result on a screen. ${summary} Across ${sessionCount} ${sessionUnitLabel}, it picked up enough turns, laughs, and little reveals to deserve its own page.`.trim();
   const middle = mostLikely
     ? `Most Likely To left a clear little trail: ${mostLikely.matchedVotes || 0} matched votes, ${mostLikely.splitVotes || 0} split votes, and ${mostLikely.missedVotes || 0} missed votes. The split-vote penalties finished at Jay ${formatScore(mostLikely.jayPenaltyPoints || 0)} and Kim ${formatScore(mostLikely.kimPenaltyPoints || 0)}.`
     : isHoldemDiary
@@ -4315,7 +4378,7 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
       ? `Quick Fire stayed true to its name: Jay finished on ${quiz.bySeat?.jay?.points || 0} points with ${quiz.bySeat?.jay?.accuracy || 0}% accuracy, while Kim landed ${quiz.bySeat?.kim?.points || 0} points at ${quiz.bySeat?.kim?.accuracy || 0}% accuracy. ${quiz.strongestCategories?.jay?.[0]?.category ? `Jay looked especially comfortable in ${quiz.strongestCategories.jay[0].category}.` : ''} ${quiz.strongestCategories?.kim?.[0]?.category ? `Kim looked especially comfortable in ${quiz.strongestCategories.kim[0].category}.` : ''}`.trim()
       : 'The scoreline told one story, but the answers underneath it were where the real charm lived.';
   const chatMoment = chatHighlights.length
-    ? `The room chat gave the chapter its fingerprints too: ${chatHighlights.slice(0, 3).map((entry) => `${entry.speaker || 'Someone'} said "${truncateAiText(entry.text, 90)}"`).join('; ')}.`
+    ? `A few shared messages gave the night its fingerprints too: ${chatHighlights.slice(0, 3).map((entry) => `${entry.speaker || 'Someone'} said "${truncateAiText(entry.text, 90)}"`).join('; ')}.`
     : '';
   const learning = [
     firstMoment ? `One memorable clue came when Jay answered "${firstMoment.jayAnswer}" and Kim answered "${firstMoment.kimAnswer}" to "${firstMoment.question}".` : '',
@@ -4329,7 +4392,7 @@ const buildLocalGameDiaryWriteup = (facts = {}) => {
   return {
     headline,
     summary,
-    writeup: [opening, middle, chatMoment, learning || 'What came through most clearly was that the game gave both of them fresh little windows into each other, and the score was only part of the story.']
+    writeup: [opening, middle, chatMoment, learning || 'What lingered after the score was the useful bit: both of them walked away with another small window into how the other thinks, chooses, remembers, and teases.']
       .filter(Boolean)
       .join('\n\n'),
     model: 'local-fallback',
@@ -4343,10 +4406,10 @@ const buildLocalAmaDiaryWriteup = (facts = {}) => {
   const reservedKeys = facts?.reservedChapterTitleKeys instanceof Set ? facts.reservedChapterTitleKeys : null;
   const headline = polishUniqueDiaryChapterTitle(baseHeadline, reservedKeys, ama?.sourceId || '');
   const summary = `${ama?.askedBy || 'Jay or Kim'} asked "${truncateAiText(ama?.question || 'an AMA question', 90)}" and ${ama?.answeredBy || 'the other player'} answered with "${truncateAiText(ama?.answer || 'a very KJK-style answer', 90)}".`;
-  const opening = `${ama?.itemTitle || 'AMA time'} delivered exactly what it was supposed to: a direct question, a real answer, and a little more context than either of them would have gotten from a scorecard alone.`;
+  const opening = `${ama?.itemTitle || 'AMA time'} opened with ${ama?.askedBy || 'one of them'} asking "${truncateAiText(ama?.question || 'an AMA question', 120)}" and waiting for the kind of answer a normal game round would never quite reach.`;
   const middle = ama?.story
-    ? `${ama.answeredBy || 'The answer'} added the extra story too: "${truncateAiText(ama.story, 220)}" It gives the chapter that nice afterglow where the answer is not just true, it is properly theirs.`
-    : `${ama?.answeredBy || 'The answer'} kept it simple and direct, which still says plenty when the question itself is doing the heavy lifting.`;
+    ? `${ama.answeredBy || 'The answer'} answered with "${truncateAiText(ama?.answer || 'a very KJK-style answer', 120)}", then gave it a proper scene: "${truncateAiText(ama.story, 220)}" That extra detail is what turns the answer from a fact into a memory.`
+    : `${ama?.answeredBy || 'The answer'} answered with "${truncateAiText(ama?.answer || 'a very KJK-style answer', 120)}", keeping it direct enough to feel honest and specific enough to be worth saving.`;
   const closing = [
     ama?.relatedCategories?.length ? `The moment landed somewhere around ${formatAiList(ama.relatedCategories)}.` : '',
     snapshot?.leaderboardSummary ? `At the time, the frozen snapshot read: ${snapshot.leaderboardSummary}` : '',
@@ -8227,13 +8290,15 @@ function LobbyScreen({
   const [questionUploadReport, setQuestionUploadReport] = useState(null);
   const [questionUploadProgress, setQuestionUploadProgress] = useState({ status: 'idle', percent: 0, message: '' });
   const [questionUploadOutcomeQuestions, setQuestionUploadOutcomeQuestions] = useState([]);
+  const [questionUploadSelectedKeys, setQuestionUploadSelectedKeys] = useState(() => new Set());
+  const [questionUploadRemovedKeys, setQuestionUploadRemovedKeys] = useState(() => new Set());
   const [questionGenerationCountDraft, setQuestionGenerationCountDraft] = useState('50');
   const [questionGenerationType, setQuestionGenerationType] = useState('surprise');
   const [questionGenerationCategory, setQuestionGenerationCategory] = useState('surprise');
   const [questionGenerationTone, setQuestionGenerationTone] = useState('surprise');
   const [questionGenerationIntensity, setQuestionGenerationIntensity] = useState('surprise');
   const [questionGenerationBrief, setQuestionGenerationBrief] = useState('');
-  const [questionMakerTargetBankType, setQuestionMakerTargetBankType] = useState('all');
+  const [questionMakerTargetBankType, setQuestionMakerTargetBankType] = useState('quiz');
   const [questionMakerCountDraft, setQuestionMakerCountDraft] = useState('30');
   const [isGeneratingQuestionBankCsv, setIsGeneratingQuestionBankCsv] = useState(false);
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
@@ -9706,6 +9771,19 @@ function LobbyScreen({
     toneMode: questionGenerationTone === 'surprise' || questionGenerationTone === 'mixed' ? questionGenerationTone : 'single',
     intensityMode: questionGenerationIntensity === 'surprise' || questionGenerationIntensity === 'mixed' ? questionGenerationIntensity : 'single',
   };
+  const questionUploadReviewRows = useMemo(
+    () => buildQuestionBankUploadReviewRows(questionUploadReport?.result)
+      .filter((row) => !questionUploadRemovedKeys.has(row.key)),
+    [questionUploadRemovedKeys, questionUploadReport],
+  );
+  const questionUploadSelectableRows = useMemo(
+    () => questionUploadReviewRows.filter((row) => row.selectable),
+    [questionUploadReviewRows],
+  );
+  const questionUploadSelectedCount = useMemo(
+    () => questionUploadSelectableRows.filter((row) => questionUploadSelectedKeys.has(row.key)).length,
+    [questionUploadSelectableRows, questionUploadSelectedKeys],
+  );
   const questionUploadPromptText = useMemo(() => [
     buildQuestionBankGenerationPrompt(questionUploadTarget, {
       questionCount: 50,
@@ -9724,6 +9802,8 @@ function LobbyScreen({
     setQuestionUploadReport(null);
     setQuestionUploadProgress({ status: 'idle', percent: 0, message: '' });
     setQuestionUploadOutcomeQuestions([]);
+    setQuestionUploadSelectedKeys(new Set());
+    setQuestionUploadRemovedKeys(new Set());
   };
   const handleQuestionBankSegmentChange = (segment) => {
     if (segment === 'upload') {
@@ -9776,17 +9856,24 @@ function LobbyScreen({
       existingQuestions: bankQuestions,
       generationConstraints,
     });
+  const resetQuestionUploadReviewSelection = (report) => {
+    const rows = buildQuestionBankUploadReviewRows(report?.result);
+    setQuestionUploadRemovedKeys(new Set());
+    setQuestionUploadSelectedKeys(new Set(rows.filter((row) => row.selectable).map((row) => row.key)));
+  };
   const applyQuestionUploadReport = (report) => {
     setQuestionUploadReport(report);
+    resetQuestionUploadReviewSelection(report);
     const imported = Number(report?.summary?.imported || 0);
     const updated = Number(report?.summary?.updated || 0);
     const duplicates = Number(report?.summary?.duplicates || 0);
     const skipped = Number(report?.summary?.skipped || 0);
     if (report?.canUpload) {
+      const selectableCount = buildQuestionBankUploadReviewRows(report?.result).filter((row) => row.selectable).length;
       setQuestionUploadProgress({
         status: 'ready',
         percent: 35,
-        message: `${report.fileName} checked: ${imported} new, ${updated} update${updated === 1 ? '' : 's'}, ${duplicates} duplicate${duplicates === 1 ? '' : 's'}, ${skipped} unchanged.`,
+        message: `${report.fileName} checked: ${imported} new, ${updated} update${updated === 1 ? '' : 's'}, ${duplicates} duplicate${duplicates === 1 ? '' : 's'}, ${skipped} unchanged. Review ${selectableCount} selectable row${selectableCount === 1 ? '' : 's'} before adding.`,
       });
       return;
     }
@@ -9804,6 +9891,7 @@ function LobbyScreen({
       rawText: questionUploadDraft.rawText,
       fileName: questionUploadDraft.fileName,
       mode: nextMode,
+      target: getQuestionBankSyncTarget(questionUploadDraft.targetBankType || questionUploadTarget.bankType),
       generationConstraints: questionUploadDraft.generationConstraints || null,
     }));
   };
@@ -9877,6 +9965,8 @@ function LobbyScreen({
     setQuestionUploadDraft(null);
     setQuestionUploadReport(null);
     setQuestionUploadOutcomeQuestions([]);
+    setQuestionUploadSelectedKeys(new Set());
+    setQuestionUploadRemovedKeys(new Set());
     setIsGeneratingQuestionBankCsv(true);
     setQuestionUploadProgress({
       status: 'generating',
@@ -9938,6 +10028,7 @@ function LobbyScreen({
         targetBankType: target.bankType,
       });
       setQuestionUploadReport(report);
+      resetQuestionUploadReviewSelection(report);
       if (!report.canUpload) {
         setQuestionUploadProgress({
           status: 'error',
@@ -9947,51 +10038,21 @@ function LobbyScreen({
         return;
       }
 
-      if (!onUploadQuestionBankCsv) {
-        setQuestionUploadProgress({
-          status: 'error',
-          percent: 0,
-          message: 'Question bank upload is not available.',
-        });
-        return;
-      }
-
       const imported = Number(report.summary?.imported || 0);
+      const updated = Number(report.summary?.updated || 0);
       const duplicates = Number(report.summary?.duplicates || 0);
+      const reviewRows = buildQuestionBankUploadReviewRows(report.result);
+      const selectableCount = reviewRows.filter((row) => row.selectable).length;
       setQuestionUploadProgress({
-        status: 'uploading',
-        percent: 78,
-        message: `Gemini draft checked: ${imported} new, ${duplicates} duplicate${duplicates === 1 ? '' : 's'} skipped. Adding valid rows now...`,
+        status: 'ready',
+        percent: 58,
+        message: `Gemini draft checked: ${imported} new, ${updated} update${updated === 1 ? '' : 's'}, ${duplicates} duplicate${duplicates === 1 ? '' : 's'} skipped. Review and add ${selectableCount} selected row${selectableCount === 1 ? '' : 's'}.`,
       });
-
-      const uploadResult = await onUploadQuestionBankCsv({
-        targetBankType: target.bankType,
-        mode: 'add',
-        rawText,
-        fileName,
-      });
-
-      if (uploadResult?.cancelled || uploadResult?.errorMessage || !uploadResult) {
-        const message = uploadResult?.errorMessage || 'Question generation passed checks, but the upload did not complete.';
-        setQuestionUploadProgress({
-          status: 'error',
-          percent: 0,
-          message,
-        });
-        return;
-      }
-
-      const uploadSummary = uploadResult.result?.summary || {};
-      setQuestionUploadOutcomeQuestions(buildQuestionBankUploadOutcomeQuestions(uploadResult.result));
-      setQuestionUploadProgress({
-        status: 'done',
-        percent: 100,
-        message: `Created and added ${Number(uploadSummary.imported || 0)} new ${target.gameName} question${Number(uploadSummary.imported || 0) === 1 ? '' : 's'}. ${Number(uploadSummary.duplicates || 0)} duplicate${Number(uploadSummary.duplicates || 0) === 1 ? '' : 's'} skipped.`,
-      });
-      setQuestionUploadDraft(null);
     } catch (error) {
       setQuestionUploadDraft(null);
       setQuestionUploadReport(null);
+      setQuestionUploadSelectedKeys(new Set());
+      setQuestionUploadRemovedKeys(new Set());
       setQuestionUploadOutcomeQuestions([]);
       setQuestionUploadProgress({
         status: 'error',
@@ -10008,30 +10069,21 @@ function LobbyScreen({
       return;
     }
     const requestedCount = clampQuestionBankGenerationCount(questionMakerCountDraft);
-    const targets = questionMakerTargetBankType === 'all'
-      ? QUESTION_BANK_SYNC_TARGETS
-      : [getQuestionBankSyncTarget(questionMakerTargetBankType)];
-
-    if (
-      targets.length > 1
-      && typeof window !== 'undefined'
-      && !window.confirm(`Generate and add ${requestedCount} questions for each game?`)
-    ) {
+    if (questionMakerTargetBankType === 'all') {
+      const message = 'Choose one game at a time so you can review the generated questions before adding them.';
+      setQuestionUploadProgress({ status: 'error', percent: 0, message });
+      window.alert(message);
       return;
     }
-
-    for (const target of targets) {
-      // Generate sequentially so each bank gets its own validation and upload pass.
-      await handleGenerateQuestionBankQuestions({
-        target,
-        count: requestedCount,
-        questionType: 'surprise',
-        category: 'surprise',
-        tone: 'surprise',
-        intensity: 'surprise',
-        brief: questionGenerationBrief,
-      });
-    }
+    await handleGenerateQuestionBankQuestions({
+      target: getQuestionBankSyncTarget(questionMakerTargetBankType),
+      count: requestedCount,
+      questionType: 'surprise',
+      category: 'surprise',
+      tone: 'surprise',
+      intensity: 'surprise',
+      brief: questionGenerationBrief,
+    });
   };
   const handleRepairGeneratedQuestionBankDraft = async () => {
     if (!questionUploadDraft?.rawText || !questionUploadReport || questionUploadReport.canUpload) return;
@@ -10061,6 +10113,8 @@ function LobbyScreen({
 
     setIsGeneratingQuestionBankCsv(true);
     setQuestionUploadOutcomeQuestions([]);
+    setQuestionUploadSelectedKeys(new Set());
+    setQuestionUploadRemovedKeys(new Set());
     setQuestionUploadProgress({
       status: 'repairing',
       percent: 38,
@@ -10097,6 +10151,7 @@ function LobbyScreen({
         targetBankType: target.bankType,
       });
       setQuestionUploadReport(report);
+      resetQuestionUploadReviewSelection(report);
 
       if (!report.canUpload) {
         setQuestionUploadProgress({
@@ -10107,39 +10162,11 @@ function LobbyScreen({
         return;
       }
 
-      if (!onUploadQuestionBankCsv) {
-        setQuestionUploadProgress({
-          status: 'error',
-          percent: 0,
-          message: 'Question bank upload is not available.',
-        });
-        return;
-      }
-
       setQuestionUploadProgress({
-        status: 'uploading',
-        percent: 78,
-        message: `Repair passed checks. Adding valid ${target.gameName} rows now...`,
+        status: 'ready',
+        percent: 58,
+        message: `Repair passed checks. Review and add ${buildQuestionBankUploadReviewRows(report.result).filter((row) => row.selectable).length} selected ${target.gameName} row${buildQuestionBankUploadReviewRows(report.result).filter((row) => row.selectable).length === 1 ? '' : 's'}.`,
       });
-      const uploadResult = await onUploadQuestionBankCsv({
-        targetBankType: target.bankType,
-        mode: 'add',
-        rawText,
-        fileName,
-      });
-      if (uploadResult?.cancelled || uploadResult?.errorMessage || !uploadResult) {
-        const message = uploadResult?.errorMessage || 'Repair passed checks, but the upload did not complete.';
-        setQuestionUploadProgress({ status: 'error', percent: 0, message });
-        return;
-      }
-      const uploadSummary = uploadResult.result?.summary || {};
-      setQuestionUploadOutcomeQuestions(buildQuestionBankUploadOutcomeQuestions(uploadResult.result));
-      setQuestionUploadProgress({
-        status: 'done',
-        percent: 100,
-        message: `Repair added ${Number(uploadSummary.imported || 0)} new ${target.gameName} question${Number(uploadSummary.imported || 0) === 1 ? '' : 's'}. ${Number(uploadSummary.duplicates || 0)} duplicate${Number(uploadSummary.duplicates || 0) === 1 ? '' : 's'} skipped.`,
-      });
-      setQuestionUploadDraft(null);
     } catch (error) {
       setQuestionUploadOutcomeQuestions([]);
       setQuestionUploadProgress({
@@ -10167,12 +10194,13 @@ function LobbyScreen({
         rawText,
         rowCount,
         targetBankType: questionUploadTarget.bankType,
-        previewQuestions: buildQuestionBankUploadOutcomeQuestions(report.result),
       });
       applyQuestionUploadReport(report);
     } catch (error) {
       setQuestionUploadDraft(null);
       setQuestionUploadReport(null);
+      setQuestionUploadSelectedKeys(new Set());
+      setQuestionUploadRemovedKeys(new Set());
       setQuestionUploadProgress({
         status: 'error',
         percent: 0,
@@ -10193,7 +10221,6 @@ function LobbyScreen({
       const fileName = `${String(questionUploadTarget.sheetName || questionUploadTarget.gameName || 'question-bank').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}-structured.json`;
       const report = buildQuestionUploadReport({ rawText, fileName });
       const rowCount = report.rowCount || structuredQuestions.length;
-      const previewQuestions = buildStructuredQuestionPreviewQuestions(structuredQuestions);
       setQuestionUploadDraft({
         fileName,
         fileSize: rawJson.length,
@@ -10201,12 +10228,13 @@ function LobbyScreen({
         rowCount,
         targetBankType: questionUploadTarget.bankType,
         sourceType: 'structured-json',
-        previewQuestions,
       });
       applyQuestionUploadReport(report);
     } catch (error) {
       setQuestionUploadDraft(null);
       setQuestionUploadReport(null);
+      setQuestionUploadSelectedKeys(new Set());
+      setQuestionUploadRemovedKeys(new Set());
       setQuestionUploadProgress({
         status: 'error',
         percent: 0,
@@ -10216,6 +10244,32 @@ function LobbyScreen({
   };
   const handleClearQuestionUploadDraft = () => {
     clearQuestionUploadSelection();
+  };
+  const handleSelectAllQuestionUploadRows = () => {
+    setQuestionUploadSelectedKeys(new Set(questionUploadSelectableRows.map((row) => row.key)));
+  };
+  const handleClearQuestionUploadRows = () => {
+    setQuestionUploadSelectedKeys(new Set());
+  };
+  const handleToggleQuestionUploadRow = (rowKey) => {
+    setQuestionUploadSelectedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
+      return next;
+    });
+  };
+  const handleRemoveQuestionUploadRow = (rowKey) => {
+    setQuestionUploadSelectedKeys((current) => {
+      const next = new Set(current);
+      next.delete(rowKey);
+      return next;
+    });
+    setQuestionUploadRemovedKeys((current) => {
+      const next = new Set(current);
+      next.add(rowKey);
+      return next;
+    });
   };
   const handleSubmitQuestionUpload = async () => {
     if (!questionUploadDraft?.rawText) {
@@ -10232,17 +10286,37 @@ function LobbyScreen({
       setQuestionUploadProgress({ status: 'error', percent: 0, message: 'Question bank upload is not available.' });
       return;
     }
+    const selectedRows = questionUploadReviewRows.filter((row) => row.selectable && questionUploadSelectedKeys.has(row.key));
+    if (!selectedRows.length) {
+      const message = 'Select at least one checked question before adding.';
+      setQuestionUploadProgress({ status: 'error', percent: 0, message });
+      window.alert(message);
+      return;
+    }
+    const target = getQuestionBankSyncTarget(questionUploadDraft.targetBankType || questionUploadTarget.bankType);
+    if (
+      questionUploadMode === 'replace'
+      && typeof window !== 'undefined'
+      && !window.confirm(`Replace the active ${target.gameName} bank with the ${selectedRows.length} selected question${selectedRows.length === 1 ? '' : 's'}?`)
+    ) {
+      setQuestionUploadProgress({ status: 'ready', percent: 35, message: 'Upload cancelled. Selection is still available.' });
+      return;
+    }
+    const selectedRawText = buildQuestionBankExportCsv(selectedRows.map((row) => row.sourceQuestion).filter(Boolean), target);
+    const selectedFileName = String(questionUploadDraft.fileName || makeQuestionBankGeneratedCsvFilename(target, selectedRows.length))
+      .replace(/\.(csv|json)$/i, '')
+      .concat('-selected.csv');
     setQuestionUploadProgress({
       status: 'uploading',
       percent: 62,
-      message: `Uploading ${questionUploadDraft.fileName} to ${questionUploadTarget.gameName}...`,
+      message: `Adding ${selectedRows.length} selected ${target.gameName} question${selectedRows.length === 1 ? '' : 's'}...`,
     });
     setQuestionUploadOutcomeQuestions([]);
     const uploadResult = await onUploadQuestionBankCsv({
-      targetBankType: questionUploadTarget.bankType,
+      targetBankType: target.bankType,
       mode: questionUploadMode,
-      rawText: questionUploadDraft.rawText,
-      fileName: questionUploadDraft.fileName,
+      rawText: selectedRawText,
+      fileName: selectedFileName,
     });
     if (uploadResult?.cancelled) {
       setQuestionUploadProgress({
@@ -10279,6 +10353,72 @@ function LobbyScreen({
     setQuestionUploadProgress({ status: 'done', percent: 100, message });
     setQuestionUploadDraft(null);
     setQuestionUploadReport(null);
+    setQuestionUploadSelectedKeys(new Set());
+    setQuestionUploadRemovedKeys(new Set());
+  };
+  const renderQuestionUploadReviewPanel = (contextLabel = 'Question review') => {
+    if (!questionUploadReviewRows.length || questionUploadProgress.status === 'done') return null;
+    const target = getQuestionBankSyncTarget(questionUploadDraft?.targetBankType || questionUploadTarget.bankType);
+    const selectableCount = questionUploadSelectableRows.length;
+    return (
+      <div className="question-bank-review-panel" aria-label={contextLabel}>
+        <div className="question-bank-review-head">
+          <div>
+            <p className="eyebrow">Review Before Add</p>
+            <h4>{questionUploadSelectedCount} of {selectableCount} selected</h4>
+          </div>
+          <span className="status-pill">{target.gameName}</span>
+        </div>
+        <div className="question-bank-review-actions">
+          <Button className="ghost-button compact" onClick={handleSelectAllQuestionUploadRows} disabled={questionBankGenerationBusy || !selectableCount}>
+            Select All
+          </Button>
+          <Button className="ghost-button compact" onClick={handleClearQuestionUploadRows} disabled={questionBankGenerationBusy || !selectableCount}>
+            Clear Selection
+          </Button>
+          <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={questionBankGenerationBusy || !questionUploadReport?.canUpload || !questionUploadSelectedCount}>
+            Add Selected
+          </Button>
+        </div>
+        <ol className="question-bank-review-list">
+          {questionUploadReviewRows.map((row) => {
+            const isSelected = questionUploadSelectedKeys.has(row.key);
+            const meta = [
+              row.category,
+              row.type,
+              row.answerType ? `Answer: ${row.answerType}` : '',
+              row.correctAnswer ? `Correct: ${row.correctAnswer}` : 'Correct: Game-dependent',
+              row.relationshipArea ? `Area: ${row.relationshipArea}` : '',
+              row.tags ? `Tags: ${row.tags}` : '',
+            ].filter(Boolean);
+            return (
+              <li key={row.key} className={`question-bank-review-row ${row.selectable ? 'is-selectable' : 'is-locked'} ${isSelected ? 'is-selected' : ''}`}>
+                <label className="question-bank-review-select">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    disabled={questionBankGenerationBusy || !row.selectable}
+                    onChange={() => handleToggleQuestionUploadRow(row.key)}
+                  />
+                  <span>{row.action}</span>
+                </label>
+                <div className="question-bank-review-copy">
+                  <p>{row.question}</p>
+                  <small>{meta.join(' | ') || 'No metadata'}</small>
+                  {row.options ? <small>Options: {row.options}</small> : null}
+                  {row.errors.length ? <small className="question-bank-review-error">{row.errors.join(' | ')}</small> : null}
+                </div>
+                {!isSelected ? (
+                  <Button className="ghost-button compact" onClick={() => handleRemoveQuestionUploadRow(row.key)} disabled={questionBankGenerationBusy}>
+                    Delete
+                  </Button>
+                ) : null}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    );
   };
 
   useEffect(() => {
@@ -12316,7 +12456,7 @@ function LobbyScreen({
                 <div>
                   <p className="eyebrow">Admin Only</p>
                   <h2>Question Maker</h2>
-                  <p className="panel-copy">Generate fresh questions with Gemini and add valid, non-duplicate rows to the selected game bank.</p>
+                  <p className="panel-copy">Generate fresh questions with Gemini, review the checked rows, then add only the selected questions.</p>
                 </div>
                 <span className="status-pill">{geminiIsConfigured ? 'Gemini ready' : 'API key needed'}</span>
               </div>
@@ -12325,7 +12465,7 @@ function LobbyScreen({
                 <div className="question-bank-upload-copy">
                   <p className="eyebrow">Question Maker</p>
                   <h3>{questionMakerTargetBankType === 'all' ? 'All Games' : getQuestionBankSyncTarget(questionMakerTargetBankType).gameName}</h3>
-                  <span>Pick a game, set how many questions to make, then let the app check and upload only valid new rows.</span>
+                  <span>Pick a game, set how many questions to make, then review the checked rows before anything is added.</span>
                 </div>
                 <div className="question-bank-upload-controls question-maker-controls">
                   <label className="field question-bank-generator-count">
@@ -12343,7 +12483,6 @@ function LobbyScreen({
                   <label className="field">
                     <span>Game</span>
                     <select value={questionMakerTargetBankType} onChange={(event) => setQuestionMakerTargetBankType(event.target.value)} disabled={questionBankGenerationBusy}>
-                      <option value="all">All games</option>
                       {QUESTION_BANK_SYNC_TARGETS.map((target) => (
                         <option key={target.bankType} value={target.bankType}>
                           {target.gameName}
@@ -12390,7 +12529,7 @@ function LobbyScreen({
                             <li key={item.key}>
                               <span>{item.action}</span>
                               <p>{item.question}</p>
-                              <small>{[item.category, item.type].filter(Boolean).join(' Â· ')}</small>
+                              <small>{[item.category, item.type].filter(Boolean).join(' | ')}</small>
                             </li>
                           ))}
                         </ol>
@@ -12398,6 +12537,7 @@ function LobbyScreen({
                     ) : null}
                   </div>
                 ) : null}
+                {renderQuestionUploadReviewPanel('Question Maker review')}
               </div>
             </section>
           </section>
@@ -12530,8 +12670,8 @@ function LobbyScreen({
                       <Button className="ghost-button compact" onClick={() => questionUploadInputRef.current?.click()} disabled={questionBankGenerationBusy}>
                         Choose CSV
                       </Button>
-                      <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={questionBankGenerationBusy || !questionUploadDraft?.rawText || !questionUploadReport?.canUpload}>
-                        Submit Upload
+                      <Button className="primary-button compact" onClick={handleSubmitQuestionUpload} disabled={questionBankGenerationBusy || !questionUploadDraft?.rawText || !questionUploadReport?.canUpload || !questionUploadSelectedCount}>
+                        Add Selected
                       </Button>
                       <label className="field field-wide question-bank-upload-prompt-field">
                         <span>Prompt</span>
@@ -12544,7 +12684,7 @@ function LobbyScreen({
                     <div className="question-bank-upload-copy">
                       <p className="eyebrow">AI Question Generator</p>
                       <h3>{questionUploadTarget.gameName}</h3>
-                      <span>Generate questions with Gemini, then the app checks, repairs once if needed, and adds valid new rows straight into Firebase.</span>
+                      <span>Generate questions with Gemini, then review the checked rows before adding anything to Firebase.</span>
                     </div>
                     <div className="question-bank-upload-controls">
                       <label className="field question-bank-generator-count">
@@ -12639,7 +12779,7 @@ function LobbyScreen({
                     </div>
                     <p>{questionUploadProgress.message}</p>
                     {questionUploadDraft ? (
-                      <small>{`${questionUploadDraft.rowCount} ${questionUploadDraft.sourceType === 'structured-json' ? 'pasted' : 'generated'} row${questionUploadDraft.rowCount === 1 ? '' : 's'} checked for ${questionUploadTarget.gameName}.`}</small>
+                      <small>{`${questionUploadDraft.rowCount} ${questionUploadDraft.sourceType === 'structured-json' ? 'pasted' : 'generated'} row${questionUploadDraft.rowCount === 1 ? '' : 's'} checked for ${getQuestionBankSyncTarget(questionUploadDraft.targetBankType || questionUploadTarget.bankType).gameName}.`}</small>
                     ) : null}
                     {questionUploadOutcomeQuestions.length ? (
                       <div className="question-bank-upload-outcome" aria-label="Questions added in this upload">
@@ -12658,7 +12798,7 @@ function LobbyScreen({
                         </ol>
                       </div>
                     ) : null}
-                    {!questionUploadOutcomeQuestions.length && questionUploadDraft?.previewQuestions?.length ? (
+                    {false && !questionUploadOutcomeQuestions.length && questionUploadDraft?.previewQuestions?.length ? (
                       <div className="question-bank-upload-outcome question-bank-upload-preview" aria-label="Questions queued from structured JSON">
                         <div className="question-bank-upload-outcome-head">
                           <strong>{questionUploadDraft.previewQuestions.length} queued from paste</strong>
@@ -12677,6 +12817,7 @@ function LobbyScreen({
                     ) : null}
                   </div>
                 ) : null}
+                {renderQuestionUploadReviewPanel(questionBankSegment === 'upload' ? 'Question upload review' : 'Generated question review')}
                 <div className={`question-bank-preflight ${
                   questionUploadReport
                     ? questionUploadReport.canUpload ? 'is-ready' : 'is-error'
@@ -20489,10 +20630,16 @@ function RedemptionStoreSection({
   const currentEditingId = editingIds[ownerSeat];
   const currentRequestDraft = requestDrafts[ownerSeat];
   const ownerRequestsWaitingForMe = forfeitPriceRequests
-    .filter((request) => seatFromPlayerRef(request.storeOwnerUserId || request.requestedFromUserId) === ownerSeat && matchesViewerIdentity(request.requestedFromUserId))
+    .filter((request) =>
+      seatFromPlayerRef(request.storeOwnerUserId || request.requestedFromUserId) === ownerSeat
+      && matchesViewerIdentity(request.requestedFromUserId)
+      && (request.status || 'pending') === 'pending')
     .sort(sortByNewest);
   const ownerRequestsSentByMe = forfeitPriceRequests
-    .filter((request) => seatFromPlayerRef(request.storeOwnerUserId || request.requestedFromUserId) === ownerSeat && matchesViewerIdentity(request.requestedByUserId))
+    .filter((request) =>
+      seatFromPlayerRef(request.storeOwnerUserId || request.requestedFromUserId) === ownerSeat
+      && matchesViewerIdentity(request.requestedByUserId)
+      && (request.status || 'pending') !== 'added_to_store')
     .sort(sortByNewest);
   const ownerAmaWaitingForMe = amaRequests
     .filter((request) => seatFromPlayerRef(request.storeOwnerUserId || request.requestedFromUserId || request.ownerPlayerId) === ownerSeat && matchesViewerIdentity(request.requestedFromUserId || request.storeOwnerUserId))
@@ -20503,7 +20650,7 @@ function RedemptionStoreSection({
   const storeTitle = ownerSeat === 'jay' ? "JAY'S FORFEITS" : "KIM'S FORFEITS";
   const storeHelper = isOwnStore
     ? `These are the forfeits ${ownerLabel} offers.`
-    : `Available forfeits you can request from ${ownerLabel}.`;
+    : `Available forfeits you can redeem from ${ownerLabel}. Redeeming spends ${ownerLabel}'s lifetime points.`;
   const requestPanelTitle =
     ownerSeat === 'jay'
       ? "KIM'S REQUESTS (TO JAY)"
@@ -20857,10 +21004,10 @@ function RedemptionStoreSection({
                       ) : (
                         <Button
                           className="primary-button compact"
-                          onClick={() => openRequestForfeitModal(item)}
-                          disabled={isBusy}
+                          onClick={() => onRedeemRedemptionItem?.(item)}
+                          disabled={isBusy || item.active === false || ownerBalance < Number(item.cost || 0)}
                         >
-                          REQUEST
+                          REDEEM
                         </Button>
                       )}
                     </div>
@@ -23902,7 +24049,7 @@ function ProductionApp() {
       forfeitPriceRequests.filter(
         (request) =>
           matchesCurrentPlayerIdentity(request.requestedByUserId) &&
-          request.status !== 'pending' &&
+          request.status === 'rejected' &&
           request.responseNotificationSeen === false,
       ),
     [forfeitPriceRequests, matchesCurrentPlayerIdentity],
@@ -24153,7 +24300,7 @@ function ProductionApp() {
     [gameBankRecords],
   );
   const quizBankQuestions = useMemo(
-    () => quizBankRecords.filter(isQuestionActiveInBank),
+    () => quizBankRecords.filter(isPlayableQuickFireQuizQuestion),
     [quizBankRecords],
   );
   const thisOrThatBankQuestions = useMemo(
@@ -27009,8 +27156,8 @@ function ProductionApp() {
         createdStoreItemId: storeItemRef.id,
         requestNotificationSeen: true,
         requestNotificationSeenAt: serverTimestamp(),
-        responseNotificationSeen: false,
-        responseNotificationSeenAt: null,
+        responseNotificationSeen: true,
+        responseNotificationSeenAt: serverTimestamp(),
       });
     });
   };

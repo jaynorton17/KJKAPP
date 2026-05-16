@@ -793,6 +793,74 @@ const normalizeLooseAnswer = (value) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const QUICK_FIRE_PLAYER_ANSWER_VALUES = new Set([
+  'jay',
+  'kim',
+  'eva',
+  'j',
+  'both',
+  'neither',
+  'either',
+  'jay or kim',
+  'kim or jay',
+  'jay kim',
+  'kim jay',
+]);
+
+const QUICK_FIRE_BANNED_CATEGORY_KEYS = new Set([
+  'personaltrivia',
+  'relationshiphistory',
+  'datesplaces',
+  'preferences',
+  'memories',
+  'funnyfacts',
+  'cheekyfacts',
+  'household',
+  'couple',
+  'relationship',
+].map(normalizeHeader));
+
+const QUICK_FIRE_BANNED_PROMPT_PATTERNS = [
+  /\bwho\s+(?:is|would be|would)\s+(?:more|most)\s+likely\b/i,
+  /\b(?:most|more)\s+likely\s+to\b/i,
+  /\bwhich\s+(?:of\s+you|one\s+of\s+you)\b/i,
+  /\b(?:jay|kim|eva)\s+(?:or|vs\.?|versus|and)\s+(?:jay|kim|eva)\b/i,
+  /\b(?:you two|both of you|the other player|other person|your partner)\b/i,
+  /\b(?:relationship|couple|date night|first date|personal trivia|preference|shared memory|favourite memory|favorite memory|relationship memory|memory lane)\b/i,
+];
+
+export const getQuickFireQuizContentErrors = ({
+  questionText = '',
+  category = '',
+  correctAnswer = '',
+  options = [],
+} = {}) => {
+  const errors = [];
+  const prompt = normalizeText(questionText);
+  const normalizedCategory = normalizeHeader(category);
+  const normalizedAnswer = normalizeLooseAnswer(correctAnswer);
+  const normalizedOptions = options.map(normalizeLooseAnswer).filter(Boolean);
+
+  if (QUICK_FIRE_BANNED_CATEGORY_KEYS.has(normalizedCategory)) {
+    errors.push('Quick Fire Quiz categories must be factual, not player or relationship based');
+  }
+
+  if (QUICK_FIRE_BANNED_PROMPT_PATTERNS.some((pattern) => pattern.test(prompt))) {
+    errors.push('Quick Fire Quiz questions must be factual trivia, not player voting or relationship prompts');
+  }
+
+  if (QUICK_FIRE_PLAYER_ANSWER_VALUES.has(normalizedAnswer)) {
+    errors.push('Quick Fire Quiz correct answers cannot be player names, both, neither, or either');
+  }
+
+  const playerOptionCount = normalizedOptions.filter((option) => QUICK_FIRE_PLAYER_ANSWER_VALUES.has(option)).length;
+  if (normalizedOptions.length > 0 && playerOptionCount >= Math.min(2, normalizedOptions.length)) {
+    errors.push('Quick Fire Quiz options cannot be player-vote choices');
+  }
+
+  return [...new Set(errors)];
+};
+
 export const parseGoogleSheetQuizImport = ({
   rawText,
   existingQuestions = [],
@@ -832,6 +900,7 @@ export const parseGoogleSheetQuizImport = ({
     if (!questionText) errors.push('Missing question text');
     if (!correctAnswer) errors.push('Missing correct answer');
     if (roundType === 'multipleChoice' && options.length < 2) errors.push('Multiple choice needs at least 2 options');
+    errors.push(...getQuickFireQuizContentErrors({ questionText, category, correctAnswer, options }));
 
     const question = createGoogleSheetQuestionTemplate({
       ...row,

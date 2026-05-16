@@ -3125,6 +3125,108 @@ button:disabled {
   font-size: 0.64rem;
 }
 
+.question-bank-review-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(112, 255, 199, 0.28);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.question-bank-review-head,
+.question-bank-review-actions,
+.question-bank-review-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.question-bank-review-head {
+  justify-content: space-between;
+}
+
+.question-bank-review-head h4 {
+  margin: 2px 0 0;
+  color: #fff;
+  font-size: 0.95rem;
+}
+
+.question-bank-review-actions {
+  flex-wrap: wrap;
+}
+
+.question-bank-review-list {
+  display: grid;
+  gap: 8px;
+  max-height: 460px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.question-bank-review-row {
+  align-items: flex-start;
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.question-bank-review-row.is-selected {
+  border-color: rgba(112, 255, 199, 0.34);
+  background: rgba(112, 255, 199, 0.08);
+}
+
+.question-bank-review-row.is-locked {
+  opacity: 0.72;
+}
+
+.question-bank-review-select {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 96px;
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.question-bank-review-select input {
+  width: 16px;
+  height: 16px;
+  accent-color: #70ffc7;
+}
+
+.question-bank-review-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+}
+
+.question-bank-review-copy p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.78rem;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.question-bank-review-copy small {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.question-bank-review-copy .question-bank-review-error {
+  color: #ffc4c4;
+}
+
 .question-bank-upload-progress.is-error {
   border-color: rgba(255, 112, 112, 0.42);
   background: rgba(95, 20, 32, 0.24);
