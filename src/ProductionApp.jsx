@@ -8233,6 +8233,8 @@ function LobbyScreen({
   const [questionGenerationTone, setQuestionGenerationTone] = useState('surprise');
   const [questionGenerationIntensity, setQuestionGenerationIntensity] = useState('surprise');
   const [questionGenerationBrief, setQuestionGenerationBrief] = useState('');
+  const [questionMakerTargetBankType, setQuestionMakerTargetBankType] = useState('all');
+  const [questionMakerCountDraft, setQuestionMakerCountDraft] = useState('30');
   const [isGeneratingQuestionBankCsv, setIsGeneratingQuestionBankCsv] = useState(false);
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
   const [selectedRoundTypes, setSelectedRoundTypes] = useState([]);
@@ -8878,9 +8880,15 @@ function LobbyScreen({
     setActiveTab('questionBank');
   };
 
+  const handleQuestionMakerTabSelect = () => {
+    closeDashboardMenu();
+    if (!requestQuestionBankAccess()) return;
+    setActiveTab('questionMaker');
+  };
+
   const handleDashboardTabSelect = (tabId) => {
     closeDashboardMenu();
-    if (tabId === 'questionBank' && !requestQuestionBankAccess()) return;
+    if ((tabId === 'questionBank' || tabId === 'questionMaker') && !requestQuestionBankAccess()) return;
     setActiveTab(tabId);
     if (tabId === 'activity') setActivityTab((current) => current || 'activeGames');
   };
@@ -9817,7 +9825,7 @@ function LobbyScreen({
       'text/csv;charset=utf-8',
     );
   };
-  const handleGenerateQuestionBankQuestions = async () => {
+  const handleGenerateQuestionBankQuestions = async (options = {}) => {
     if (!geminiIsConfigured) {
       const message = 'Gemini API key is missing. Add VITE_GEMINI_API_KEY to the app environment and redeploy.';
       setQuestionUploadProgress({ status: 'error', percent: 0, message });
@@ -9832,16 +9840,16 @@ function LobbyScreen({
       return;
     }
 
-    const target = questionUploadTarget;
-    const requestedCount = clampQuestionBankGenerationCount(questionGenerationCountDraft);
+    const target = options.target || questionUploadTarget;
+    const requestedCount = clampQuestionBankGenerationCount(options.count || questionGenerationCountDraft);
     const constraints = { ...questionGenerationConstraints };
     const promptOptions = {
       questionCount: requestedCount,
-      questionType: questionGenerationType,
-      category: questionGenerationCategory,
-      tone: questionGenerationTone,
-      intensity: questionGenerationIntensity,
-      extraBrief: questionGenerationBrief,
+      questionType: options.questionType || questionGenerationType,
+      category: options.category || questionGenerationCategory,
+      tone: options.tone || questionGenerationTone,
+      intensity: options.intensity || questionGenerationIntensity,
+      extraBrief: options.brief ?? questionGenerationBrief,
     };
     const existingQuestionLines = (bankQuestions || [])
       .filter((question) => normalizeQuestionBankType(question?.bankType) === normalizeQuestionBankType(target.bankType))
@@ -9992,6 +10000,37 @@ function LobbyScreen({
       });
     } finally {
       setIsGeneratingQuestionBankCsv(false);
+    }
+  };
+  const handleGenerateQuestionMakerQuestions = async () => {
+    if (!isAdmin) {
+      window.alert('Question Maker is only available to the admin account.');
+      return;
+    }
+    const requestedCount = clampQuestionBankGenerationCount(questionMakerCountDraft);
+    const targets = questionMakerTargetBankType === 'all'
+      ? QUESTION_BANK_SYNC_TARGETS
+      : [getQuestionBankSyncTarget(questionMakerTargetBankType)];
+
+    if (
+      targets.length > 1
+      && typeof window !== 'undefined'
+      && !window.confirm(`Generate and add ${requestedCount} questions for each game?`)
+    ) {
+      return;
+    }
+
+    for (const target of targets) {
+      // Generate sequentially so each bank gets its own validation and upload pass.
+      await handleGenerateQuestionBankQuestions({
+        target,
+        count: requestedCount,
+        questionType: 'surprise',
+        category: 'surprise',
+        tone: 'surprise',
+        intensity: 'surprise',
+        brief: questionGenerationBrief,
+      });
     }
   };
   const handleRepairGeneratedQuestionBankDraft = async () => {
@@ -10246,7 +10285,7 @@ function LobbyScreen({
     setProfileNameDraft(normalizeText(profile?.displayName || user?.displayName || user?.email?.split('@')[0] || ''));
   }, [profile?.displayName, user?.displayName, user?.email]);
   useEffect(() => {
-    if (!isAdmin && activeTab === 'questionBank') {
+    if (!isAdmin && (activeTab === 'questionBank' || activeTab === 'questionMaker')) {
       setActiveTab('gameLobby');
     }
   }, [activeTab, isAdmin]);
@@ -11304,6 +11343,9 @@ function LobbyScreen({
                   <Button className="ghost-button compact" onClick={handleQuestionBankTabSelect} disabled={isBusy}>
                     Question Bank
                   </Button>
+                  <Button className="ghost-button compact" onClick={handleQuestionMakerTabSelect} disabled={isBusy}>
+                    Question Maker
+                  </Button>
                   <Button className={`ghost-button compact editing-mode-toggle ${editingModeEnabled ? 'is-on' : ''}`} onClick={handleToggleEditingModeFromMenu} disabled={isBusy}>
                     {editingModeEnabled ? 'Editing Mode On' : 'Editing Mode Off'}
                   </Button>
@@ -12264,6 +12306,100 @@ function LobbyScreen({
 
 </div>
 
+          </section>
+        ) : null}
+
+        {isAdmin && activeTab === 'questionMaker' ? (
+          <section className="lobby-tab-panel" aria-label="Question Maker" id="dashboard-question-maker">
+            <section className="panel lobby-panel lobby-panel--lobby question-bank-card dashboard-page-card">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Admin Only</p>
+                  <h2>Question Maker</h2>
+                  <p className="panel-copy">Generate fresh questions with Gemini and add valid, non-duplicate rows to the selected game bank.</p>
+                </div>
+                <span className="status-pill">{geminiIsConfigured ? 'Gemini ready' : 'API key needed'}</span>
+              </div>
+
+              <div className="question-bank-upload-panel question-maker-admin-panel" aria-label="Admin question maker">
+                <div className="question-bank-upload-copy">
+                  <p className="eyebrow">Question Maker</p>
+                  <h3>{questionMakerTargetBankType === 'all' ? 'All Games' : getQuestionBankSyncTarget(questionMakerTargetBankType).gameName}</h3>
+                  <span>Pick a game, set how many questions to make, then let the app check and upload only valid new rows.</span>
+                </div>
+                <div className="question-bank-upload-controls question-maker-controls">
+                  <label className="field question-bank-generator-count">
+                    <span>Number</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="50"
+                      step="1"
+                      value={questionMakerCountDraft}
+                      onChange={(event) => setQuestionMakerCountDraft(event.target.value)}
+                      disabled={questionBankGenerationBusy}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Game</span>
+                    <select value={questionMakerTargetBankType} onChange={(event) => setQuestionMakerTargetBankType(event.target.value)} disabled={questionBankGenerationBusy}>
+                      <option value="all">All games</option>
+                      {QUESTION_BANK_SYNC_TARGETS.map((target) => (
+                        <option key={target.bankType} value={target.bankType}>
+                          {target.gameName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field field-wide">
+                    <span>Brief</span>
+                    <input
+                      type="text"
+                      value={questionGenerationBrief}
+                      onChange={(event) => setQuestionGenerationBrief(event.target.value)}
+                      placeholder="Optional theme for this batch"
+                      disabled={questionBankGenerationBusy}
+                    />
+                  </label>
+                  <Button className="primary-button compact question-bank-generate-button" onClick={handleGenerateQuestionMakerQuestions} disabled={questionBankGenerationBusy}>
+                    Generate Questions
+                  </Button>
+                </div>
+                {questionUploadProgress.status !== 'idle' ? (
+                  <div className={`question-bank-upload-progress is-${questionUploadProgress.status}`}>
+                    <div className="question-bank-upload-progress-head">
+                      <strong>{questionUploadDraft?.fileName || (questionUploadProgress.status === 'done' ? 'Questions added' : 'Question generation')}</strong>
+                      {questionUploadDraft ? (
+                        <button type="button" onClick={handleClearQuestionUploadDraft} disabled={questionBankGenerationBusy}>
+                          Clear
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="question-bank-upload-progress-track" aria-hidden="true">
+                      <span style={{ width: `${Math.max(0, Math.min(100, Number(questionUploadProgress.percent || 0)))}%` }} />
+                    </div>
+                    <p>{questionUploadProgress.message}</p>
+                    {questionUploadOutcomeQuestions.length ? (
+                      <div className="question-bank-upload-outcome" aria-label="Questions added by Question Maker">
+                        <div className="question-bank-upload-outcome-head">
+                          <strong>{questionUploadOutcomeQuestions.length} added or updated</strong>
+                          <span>Question Maker</span>
+                        </div>
+                        <ol>
+                          {questionUploadOutcomeQuestions.map((item) => (
+                            <li key={item.key}>
+                              <span>{item.action}</span>
+                              <p>{item.question}</p>
+                              <small>{[item.category, item.type].filter(Boolean).join(' Â· ')}</small>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </section>
           </section>
         ) : null}
 
