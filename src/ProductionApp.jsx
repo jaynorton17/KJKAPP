@@ -44,6 +44,7 @@ import {
   ROUND_TYPES,
   addScores,
   deriveCategories,
+  findMatchingQuestion,
   filterQuestionsForDraw,
   formatScore,
   getDefaultAnswerType,
@@ -66,6 +67,12 @@ import {
 import { loadThemeIndex, saveThemeIndex } from './utils/storage.js';
 import { firebaseAuth, firebaseIsConfigured, firestore, storage } from './lib/firebase.js';
 import { parseGoogleSheetImport, parseGoogleSheetQuizImport, parseGoogleSheetReference } from './utils/importers.js';
+import {
+  QUESTION_MAKER_BATCH_SIZE,
+  buildQuestionMakerBatch,
+  questionMakerCandidateToTemplate,
+  validateQuestionMakerCandidate,
+} from './utils/questionMaker.js';
 
 const seats = ['jay', 'kim'];
 const categoryColorMap = CATEGORY_COLOR_MAP;
@@ -91,7 +98,17 @@ const fixedPlayerUids = {
   jay: 'jaynorton17',
   kim: 'stonekim93',
 };
+const adminUserIds = new Set([fixedPlayerUids.jay]);
 const normalizeIdentity = (value) => normalizeText(value).toLowerCase();
+const isQuestionMakerAdmin = (user, profile) =>
+  Boolean(
+    user?.uid &&
+      (
+        adminUserIds.has(user.uid) ||
+        profile?.isAdmin === true ||
+        normalizeIdentity(profile?.role) === 'admin'
+      ),
+  );
 const seatFromPlayerRef = (value) => {
   const normalized = normalizeIdentity(value);
   if (!normalized) return null;
@@ -1319,6 +1336,14 @@ function LobbyScreen({
   onConfirmAction,
   onCancelAction,
   onResetQuestionBank,
+  canUseQuestionMaker = false,
+  questionMakerBatches = { game: [], quiz: [] },
+  questionMakerPreparedAt = '',
+  onRegenerateQuestionMaker,
+  onUpdateQuestionMakerCandidate,
+  onApproveQuestionMakerCandidate,
+  onApproveQuestionMakerBatch,
+  onRejectQuestionMakerCandidate,
 }) {
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('kjk-dashboard-tab') || 'gameLobby');
   const [activityTab, setActivityTab] = useState(() => localStorage.getItem('kjk-activity-tab') || 'activeGames');
@@ -2129,6 +2154,20 @@ function LobbyScreen({
                   Re-enter All Questions
                 </Button>
               </div>
+
+              {canUseQuestionMaker ? (
+                <QuestionMakerAdminPanel
+                  bankType={questionBankSegment}
+                  candidates={questionMakerBatches?.[questionBankSegment] || []}
+                  preparedAt={questionMakerPreparedAt}
+                  onRegenerate={onRegenerateQuestionMaker}
+                  onUpdateCandidate={onUpdateQuestionMakerCandidate}
+                  onApproveCandidate={onApproveQuestionMakerCandidate}
+                  onApproveBatch={onApproveQuestionMakerBatch}
+                  onRejectCandidate={onRejectQuestionMakerCandidate}
+                  isBusy={isBusy}
+                />
+              ) : null}
             </section>
           </section>
         ) : null}
@@ -4693,6 +4732,184 @@ function QuestionBankMini({ questions, draft, setDraft, onAddQuestion, onSyncShe
           </article>
         ))}
       </div>
+    </section>
+  );
+}
+
+function QuestionMakerAdminPanel({
+  bankType = 'game',
+  candidates = [],
+  preparedAt = '',
+  onRegenerate,
+  onUpdateCandidate,
+  onApproveCandidate,
+  onApproveBatch,
+  onRejectCandidate,
+  isBusy = false,
+}) {
+  const isQuizBank = bankType === 'quiz';
+  const typeOptions = isQuizBank
+    ? ROUND_TYPES.filter((type) => ['multipleChoice', 'trueFalse', 'text'].includes(type.id))
+    : ROUND_TYPES;
+  const candidateRows = candidates.map((candidate) => ({
+    candidate,
+    errors: validateQuestionMakerCandidate(candidate),
+  }));
+  const readyCount = candidateRows.filter((row) => !row.errors.length).length;
+  const invalidCount = candidateRows.length - readyCount;
+  const title = isQuizBank ? 'Quiz Question Maker' : 'Game Question Maker';
+  const answerLabel = isQuizBank ? 'Correct answer' : 'Answer handling';
+
+  const handleTypeChange = (candidate, nextRoundType) => {
+    const patch = { roundType: nextRoundType };
+    if (nextRoundType === 'trueFalse' && !normalizeText(candidate.multipleChoiceOptions)) {
+      patch.multipleChoiceOptions = 'True\nFalse';
+    }
+    onUpdateCandidate?.(bankType, candidate.localId, patch);
+  };
+
+  return (
+    <section className="admin-question-maker" aria-label={title}>
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Admin Only</p>
+          <h3>{title}</h3>
+          <p className="panel-copy">
+            {QUESTION_MAKER_BATCH_SIZE} draft questions are prepared when admin logs in. Review, edit, then approve before anything enters the live bank.
+          </p>
+        </div>
+        <span className="status-pill">{readyCount} ready</span>
+      </div>
+
+      <div className="question-maker-toolbar">
+        <div className="question-maker-summary">
+          <strong>{candidates.length} drafts</strong>
+          <span>{invalidCount ? `${invalidCount} need edits` : 'All drafts are valid'}</span>
+          {preparedAt ? <span>Prepared {formatShortDateTime(preparedAt)}</span> : null}
+        </div>
+        <div className="button-row">
+          <Button className="ghost-button compact" onClick={() => onRegenerate?.(bankType)} disabled={isBusy}>
+            Generate 30
+          </Button>
+          <Button className="primary-button compact" onClick={() => onApproveBatch?.(bankType)} disabled={isBusy || !readyCount}>
+            Approve Ready
+          </Button>
+        </div>
+      </div>
+
+      {candidates.length ? (
+        <div className="question-maker-list">
+          {candidateRows.map(({ candidate, errors }, index) => {
+            const hasOptions = candidate.roundType === 'multipleChoice' || candidate.roundType === 'trueFalse';
+            return (
+              <article className={`question-maker-row ${errors.length ? 'has-errors' : ''}`} key={candidate.localId}>
+                <div className="question-maker-row-head">
+                  <div className="question-row-meta">
+                    <strong>{String(index + 1).padStart(2, '0')}</strong>
+                    <span>{isQuizBank ? 'Quiz' : 'Game'}</span>
+                    <span>{ROUND_TYPE_LABEL[candidate.roundType] || candidate.roundType}</span>
+                    <span>{candidate.category || 'No category'}</span>
+                  </div>
+                  <span className={`status-pill ${errors.length ? '' : 'is-hot'}`}>{errors.length ? 'Needs edit' : 'Ready'}</span>
+                </div>
+
+                <label className="field field-wide">
+                  <span>Question</span>
+                  <textarea
+                    rows={2}
+                    value={candidate.question}
+                    onChange={(event) => onUpdateCandidate?.(bankType, candidate.localId, { question: event.target.value })}
+                  />
+                </label>
+
+                <div className="question-maker-edit-grid">
+                  <label className="field">
+                    <span>Question Type</span>
+                    <select value={candidate.roundType} onChange={(event) => handleTypeChange(candidate, event.target.value)}>
+                      {typeOptions.map((type) => (
+                        <option key={type.id} value={type.id}>
+                          {type.shortLabel}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>Category</span>
+                    <input
+                      value={candidate.category}
+                      onChange={(event) => onUpdateCandidate?.(bankType, candidate.localId, { category: event.target.value })}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Tags</span>
+                    <input
+                      value={candidate.tags}
+                      onChange={(event) => onUpdateCandidate?.(bankType, candidate.localId, { tags: event.target.value })}
+                    />
+                  </label>
+
+                  {isQuizBank ? (
+                    <label className="field">
+                      <span>{answerLabel}</span>
+                      <input
+                        value={candidate.correctAnswer}
+                        onChange={(event) => onUpdateCandidate?.(bankType, candidate.localId, { correctAnswer: event.target.value })}
+                      />
+                    </label>
+                  ) : (
+                    <div className="question-maker-answer-note">
+                      <span>{answerLabel}</span>
+                      <strong>{candidate.answerHint || 'No fixed answer. Each player answers live.'}</strong>
+                    </div>
+                  )}
+                </div>
+
+                {hasOptions ? (
+                  <label className="field field-wide">
+                    <span>{isQuizBank ? 'Answer options' : 'Player options'}</span>
+                    <textarea
+                      rows={3}
+                      value={candidate.multipleChoiceOptions}
+                      onChange={(event) => onUpdateCandidate?.(bankType, candidate.localId, { multipleChoiceOptions: event.target.value })}
+                    />
+                  </label>
+                ) : null}
+
+                <label className="field field-wide">
+                  <span>Notes</span>
+                  <textarea
+                    rows={2}
+                    value={candidate.notes}
+                    onChange={(event) => onUpdateCandidate?.(bankType, candidate.localId, { notes: event.target.value })}
+                    placeholder="Optional admin notes"
+                  />
+                </label>
+
+                {errors.length ? (
+                  <div className="question-maker-errors">
+                    {errors.map((error) => (
+                      <span key={error}>{error}</span>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="row-actions question-maker-actions">
+                  <Button className="ghost-button compact" onClick={() => onRejectCandidate?.(bankType, candidate.localId)} disabled={isBusy}>
+                    Remove
+                  </Button>
+                  <Button className="primary-button compact" onClick={() => onApproveCandidate?.(bankType, candidate.localId)} disabled={isBusy || Boolean(errors.length)}>
+                    Approve
+                  </Button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="empty-copy">No maker drafts are waiting. Generate a fresh batch when you want more.</p>
+      )}
     </section>
   );
 }
@@ -7504,6 +7721,8 @@ function ProductionApp() {
   const [localEndedGameSummary, setLocalEndedGameSummary] = useState(null);
   const [confirmAction, setConfirmAction] = useState(null);
   const [bankDraft, setBankDraft] = useState(defaultBankDraft);
+  const [questionMakerBatches, setQuestionMakerBatches] = useState({ game: [], quiz: [] });
+  const [questionMakerPreparedAt, setQuestionMakerPreparedAt] = useState('');
   const [sheetInput, setSheetInput] = useState(DEFAULT_SETTINGS.googleSheetInput);
   const [syncNotice, setSyncNotice] = useState('');
   const [isBusy, setIsBusy] = useState(false);
@@ -7537,6 +7756,8 @@ function ProductionApp() {
   const lastAuthUserIdRef = useRef(firebaseAuth?.currentUser?.uid || '');
   const staleCompletedRestoreRef = useRef(new Set());
   const gameLibraryRoundsCacheRef = useRef(new Map());
+  const questionMakerLoginRef = useRef('');
+  const canUseQuestionMaker = isQuestionMakerAdmin(user, profile);
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
   const localTestGameForId = (targetGameId = '') => {
@@ -7663,9 +7884,44 @@ function ProductionApp() {
     [themeIndex],
   );
 
+  const regenerateQuestionMakerBatches = (targetBankType = 'all') => {
+    if (!canUseQuestionMaker || !user?.uid) {
+      setNotice('Only admin can use Question Maker.');
+      return;
+    }
+    const seed = `${user.uid}-${Date.now()}`;
+    setQuestionMakerBatches((current) => ({
+      game: targetBankType === 'quiz' ? current.game : buildQuestionMakerBatch({ bankType: 'game', seed: `${seed}-game` }),
+      quiz: targetBankType === 'game' ? current.quiz : buildQuestionMakerBatch({ bankType: 'quiz', seed: `${seed}-quiz` }),
+    }));
+    setQuestionMakerPreparedAt(new Date().toISOString());
+    setNotice(targetBankType === 'quiz'
+      ? `Question Maker prepared ${QUESTION_MAKER_BATCH_SIZE} quiz drafts for review.`
+      : targetBankType === 'game'
+        ? `Question Maker prepared ${QUESTION_MAKER_BATCH_SIZE} game drafts for review.`
+        : `Question Maker prepared ${QUESTION_MAKER_BATCH_SIZE} game drafts and ${QUESTION_MAKER_BATCH_SIZE} quiz drafts for review.`);
+  };
+
   useEffect(() => {
     saveThemeIndex(themeIndex);
   }, [themeIndex]);
+
+  useEffect(() => {
+    if (!canUseQuestionMaker || !user?.uid) {
+      questionMakerLoginRef.current = '';
+      setQuestionMakerBatches({ game: [], quiz: [] });
+      setQuestionMakerPreparedAt('');
+      return;
+    }
+    if (questionMakerLoginRef.current === user.uid) return;
+    questionMakerLoginRef.current = user.uid;
+    const seed = `${user.uid}-${Date.now()}`;
+    setQuestionMakerBatches({
+      game: buildQuestionMakerBatch({ bankType: 'game', seed: `${seed}-game-login` }),
+      quiz: buildQuestionMakerBatch({ bankType: 'quiz', seed: `${seed}-quiz-login` }),
+    });
+    setQuestionMakerPreparedAt(new Date().toISOString());
+  }, [canUseQuestionMaker, user?.uid]);
 
   useEffect(() => {
     try {
@@ -12584,6 +12840,97 @@ function ProductionApp() {
       setChatDraft('');
     }, 'Could not send chat message.');
 
+  const updateQuestionMakerCandidate = (targetBankType, localId, patch = {}) => {
+    if (!canUseQuestionMaker) return;
+    const bankType = targetBankType === 'quiz' ? 'quiz' : 'game';
+    setQuestionMakerBatches((current) => ({
+      ...current,
+      [bankType]: (current[bankType] || []).map((candidate) =>
+        candidate.localId === localId ? { ...candidate, ...patch } : candidate,
+      ),
+    }));
+  };
+
+  const rejectQuestionMakerCandidate = (targetBankType, localId) => {
+    if (!canUseQuestionMaker) return;
+    const bankType = targetBankType === 'quiz' ? 'quiz' : 'game';
+    setQuestionMakerBatches((current) => ({
+      ...current,
+      [bankType]: (current[bankType] || []).filter((candidate) => candidate.localId !== localId),
+    }));
+  };
+
+  const getQuestionMakerExistingQuestions = (targetBankType) =>
+    targetBankType === 'quiz' ? quizBankQuestions : gameBankQuestions;
+
+  const getQuestionMakerAddedBy = () =>
+    profile?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Admin';
+
+  const approveQuestionMakerCandidate = async (targetBankType, localId) =>
+    withBusy(async () => {
+      if (!canUseQuestionMaker || !user?.uid) throw new Error('Only admin can approve Question Maker drafts.');
+      if (!firestore) throw new Error('Firebase is not configured.');
+      const bankType = targetBankType === 'quiz' ? 'quiz' : 'game';
+      const candidate = (questionMakerBatches[bankType] || []).find((entry) => entry.localId === localId);
+      if (!candidate) throw new Error('Question Maker draft was not found.');
+      const errors = validateQuestionMakerCandidate(candidate);
+      if (errors.length) throw new Error(errors[0]);
+      const template = questionMakerCandidateToTemplate(candidate, { addedBy: getQuestionMakerAddedBy() });
+      if (findMatchingQuestion(getQuestionMakerExistingQuestions(bankType), template)) {
+        throw new Error('That draft looks like a duplicate of an existing question.');
+      }
+      await setDoc(doc(firestore, 'questionBank', template.id), template, { merge: true });
+      setQuestionMakerBatches((current) => ({
+        ...current,
+        [bankType]: (current[bankType] || []).filter((entry) => entry.localId !== localId),
+      }));
+      setNotice(`${bankType === 'quiz' ? 'Quiz' : 'Game'} question approved and added to the bank.`);
+    }, 'Could not approve Question Maker draft.');
+
+  const approveQuestionMakerBatch = async (targetBankType) =>
+    withBusy(async () => {
+      if (!canUseQuestionMaker || !user?.uid) throw new Error('Only admin can approve Question Maker drafts.');
+      if (!firestore) throw new Error('Firebase is not configured.');
+      const bankType = targetBankType === 'quiz' ? 'quiz' : 'game';
+      const candidates = questionMakerBatches[bankType] || [];
+      const existingQuestions = [...getQuestionMakerExistingQuestions(bankType)];
+      const approvedTemplates = [];
+      const approvedLocalIds = new Set();
+      let invalidCount = 0;
+      let duplicateCount = 0;
+
+      candidates.forEach((candidate) => {
+        const errors = validateQuestionMakerCandidate(candidate);
+        if (errors.length) {
+          invalidCount += 1;
+          return;
+        }
+        const template = questionMakerCandidateToTemplate(candidate, { addedBy: getQuestionMakerAddedBy() });
+        if (findMatchingQuestion(existingQuestions, template)) {
+          duplicateCount += 1;
+          return;
+        }
+        approvedTemplates.push(template);
+        approvedLocalIds.add(candidate.localId);
+        existingQuestions.push(template);
+      });
+
+      if (!approvedTemplates.length) {
+        throw new Error('No ready non-duplicate Question Maker drafts to approve.');
+      }
+
+      await upsertQuestionBankBatch(firestore, approvedTemplates);
+      setQuestionMakerBatches((current) => ({
+        ...current,
+        [bankType]: (current[bankType] || []).filter((candidate) => !approvedLocalIds.has(candidate.localId)),
+      }));
+      setNotice(
+        `Approved ${approvedTemplates.length} ${bankType === 'quiz' ? 'quiz' : 'game'} questions.`
+        + (invalidCount ? ` ${invalidCount} still need edits.` : '')
+        + (duplicateCount ? ` ${duplicateCount} duplicates skipped.` : ''),
+      );
+    }, 'Could not approve Question Maker drafts.');
+
   const addQuestion = async () =>
     withBusy(async () => {
       if (!bankDraft.question.trim()) throw new Error('Enter a question first.');
@@ -12880,6 +13227,14 @@ function ProductionApp() {
         onConfirmAction={confirmGameAction}
         onCancelAction={cancelGameAction}
         onResetQuestionBank={resetQuestionBankAction}
+        canUseQuestionMaker={canUseQuestionMaker}
+        questionMakerBatches={questionMakerBatches}
+        questionMakerPreparedAt={questionMakerPreparedAt}
+        onRegenerateQuestionMaker={regenerateQuestionMakerBatches}
+        onUpdateQuestionMakerCandidate={updateQuestionMakerCandidate}
+        onApproveQuestionMakerCandidate={approveQuestionMakerCandidate}
+        onApproveQuestionMakerBatch={approveQuestionMakerBatch}
+        onRejectQuestionMakerCandidate={rejectQuestionMakerCandidate}
       />
     );
   }
