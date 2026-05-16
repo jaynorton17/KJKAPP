@@ -1339,7 +1339,7 @@ function LobbyScreen({
   canUseQuestionMaker = false,
   questionMakerBatches = { game: [], quiz: [] },
   questionMakerPreparedAt = '',
-  onRegenerateQuestionMaker,
+  onGenerateQuestionMaker,
   onUpdateQuestionMakerCandidate,
   onApproveQuestionMakerCandidate,
   onApproveQuestionMakerBatch,
@@ -1351,6 +1351,8 @@ function LobbyScreen({
   const [quizQuestionCountDraft, setQuizQuestionCountDraft] = useState('10');
   const [analyticsSegment, setAnalyticsSegment] = useState('facts');
   const [questionBankSegment, setQuestionBankSegment] = useState('game');
+  const [questionMakerTarget, setQuestionMakerTarget] = useState('all');
+  const [questionMakerCount, setQuestionMakerCount] = useState(String(QUESTION_MAKER_BATCH_SIZE));
   const [quizAnalyticsTab, setQuizAnalyticsTab] = useState('overview');
   const [selectedRoundTypes, setSelectedRoundTypes] = useState([]);
   const [selectedCategories, setSelectedCategories] = useState([]);
@@ -1450,6 +1452,13 @@ function LobbyScreen({
     closeDashboardMenu();
     setActiveTab(tabId);
     if (tabId === 'activity') setActivityTab((current) => current || 'activeGames');
+  };
+
+  const handleQuestionMakerGenerate = () => {
+    onGenerateQuestionMaker?.({
+      targetBankType: questionMakerTarget,
+      count: questionMakerCount,
+    });
   };
 
   const renderDashboardIcon = (icon) => {
@@ -1855,6 +1864,11 @@ function LobbyScreen({
                 <Button className="ghost-button compact" onClick={() => { closeDashboardMenu(); setActiveTab('questionBank'); }} disabled={isBusy}>
                   Question Bank
                 </Button>
+                {canUseQuestionMaker ? (
+                  <Button className="ghost-button compact" onClick={() => { closeDashboardMenu(); setActiveTab('questionMaker'); }} disabled={isBusy}>
+                    Question Maker
+                  </Button>
+                ) : null}
                 <Button className="ghost-button compact" onClick={() => { closeDashboardMenu(); setIsProfileOpen(true); }} disabled={isBusy}>
                   My Profile
                 </Button>
@@ -2155,12 +2169,68 @@ function LobbyScreen({
                 </Button>
               </div>
 
-              {canUseQuestionMaker ? (
+            </section>
+          </section>
+        ) : null}
+
+        {activeTab === 'questionMaker' && canUseQuestionMaker ? (
+          <section className="lobby-tab-panel" aria-label="Question Maker" id="dashboard-question-maker">
+            <section className="panel lobby-panel lobby-panel--lobby question-bank-card dashboard-page-card">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Admin Only</p>
+                  <h2>Question Maker</h2>
+                  <p className="panel-copy">Generate local drafts, review them, then approve only the questions you want added to the live bank.</p>
+                </div>
+                <span className="status-pill">
+                  {(questionMakerBatches?.game?.length || 0) + (questionMakerBatches?.quiz?.length || 0)} drafts
+                </span>
+              </div>
+
+              <div className="question-maker-setup">
+                <label className="field">
+                  <span>How many questions</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={questionMakerCount}
+                    onChange={(event) => setQuestionMakerCount(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Game</span>
+                  <select value={questionMakerTarget} onChange={(event) => setQuestionMakerTarget(event.target.value)}>
+                    <option value="all">All games</option>
+                    <option value="game">Standard Game</option>
+                    <option value="quiz">Quick Fire Quiz</option>
+                  </select>
+                </label>
+                <div className="question-maker-setup-action">
+                  <Button className="primary-button compact" onClick={handleQuestionMakerGenerate} disabled={isBusy}>
+                    Generate Drafts
+                  </Button>
+                </div>
+              </div>
+
+              {questionMakerTarget !== 'quiz' || questionMakerBatches?.game?.length ? (
                 <QuestionMakerAdminPanel
-                  bankType={questionBankSegment}
-                  candidates={questionMakerBatches?.[questionBankSegment] || []}
+                  bankType="game"
+                  candidates={questionMakerBatches?.game || []}
                   preparedAt={questionMakerPreparedAt}
-                  onRegenerate={onRegenerateQuestionMaker}
+                  onUpdateCandidate={onUpdateQuestionMakerCandidate}
+                  onApproveCandidate={onApproveQuestionMakerCandidate}
+                  onApproveBatch={onApproveQuestionMakerBatch}
+                  onRejectCandidate={onRejectQuestionMakerCandidate}
+                  isBusy={isBusy}
+                />
+              ) : null}
+
+              {questionMakerTarget !== 'game' || questionMakerBatches?.quiz?.length ? (
+                <QuestionMakerAdminPanel
+                  bankType="quiz"
+                  candidates={questionMakerBatches?.quiz || []}
+                  preparedAt={questionMakerPreparedAt}
                   onUpdateCandidate={onUpdateQuestionMakerCandidate}
                   onApproveCandidate={onApproveQuestionMakerCandidate}
                   onApproveBatch={onApproveQuestionMakerBatch}
@@ -4740,7 +4810,6 @@ function QuestionMakerAdminPanel({
   bankType = 'game',
   candidates = [],
   preparedAt = '',
-  onRegenerate,
   onUpdateCandidate,
   onApproveCandidate,
   onApproveBatch,
@@ -4775,7 +4844,7 @@ function QuestionMakerAdminPanel({
           <p className="eyebrow">Admin Only</p>
           <h3>{title}</h3>
           <p className="panel-copy">
-            {QUESTION_MAKER_BATCH_SIZE} draft questions are prepared when admin logs in. Review, edit, then approve before anything enters the live bank.
+            Review and edit generated drafts here. Nothing enters the live bank until an admin approves it.
           </p>
         </div>
         <span className="status-pill">{readyCount} ready</span>
@@ -4788,9 +4857,6 @@ function QuestionMakerAdminPanel({
           {preparedAt ? <span>Prepared {formatShortDateTime(preparedAt)}</span> : null}
         </div>
         <div className="button-row">
-          <Button className="ghost-button compact" onClick={() => onRegenerate?.(bankType)} disabled={isBusy}>
-            Generate 30
-          </Button>
           <Button className="primary-button compact" onClick={() => onApproveBatch?.(bankType)} disabled={isBusy || !readyCount}>
             Approve Ready
           </Button>
@@ -7756,7 +7822,6 @@ function ProductionApp() {
   const lastAuthUserIdRef = useRef(firebaseAuth?.currentUser?.uid || '');
   const staleCompletedRestoreRef = useRef(new Set());
   const gameLibraryRoundsCacheRef = useRef(new Map());
-  const questionMakerLoginRef = useRef('');
   const canUseQuestionMaker = isQuestionMakerAdmin(user, profile);
   const isCurrentLocalTestGame = isLocalTestGame(game) || isLocalTestGameId(gameId);
   const hasOpenRoomSession = Boolean(gameId || game?.id);
@@ -7884,22 +7949,24 @@ function ProductionApp() {
     [themeIndex],
   );
 
-  const regenerateQuestionMakerBatches = (targetBankType = 'all') => {
+  const generateQuestionMakerBatches = ({ targetBankType = 'all', count = QUESTION_MAKER_BATCH_SIZE } = {}) => {
     if (!canUseQuestionMaker || !user?.uid) {
       setNotice('Only admin can use Question Maker.');
       return;
     }
+    const requestedCount = Math.min(100, Math.max(1, Math.floor(Number(count) || QUESTION_MAKER_BATCH_SIZE)));
+    const normalizedTarget = targetBankType === 'quiz' || targetBankType === 'game' ? targetBankType : 'all';
     const seed = `${user.uid}-${Date.now()}`;
     setQuestionMakerBatches((current) => ({
-      game: targetBankType === 'quiz' ? current.game : buildQuestionMakerBatch({ bankType: 'game', seed: `${seed}-game` }),
-      quiz: targetBankType === 'game' ? current.quiz : buildQuestionMakerBatch({ bankType: 'quiz', seed: `${seed}-quiz` }),
+      game: normalizedTarget === 'quiz' ? current.game : buildQuestionMakerBatch({ bankType: 'game', count: requestedCount, seed: `${seed}-game` }),
+      quiz: normalizedTarget === 'game' ? current.quiz : buildQuestionMakerBatch({ bankType: 'quiz', count: requestedCount, seed: `${seed}-quiz` }),
     }));
     setQuestionMakerPreparedAt(new Date().toISOString());
-    setNotice(targetBankType === 'quiz'
-      ? `Question Maker prepared ${QUESTION_MAKER_BATCH_SIZE} quiz drafts for review.`
-      : targetBankType === 'game'
-        ? `Question Maker prepared ${QUESTION_MAKER_BATCH_SIZE} game drafts for review.`
-        : `Question Maker prepared ${QUESTION_MAKER_BATCH_SIZE} game drafts and ${QUESTION_MAKER_BATCH_SIZE} quiz drafts for review.`);
+    setNotice(normalizedTarget === 'quiz'
+      ? `Question Maker prepared ${requestedCount} quiz drafts for review.`
+      : normalizedTarget === 'game'
+        ? `Question Maker prepared ${requestedCount} game drafts for review.`
+        : `Question Maker prepared ${requestedCount} game drafts and ${requestedCount} quiz drafts for review.`);
   };
 
   useEffect(() => {
@@ -7907,20 +7974,9 @@ function ProductionApp() {
   }, [themeIndex]);
 
   useEffect(() => {
-    if (!canUseQuestionMaker || !user?.uid) {
-      questionMakerLoginRef.current = '';
-      setQuestionMakerBatches({ game: [], quiz: [] });
-      setQuestionMakerPreparedAt('');
-      return;
-    }
-    if (questionMakerLoginRef.current === user.uid) return;
-    questionMakerLoginRef.current = user.uid;
-    const seed = `${user.uid}-${Date.now()}`;
-    setQuestionMakerBatches({
-      game: buildQuestionMakerBatch({ bankType: 'game', seed: `${seed}-game-login` }),
-      quiz: buildQuestionMakerBatch({ bankType: 'quiz', seed: `${seed}-quiz-login` }),
-    });
-    setQuestionMakerPreparedAt(new Date().toISOString());
+    if (canUseQuestionMaker && user?.uid) return;
+    setQuestionMakerBatches({ game: [], quiz: [] });
+    setQuestionMakerPreparedAt('');
   }, [canUseQuestionMaker, user?.uid]);
 
   useEffect(() => {
@@ -13230,7 +13286,7 @@ function ProductionApp() {
         canUseQuestionMaker={canUseQuestionMaker}
         questionMakerBatches={questionMakerBatches}
         questionMakerPreparedAt={questionMakerPreparedAt}
-        onRegenerateQuestionMaker={regenerateQuestionMakerBatches}
+        onGenerateQuestionMaker={generateQuestionMakerBatches}
         onUpdateQuestionMakerCandidate={updateQuestionMakerCandidate}
         onApproveQuestionMakerCandidate={approveQuestionMakerCandidate}
         onApproveQuestionMakerBatch={approveQuestionMakerBatch}
