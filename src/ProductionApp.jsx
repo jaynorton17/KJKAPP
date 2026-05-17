@@ -609,12 +609,12 @@ const QUESTION_BANK_GENERATION_PROFILES = {
     ],
   },
   [MOST_LIKELY_GAME_MODE]: {
-    howItWorks: 'Both players vote Jay, Kim, Both, or Neither for each prompt. Matching votes stay clear, split votes add +10 to both, and missing votes add +20.',
+    howItWorks: 'Both players vote Jay or Kim for each prompt. Matching votes stay clear, split votes add +10 to both, and missing votes add +20.',
     questionTypes: ['Multiple Choice'],
     categories: ['Funny', 'Household', 'Romance', 'Chaos', 'Social Life', 'Money', 'Jealousy', 'Confidence', 'Spicy', 'Future'],
     rules: [
       'Questions should start with or clearly imply "Who is most likely to".',
-      'Leave Options blank because the app supplies Jay, Kim, Both, and Neither.',
+      'Leave Options blank because the app supplies Jay and Kim.',
       'Avoid prompts where only one player could ever reasonably be chosen.',
       'Vary the situation, stakes, and tone so the set does not read like one repeated template.',
     ],
@@ -863,7 +863,7 @@ const QUESTION_BANK_TYPE_EXAMPLES = [
     correctAnswer: '',
     defaultAnswerType: 'multipleChoice',
     answerType: 'multipleChoice',
-    notes: 'Leave Options blank when the app should supply Jay, Kim, Both, Neither.',
+    notes: 'Leave Options blank when the app should supply Jay and Kim.',
   },
   {
     type: 'Would you rather',
@@ -10854,7 +10854,7 @@ function LobbyScreen({
     },
     mostLikely: {
       name: 'Most Likely To',
-      howItWorks: 'Both players vote Jay, Kim, Both, or Neither. Matching votes add 0, split votes add +10, and missing votes add +20.',
+      howItWorks: 'Both players vote Jay or Kim. Matching votes add 0, split votes add +10, and missing votes add +20.',
       questionTypes: ['Who is More Likely To'],
       categories: ['Connection', 'Fun', 'Personality', 'Romance', 'Competition'],
     },
@@ -12342,7 +12342,7 @@ function LobbyScreen({
                           eyebrow: 'Vote Match',
                           title: 'Most Likely To',
                           statusText: `${mostLikelyReadyCount} ready`,
-                          description: 'Both players vote Jay, Kim, Both, or Neither for each prompt. Matching votes stay clear; split votes add a small automatic penalty.',
+                          description: 'Both players vote Jay or Kim for each prompt. Matching votes stay clear; split votes add a small automatic penalty.',
                           availableCount: lobbyCardAvailableCounts.mostLikely,
                           footerMeta: (
                             <label className="lobby-image-tile-front-control">
@@ -12379,7 +12379,7 @@ function LobbyScreen({
                             <span className="status-pill">{remainingMostLikelyQuestionCount} available</span>
                           </div>
                           {renderLobbyTileDetails('mostLikely')}
-                          <p className="panel-copy">Each player locks one vote: Jay, Kim, Both, or Neither. Matching votes add 0. Split votes add +10 to both players automatically.</p>
+                          <p className="panel-copy">Each player locks one vote: Jay or Kim. Matching votes add 0. Split votes add +10 to both players automatically.</p>
                           <label className="field">
                             <span>Most Likely To Code</span>
                             <input
@@ -16403,7 +16403,7 @@ function MostLikelyLiveStatus({ revealIsReady }) {
         </article>
       </div>
       <p className="field-note true-false-answer-note">
-        Vote Jay, Kim, Both, or Neither. First tap locks your vote.
+        Vote Jay or Kim. First tap locks your vote.
       </p>
     </div>
   );
@@ -31526,7 +31526,7 @@ function ProductionApp() {
           : serialiseAnswerForQuestionType('preference', value);
       const lockedValue = normalizeChoice(rawLockedValue, game.currentRound);
       if (!lockedValue) {
-        throw new Error(isTrueFalseMode ? 'Choose True or False.' : isMostLikelyMode ? 'Choose Jay, Kim, Both, or Neither.' : 'Choose one of the two options.');
+        throw new Error(isTrueFalseMode ? 'Choose True or False.' : isMostLikelyMode ? 'Choose Jay or Kim.' : 'Choose one of the two options.');
       }
 
       const lockedAtIso = new Date().toISOString();

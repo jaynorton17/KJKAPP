@@ -13,7 +13,7 @@ const parseDelimitedItems = (value) => {
 };
 
 export const DEFAULT_TRUE_FALSE_OPTIONS = ['True', 'False'];
-export const DEFAULT_PLAYER_CHOICE_OPTIONS = ['Jay', 'Kim', 'Both', 'Neither'];
+export const DEFAULT_PLAYER_CHOICE_OPTIONS = ['Jay', 'Kim'];
 
 export const QUESTION_TYPE_CONFIGS = [
   {
