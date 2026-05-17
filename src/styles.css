@@ -17348,11 +17348,29 @@ select:focus-visible {
     letter-spacing: 0.06em;
   }
 
-  .mobile-board-panel .scoreboard-kicker,
-  .mobile-board-panel .scoreboard-mini-badge,
-  .mobile-board-panel .scoreboard-stage-footer {
-    display: none;
-  }
+.mobile-board-panel .scoreboard-stage .scoreboard-kicker,
+.mobile-board-panel .scoreboard-stage .scoreboard-mini-badge,
+.mobile-board-panel .scoreboard-stage-footer {
+  display: none;
+}
+
+.mobile-board-panel .room-active-header .scoreboard-kicker,
+.mobile-board-panel .room-active-header .scoreboard-mini-badge {
+  display: inline-flex;
+}
+
+.mobile-board-panel .room-active-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mobile-board-panel .room-active-header .scoreboard-mini-badge {
+  min-height: 20px;
+  max-width: min(100%, 16ch);
+  padding: 3px 6px;
+  font-size: 0.56rem;
+}
 
   .mobile-board-panel .scoreboard-stage-top {
     gap: 6px;
