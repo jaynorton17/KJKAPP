@@ -15809,20 +15809,8 @@ select:focus-visible {
   .room-active-frame--put-points .room-reveal-layout,
   .room-active-frame--compatibility-meter .room-reveal-layout,
   .room-active-frame--memory-lane .room-reveal-layout {
+    grid-template-columns: 1fr;
     gap: 8px;
-  }
-
-  .room-active-frame--true-false .room-reveal-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(190px, 0.42fr) minmax(0, 1fr);
-  }
-
-  .room-active-frame--this-or-that .room-reveal-layout,
-  .room-active-frame--most-likely .room-reveal-layout,
-  .room-active-frame--red-flag-green-flag .room-reveal-layout,
-  .room-active-frame--put-points .room-reveal-layout,
-  .room-active-frame--compatibility-meter .room-reveal-layout,
-  .room-active-frame--memory-lane .room-reveal-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(206px, 0.4fr) minmax(0, 1fr);
   }
 
   .room-reveal-player-card {
@@ -15831,6 +15819,8 @@ select:focus-visible {
   }
 
   .room-reveal-player-body {
+    grid-template-rows: auto;
+    grid-template-columns: 1fr;
     gap: 8px;
   }
 
@@ -15846,7 +15836,12 @@ select:focus-visible {
   }
 
   .room-reveal-score-strip {
+    grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .room-reveal-score-strip--answer-summary div:first-child {
+    grid-column: auto;
   }
 
   .room-reveal-score-strip strong {
@@ -15854,6 +15849,7 @@ select:focus-visible {
   }
 
   .room-reveal-center-card {
+    order: -1;
     gap: 6px;
     padding: 10px 12px;
   }
