@@ -1143,10 +1143,21 @@ function QuestionBankPanel({
                   <article className="question-row" role="listitem" key={question.id}>
                     <div className="question-row-main">
                       <div className="question-row-meta">
-                        <strong>{question.used ? 'Used' : 'Unused'}</strong>
-                        {question.category ? <span style={{ borderColor: categoryColorMap?.[question.category] || undefined }}>{question.category}</span> : null}
-                        <span>{ROUND_TYPE_LABEL[question.roundType] || question.roundType}</span>
-                        <span>{question.source === 'googleSheet' ? 'Google Sheet' : question.source || 'manual'}</span>
+                        <strong className={`question-row-status ${question.used ? 'is-used' : 'is-unused'}`}>{question.used ? 'Used' : 'Unused'}</strong>
+                        {question.category ? (
+                          <span
+                            className="question-row-pill question-row-pill--category"
+                            style={{ borderColor: categoryColorMap?.[question.category] || undefined }}
+                          >
+                            Category: {question.category}
+                          </span>
+                        ) : null}
+                        <span className="question-row-pill question-row-pill--type">
+                          Type: {ROUND_TYPE_LABEL[question.roundType] || question.roundType}
+                        </span>
+                        <span className="question-row-pill">
+                          Source: {question.source === 'googleSheet' ? 'Google Sheet' : question.source || 'manual'}
+                        </span>
                         {question.sourceLabel ? <span>{question.sourceLabel}</span> : null}
                         {question.addedBy ? <span>By {question.addedBy}</span> : null}
                       </div>
