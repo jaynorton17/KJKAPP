@@ -11128,15 +11128,19 @@ button:disabled {
   .room-active-frame--compatibility-meter .room-reveal-layout,
   .room-active-frame--memory-lane .room-reveal-layout {
     grid-template-columns: 1fr;
-    align-items: stretch;
+    align-items: start;
+    align-content: start;
   }
 
   .room-reveal-center-card {
     grid-column: auto;
     order: -1;
+    align-self: start;
   }
 
   .room-reveal-player-card {
+    grid-template-rows: auto auto auto;
+    align-self: start;
     padding: clamp(10px, 1.8vw, 14px);
   }
 
