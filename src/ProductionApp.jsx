@@ -17251,6 +17251,26 @@ function RoomActiveFrameBase({
     : submissionState === 'submitted'
       ? 'Waiting'
       : 'Answering';
+  const activeModePillLabel = isTrueFalseGame
+    ? 'True or False'
+    : isThisOrThatGame
+      ? 'This or That'
+      : isMostLikelyVoteGame
+        ? 'Most Likely To'
+        : isPutYourPointsGame
+          ? 'Put Your Points'
+          : isSecretAuctionGame
+            ? 'Secret Auction'
+            : isRedFlagGreenFlagGame
+              ? 'Red / Green Flag'
+              : isCompatibilityMeterGame
+                ? 'Compatibility'
+                : isMemoryLaneGame
+                  ? 'Memory Lane'
+                  : '';
+  const activeScoringPillLabel = isTrueFalseGame || isThisOrThatGame || isMostLikelyVoteGame
+    ? '0 / +10'
+    : '';
   const showReplayAction = false;
   const showFeedbackActions = !isQuizGame && !isTrueFalseGame && !isThisOrThatGame && !isMostLikelyVoteGame && !isPutYourPointsGame && !isSecretAuctionGame;
   const viewerAnswer = currentRound?.answers?.[currentPlayer] || {};
@@ -17386,15 +17406,14 @@ function RoomActiveFrameBase({
           </div>
           <div className="room-active-pills">
             <span className="scoreboard-mini-badge">{stageStatusLabel}</span>
+            {!revealIsReady && activeModePillLabel ? <span className="scoreboard-mini-badge">{activeModePillLabel}</span> : null}
             {(compatibilityRevealRound?.category || currentRound?.category) ? <span className="scoreboard-mini-badge is-category">{compatibilityRevealRound?.category || currentRound.category}</span> : null}
             <span className="scoreboard-mini-badge">{compatibilityFinalReveal ? 'Session Reveal' : roundTypeLabel}</span>
+            {!revealIsReady && activeScoringPillLabel ? <span className="scoreboard-mini-badge">{activeScoringPillLabel}</span> : null}
             {compatibilityRevealProgressLabel ? <span className="scoreboard-mini-badge">{compatibilityRevealProgressLabel}</span> : null}
           </div>
         </header>
         {isQuizGame ? <QuizLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
-        {isTrueFalseGame ? <TrueFalseLiveStatus revealIsReady={revealIsReady} /> : null}
-        {isThisOrThatGame ? <ThisOrThatLiveStatus currentRound={currentRound} revealIsReady={revealIsReady} /> : null}
-        {isMostLikelyVoteGame ? <MostLikelyLiveStatus revealIsReady={revealIsReady} /> : null}
         {isPutYourPointsGame ? <PutYourPointsStakeTicker currentRound={currentRound} /> : null}
         {isQuizGame && !revealIsReady && viewerAnswer?.ownAnswer && viewerQuizResult ? (
           <div className="quiz-override-strip">

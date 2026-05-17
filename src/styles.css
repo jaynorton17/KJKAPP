@@ -8377,7 +8377,10 @@ button:disabled {
 .room-active-frame--true-false .room-active-stage,
 .room-active-frame--this-or-that .room-active-stage,
 .room-active-frame--most-likely .room-active-stage,
-.room-active-frame--red-flag-green-flag .room-active-stage,
+.room-active-frame--red-flag-green-flag .room-active-stage {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .room-active-frame--put-points .room-active-stage {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
