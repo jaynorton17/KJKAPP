@@ -8364,6 +8364,16 @@ button:disabled {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.room-active-frame--reveal:not(.room-active-frame--quiz) {
+  height: auto;
+}
+
+.room-active-frame--reveal:not(.room-active-frame--quiz) .room-active-stage,
+.room-active-frame--reveal:not(.room-active-frame--quiz) .room-active-reveal-stack {
+  height: auto;
+  overflow: visible;
+}
+
 .room-active-frame--true-false .room-active-stage,
 .room-active-frame--this-or-that .room-active-stage,
 .room-active-frame--most-likely .room-active-stage,
@@ -9974,6 +9984,9 @@ button:disabled {
 }
 
 .room-active-question {
+  position: relative;
+  isolation: isolate;
+  z-index: 2;
   display: grid;
   align-content: center;
   justify-items: center;
@@ -9984,7 +9997,8 @@ button:disabled {
   border-radius: 18px;
   background:
     radial-gradient(circle at top, color-mix(in srgb, var(--accent-3) 18%, transparent), transparent 58%),
-    linear-gradient(180deg, rgba(7, 12, 24, 0.96), rgba(0, 0, 0, 0.84));
+    linear-gradient(180deg, rgba(7, 12, 24, 0.98), rgba(2, 4, 10, 0.98)),
+    #060812;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 12px 24px rgba(0, 0, 0, 0.22);
@@ -10042,6 +10056,10 @@ button:disabled {
   align-content: start;
   max-height: clamp(82px, 15vh, 132px);
   padding-block: clamp(10px, 1.3vw, 14px);
+}
+
+.room-active-frame--reveal:not(.room-active-frame--quiz) .room-active-question--reveal {
+  overflow-y: visible;
 }
 
 .room-active-question--reveal p {
@@ -11099,7 +11117,7 @@ button:disabled {
   }
 }
 
-@container room-active-stage (max-width: 920px) {
+@container room-active-stage (max-width: 1180px) {
   .room-reveal-layout,
   .room-reveal-layout--quiz,
   .room-active-frame--true-false .room-reveal-layout,
@@ -11109,12 +11127,12 @@ button:disabled {
   .room-active-frame--put-points .room-reveal-layout,
   .room-active-frame--compatibility-meter .room-reveal-layout,
   .room-active-frame--memory-lane .room-reveal-layout {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     align-items: stretch;
   }
 
   .room-reveal-center-card {
-    grid-column: 1 / -1;
+    grid-column: auto;
     order: -1;
   }
 
@@ -11123,11 +11141,48 @@ button:disabled {
   }
 
   .room-reveal-player-body {
-    grid-template-rows: repeat(2, minmax(86px, auto));
+    grid-template-rows: auto;
+    grid-template-columns: 1fr;
   }
 
   .room-reveal-answer-copy {
     overflow-y: visible;
+  }
+
+  .room-reveal-score-strip,
+  .room-reveal-penalty-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .room-reveal-score-strip--answer-summary div:first-child {
+    grid-column: auto;
+  }
+
+  .room-active-question--reveal {
+    max-height: none;
+  }
+
+  .room-active-question--reveal p {
+    font-size: clamp(0.88rem, 1.35vw, 1.18rem);
+  }
+
+  .room-reveal-center-card strong,
+  .room-active-frame--most-likely .room-reveal-center-card strong,
+  .room-active-frame--red-flag-green-flag .room-reveal-center-card strong,
+  .room-active-frame--this-or-that .room-reveal-center-card strong,
+  .room-active-frame--put-points .room-reveal-center-card strong,
+  .room-active-frame--memory-lane .room-reveal-center-card strong,
+  .room-active-frame--compatibility-meter .room-reveal-center-card strong:not(.compatibility-score-roller) {
+    max-width: 22ch;
+    font-size: clamp(1.02rem, 1.45vw, 1.4rem);
+  }
+
+  .room-reveal-center-card p,
+  .room-reveal-center-card small,
+  .room-reveal-answer-text,
+  .room-reveal-answer-block strong,
+  .room-reveal-player-head h3 {
+    font-size: clamp(0.84rem, 1.12vw, 1rem);
   }
 }
 
