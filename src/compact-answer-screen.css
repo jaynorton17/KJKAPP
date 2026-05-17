@@ -1,0 +1,93 @@
+@media (min-width: 900px) {
+  .room-active-frame {
+    min-height: calc(100dvh - 150px);
+    overflow: hidden;
+  }
+
+  .room-active-stage {
+    height: 100%;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+    overflow: hidden;
+  }
+
+  .room-active-reveal-stack {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .room-active-question--reveal {
+    min-height: 0;
+    max-height: 96px;
+    padding: 10px 14px;
+  }
+
+  .room-active-question--reveal p {
+    max-width: 46ch;
+    font-size: clamp(0.9rem, 1.2vw, 1.2rem);
+    line-height: 1.05;
+  }
+
+  .room-reveal-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 0.42fr) minmax(0, 1fr);
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .room-reveal-player-card {
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .room-reveal-player-body {
+    gap: 8px;
+  }
+
+  .room-reveal-answer-block strong {
+    font-size: clamp(0.82rem, 1vw, 1.05rem);
+    line-height: 1.08;
+  }
+
+  .room-reveal-answer-copy {
+    overflow: hidden;
+  }
+
+  .room-reveal-score-strip {
+    gap: 6px;
+  }
+
+  .room-reveal-score-strip div {
+    padding: 8px 10px;
+  }
+
+  .room-reveal-score-strip strong {
+    font-size: clamp(0.92rem, 1.2vw, 1.2rem);
+  }
+
+  .room-reveal-center-card {
+    padding: 14px 12px;
+    gap: 6px;
+  }
+
+  .room-reveal-center-card strong {
+    font-size: clamp(1rem, 1.5vw, 1.5rem);
+    line-height: 0.92;
+  }
+
+  .room-reveal-center-card p,
+  .room-reveal-center-card small {
+    font-size: 0.72rem;
+    line-height: 1.2;
+  }
+
+  .ready-gate-row--reveal {
+    margin-top: 0;
+    gap: 8px;
+  }
+
+  .quiz-reveal-chat-card .chat-log {
+    max-height: 110px;
+  }
+}
