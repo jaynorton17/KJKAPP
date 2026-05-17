@@ -10931,6 +10931,7 @@ button:disabled {
   .room-active-frame--most-likely .room-reveal-layout,
   .room-active-frame--red-flag-green-flag .room-reveal-layout,
   .room-active-frame--put-points .room-reveal-layout,
+  .room-active-frame--secret-auction .room-reveal-layout,
   .room-active-frame--compatibility-meter .room-reveal-layout,
   .room-active-frame--memory-lane .room-reveal-layout {
     grid-template-columns: minmax(0, 1fr) minmax(260px, 0.5fr) minmax(0, 1fr);
@@ -10942,6 +10943,7 @@ button:disabled {
   .room-active-frame--most-likely .room-reveal-player-card,
   .room-active-frame--red-flag-green-flag .room-reveal-player-card,
   .room-active-frame--put-points .room-reveal-player-card,
+  .room-active-frame--secret-auction .room-reveal-player-card,
   .room-active-frame--compatibility-meter .room-reveal-player-card,
   .room-active-frame--memory-lane .room-reveal-player-card {
     grid-template-rows: auto minmax(0, 1fr) auto;
@@ -11138,6 +11140,7 @@ button:disabled {
   .room-active-frame--most-likely .room-reveal-layout,
   .room-active-frame--red-flag-green-flag .room-reveal-layout,
   .room-active-frame--put-points .room-reveal-layout,
+  .room-active-frame--secret-auction .room-reveal-layout,
   .room-active-frame--compatibility-meter .room-reveal-layout,
   .room-active-frame--memory-lane .room-reveal-layout {
     grid-template-columns: 1fr;
@@ -11188,6 +11191,7 @@ button:disabled {
   .room-active-frame--red-flag-green-flag .room-reveal-center-card strong,
   .room-active-frame--this-or-that .room-reveal-center-card strong,
   .room-active-frame--put-points .room-reveal-center-card strong,
+  .room-active-frame--secret-auction .room-reveal-center-card strong,
   .room-active-frame--memory-lane .room-reveal-center-card strong,
   .room-active-frame--compatibility-meter .room-reveal-center-card strong:not(.compatibility-score-roller) {
     max-width: 22ch;
@@ -11211,6 +11215,7 @@ button:disabled {
   .room-active-frame--most-likely .room-reveal-layout,
   .room-active-frame--red-flag-green-flag .room-reveal-layout,
   .room-active-frame--put-points .room-reveal-layout,
+  .room-active-frame--secret-auction .room-reveal-layout,
   .room-active-frame--compatibility-meter .room-reveal-layout,
   .room-active-frame--memory-lane .room-reveal-layout,
   .room-reveal-penalty-grid,
@@ -15824,6 +15829,7 @@ select:focus-visible {
   .room-active-frame--most-likely .room-reveal-layout,
   .room-active-frame--red-flag-green-flag .room-reveal-layout,
   .room-active-frame--put-points .room-reveal-layout,
+  .room-active-frame--secret-auction .room-reveal-layout,
   .room-active-frame--compatibility-meter .room-reveal-layout,
   .room-active-frame--memory-lane .room-reveal-layout {
     grid-template-columns: 1fr;
@@ -15876,10 +15882,43 @@ select:focus-visible {
   .room-active-frame--red-flag-green-flag .room-reveal-center-card strong,
   .room-active-frame--this-or-that .room-reveal-center-card strong,
   .room-active-frame--put-points .room-reveal-center-card strong,
+  .room-active-frame--secret-auction .room-reveal-center-card strong,
   .room-active-frame--memory-lane .room-reveal-center-card strong,
   .room-active-frame--compatibility-meter .room-reveal-center-card strong:not(.compatibility-score-roller) {
     font-size: clamp(0.98rem, 1.16vw, 1.24rem);
     line-height: 1.04;
+  }
+
+  .room-active-frame--reveal:not(.room-active-frame--quiz) .room-reveal-layout,
+  .room-active-frame--most-likely .room-reveal-layout,
+  .room-active-frame--red-flag-green-flag .room-reveal-layout,
+  .room-active-frame--put-points .room-reveal-layout,
+  .room-active-frame--secret-auction .room-reveal-layout,
+  .room-active-frame--compatibility-meter .room-reveal-layout,
+  .room-active-frame--memory-lane .room-reveal-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(168px, 0.42fr) minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .room-active-frame--reveal:not(.room-active-frame--quiz) .room-reveal-center-card {
+    order: 0;
+  }
+
+  .room-active-frame--reveal:not(.room-active-frame--quiz) .room-reveal-player-card {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-height: 0;
+  }
+
+  .room-active-frame--reveal:not(.room-active-frame--quiz) .room-reveal-score-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .room-active-frame--reveal:not(.room-active-frame--quiz) .room-reveal-score-strip--answer-summary {
+    grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(76px, 0.6fr));
+  }
+
+  .room-active-frame--reveal:not(.room-active-frame--quiz) .room-reveal-score-strip--answer-summary div:first-child {
+    grid-column: auto;
   }
 
   .room-reveal-center-card p,
