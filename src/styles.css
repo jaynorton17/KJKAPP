@@ -18319,6 +18319,27 @@ select:focus-visible {
   opacity: 0.5;
 }
 
+/* Predict Next Match Pill Button */
+.wc-predict-btn {
+  padding: 4px 14px;
+  border: 1px solid rgba(61, 220, 132, 0.4);
+  border-radius: 999px;
+  background: rgba(61, 220, 132, 0.12);
+  color: #3ddc84;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.12s;
+  line-height: 1.4;
+}
+
+.wc-predict-btn:hover {
+  background: rgba(61, 220, 132, 0.22);
+  border-color: rgba(61, 220, 132, 0.6);
+}
+
 /* Next Match Centered Card */
 .wc-next-card {
   display: flex;

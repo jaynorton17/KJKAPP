@@ -266,6 +266,11 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
             <span className="wc-points wc-points--jay">🟦 Jay: {totPoints.jay}</span>
             <span className="wc-points wc-points--kim">🟪 Kim: {totPoints.kim}</span>
           </div>
+          {nextMatch ? (
+            <button type="button" className="wc-predict-btn" onClick={() => openModal(nextMatch.matchKey)}>
+              ⚡ Predict Next Match
+            </button>
+          ) : null}
         </div>
         {nextKickoff ? (
           <button type="button" className="wc-next-card" onClick={() => openModal(nextKickoff.matchKey)}>
