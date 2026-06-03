@@ -75,6 +75,7 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
   const [dbReady, setDbReady] = useState(false);
   const [modalMatchKey, setModalMatchKey] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [editTeamHome, setEditTeamHome] = useState('');
   const [editTeamAway, setEditTeamAway] = useState('');
 
@@ -152,6 +153,31 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
       const scored = stageMatches.filter((m) => m.actual?.homeScore != null).length;
       return { stage, label: STAGE_LABELS[stage], total, scored };
     });
+  }, [matches]);
+
+  const groupStandings = useMemo(() => {
+    const result = {};
+    GROUP_NAMES.forEach((g) => {
+      const groupMatches = matches.filter((m) => m.groupName === g);
+      const teams = {};
+      groupMatches.forEach((m) => {
+        const h = m.homeTeam, aw = m.awayTeam;
+        if (!teams[h]) teams[h] = { team: h, pld: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 };
+        if (!teams[aw]) teams[aw] = { team: aw, pld: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 };
+        if (m.actual?.homeScore == null) return;
+        const sh = Number(m.actual.homeScore), sa = Number(m.actual.awayScore);
+        teams[h].pld++; teams[aw].pld++;
+        teams[h].gf += sh; teams[h].ga += sa;
+        teams[aw].gf += sa; teams[aw].ga += sh;
+        if (sh > sa) { teams[h].w++; teams[h].pts += 3; teams[aw].l++; }
+        else if (sh < sa) { teams[aw].w++; teams[aw].pts += 3; teams[h].l++; }
+        else { teams[h].d++; teams[h].pts++; teams[aw].d++; teams[aw].pts++; }
+      });
+      const list = Object.values(teams).map((t) => ({ ...t, gd: t.gf - t.ga }));
+      list.sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf || a.team.localeCompare(b.team));
+      result[g] = list;
+    });
+    return result;
   }, [matches]);
 
   const selectedMatch = useMemo(
@@ -294,6 +320,12 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
     return '⏳';
   };
 
+  const isSearchMatch = (m) => {
+    if (searchQuery.trim().length < 2) return true;
+    const q = searchQuery.trim().toLowerCase();
+    return m.homeTeam.toLowerCase().includes(q) || m.awayTeam.toLowerCase().includes(q);
+  };
+
   return (
     <section className="panel lobby-panel wc-panel" aria-label="World Cup 2026">
       <header className="wc-header">
@@ -342,11 +374,17 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
           </button>
         ) : null}
         <div className="wc-filter-row">
-          {['all', 'group', 'knockout'].map((f) => (
-            <button key={f} type="button" className={`wc-filter-btn ${filter === f ? 'is-active' : ''}`} onClick={() => setFilter(f)}>
-              {f === 'all' ? 'All Matches' : f === 'group' ? 'Groups' : 'Knockout'}
-            </button>
-          ))}
+          <div className="wc-filter-pills">
+            {['all', 'group', 'knockout'].map((f) => (
+              <button key={f} type="button" className={`wc-filter-btn ${filter === f ? 'is-active' : ''}`} onClick={() => setFilter(f)}>
+                {f === 'all' ? 'All Matches' : f === 'group' ? 'Groups' : 'Knockout'}
+              </button>
+            ))}
+          </div>
+          <input
+            type="text" className="wc-search-input" placeholder="🔍 Search team…"
+            value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+          />
         </div>
       </header>
 
@@ -367,11 +405,34 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
           {GROUP_NAMES.map((g) => {
             const groupMatches = grouped.group.filter((m) => m.groupName === g);
             if (groupMatches.length === 0) return null;
+            const standings = groupStandings[g];
+            const hasResults = standings && standings.some((t) => t.pld > 0);
             return (
               <div key={g} className="wc-group-card">
                 <h3 className="wc-group-title">Group {g}</h3>
+                {hasResults && (
+                  <div className="wc-standings">
+                    {standings.map((t, i) => (
+                      <div key={t.team} className="wc-standings-row">
+                        <span className="wc-standings-pos">{i + 1}</span>
+                        <span className="wc-standings-team">
+                          <FlagImg team={t.team} size={14} />
+                          <span className="wc-standings-name">{shortTeam(t.team)}</span>
+                        </span>
+                        <span className="wc-standings-stat">{t.pld}</span>
+                        <span className="wc-standings-stat">{t.w}</span>
+                        <span className="wc-standings-stat">{t.d}</span>
+                        <span className="wc-standings-stat">{t.l}</span>
+                        <span className="wc-standings-stat">{t.gf}</span>
+                        <span className="wc-standings-stat">{t.ga}</span>
+                        <span className="wc-standings-stat wc-standings-gd">{t.gd > 0 ? `+${t.gd}` : t.gd}</span>
+                        <span className="wc-standings-pts">{t.pts}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="wc-group-matches">
-                  {groupMatches.map((m) => (
+                  {groupMatches.filter(isSearchMatch).map((m) => (
                     <button key={m.matchKey} type="button" className="wc-match-row" onClick={() => openModal(m.matchKey)}>
                       <span className="wc-match-status">{matchStatusIcon(m)}</span>
                       <span className="wc-match-teams">
@@ -416,8 +477,7 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
               <div key={stage} className={`wc-stage-group ${isBracket ? 'wc-stage-bracket' : ''}`}>
                 <h4 className="wc-stage-title">{STAGE_LABELS[stage]}</h4>
                 <div className={`wc-stage-matches ${isBracket ? 'wc-bracket-grid' : ''}`}>
-                  {stageMatches.map((m) => (
-                    <button key={m.matchKey} type="button" className={`wc-match-row ${isBracket ? 'wc-match-row--bracket' : ''}`} onClick={() => openModal(m.matchKey)}>
+                  {stageMatches.filter(isSearchMatch).map((m) => (  <button key={m.matchKey} type="button" className={`wc-match-row ${isBracket ? 'wc-match-row--bracket' : ''}`} onClick={() => openModal(m.matchKey)}>
                       <span className="wc-match-status">{matchStatusIcon(m)}</span>
                       <span className="wc-match-teams">
                         <FlagImg team={m.homeTeam} />
