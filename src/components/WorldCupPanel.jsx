@@ -266,21 +266,23 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
             <span className="wc-points wc-points--jay">🟦 Jay: {totPoints.jay}</span>
             <span className="wc-points wc-points--kim">🟪 Kim: {totPoints.kim}</span>
           </div>
-          {countdown && <span className="wc-countdown">⏱ {countdown}</span>}
-          {nextMatch ? (
-            <button type="button" className="wc-next-btn" onClick={() => openModal(nextMatch.matchKey)}>
-              <span>⚡ Predict Next Match</span>
-              <span className="wc-next-meta">
-                <span className="wc-next-flags">
-                  <FlagImg team={nextMatch.homeTeam} size={16} />
-                  <FlagImg team={nextMatch.awayTeam} size={16} />
-                </span>
-                <span className="wc-next-teams">{shortTeam(nextMatch.homeTeam)} vs {shortTeam(nextMatch.awayTeam)}</span>
-                <span className="wc-next-date">{formatDate(nextMatch.matchDate)}</span>
-              </span>
-            </button>
-          ) : null}
         </div>
+        {nextKickoff ? (
+          <button type="button" className="wc-next-card" onClick={() => openModal(nextKickoff.matchKey)}>
+            <div className="wc-next-teams">
+              <FlagImg team={nextKickoff.homeTeam} size={28} />
+              <span className="wc-next-team-name">{shortTeam(nextKickoff.homeTeam)}</span>
+              <span className="wc-next-vs">vs</span>
+              <span className="wc-next-team-name">{shortTeam(nextKickoff.awayTeam)}</span>
+              <FlagImg team={nextKickoff.awayTeam} size={28} />
+            </div>
+            <div className="wc-next-countdown">{countdown || '—'}</div>
+            <div className="wc-next-predictions">
+              <span className="wc-next-pred wc-next-pred--jay">🟦 {nextKickoff.predictions?.jay?.homeScore ?? '?'}:{nextKickoff.predictions?.jay?.awayScore ?? '?'}</span>
+              <span className="wc-next-pred wc-next-pred--kim">🟪 {nextKickoff.predictions?.kim?.homeScore ?? '?'}:{nextKickoff.predictions?.kim?.awayScore ?? '?'}</span>
+            </div>
+          </button>
+        ) : null}
         <div className="wc-filter-row">
           {['all', 'group', 'knockout'].map((f) => (
             <button key={f} type="button" className={`wc-filter-btn ${filter === f ? 'is-active' : ''}`} onClick={() => setFilter(f)}>
@@ -554,14 +556,14 @@ function MatchDetailModal({ match, currentSeat, isAdmin, onSubmitPrediction, onS
             {!currentSeat && <p className="wc-muted">Sign in to predict</p>}
           </div>
 
-          {/* Other Player's Prediction (hidden until KO / deadline) */}
-          {match.predictions?.jay && currentSeat !== 'jay' && (isPast || deadlinePassed) && (
+          {/* Other Player's Prediction */}
+          {match.predictions?.jay && currentSeat !== 'jay' && (
             <div className="wc-modal-section">
               <h4>🟦 Jay's Prediction</h4>
               <p className="wc-other-pred">{match.predictions.jay.homeScore ?? '-'} - {match.predictions.jay.awayScore ?? '-'}</p>
             </div>
           )}
-          {match.predictions?.kim && currentSeat !== 'kim' && (isPast || deadlinePassed) && (
+          {match.predictions?.kim && currentSeat !== 'kim' && (
             <div className="wc-modal-section">
               <h4>🟪 Kim's Prediction</h4>
               <p className="wc-other-pred">{match.predictions.kim.homeScore ?? '-'} - {match.predictions.kim.awayScore ?? '-'}</p>
