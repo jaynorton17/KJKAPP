@@ -117,6 +117,43 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
     return { jay: j, kim: k };
   }, [matches]);
 
+  const streaks = useMemo(() => {
+    const scored = matches
+      .filter((m) => m.actual?.homeScore != null)
+      .sort((a, b) => new Date(a.matchDate) - new Date(b.matchDate));
+    let js = 0, ks = 0;
+    for (const m of scored) {
+      js = (calculateMatchPoints(m.predictions?.jay, m.actual) > 0) ? js + 1 : 0;
+      ks = (calculateMatchPoints(m.predictions?.kim, m.actual) > 0) ? ks + 1 : 0;
+    }
+    return { jay: js, kim: ks };
+  }, [matches]);
+
+  const predictedCount = useMemo(
+    () => matches.filter((m) => m.predictions?.[currentSeat]?.homeScore != null).length,
+    [matches, currentSeat],
+  );
+
+  const unpredicted = useMemo(
+    () => matches.filter((m) =>
+      !isMatchDeadlinePassed(m.matchDate) &&
+      m.actual?.homeScore == null &&
+      m.predictions?.[currentSeat]?.homeScore == null
+    ).length,
+    [matches, currentSeat],
+  );
+
+  const needsPrediction = nextKickoff?.matchKey === nextMatch?.matchKey;
+
+  const stageProgress = useMemo(() => {
+    return STAGE_ORDER.map((stage) => {
+      const stageMatches = matches.filter((m) => m.stage === stage);
+      const total = stageMatches.length;
+      const scored = stageMatches.filter((m) => m.actual?.homeScore != null).length;
+      return { stage, label: STAGE_LABELS[stage], total, scored };
+    });
+  }, [matches]);
+
   const selectedMatch = useMemo(
     () => matches.find((m) => m.matchKey === modalMatchKey) || null,
     [matches, modalMatchKey],
@@ -262,6 +299,12 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
       <header className="wc-header">
         <div className="wc-title-row">
           <h2 className="wc-title">🌍 World Cup 2026</h2>
+          <div className="wc-title-progress">
+            <span className="wc-progress">📋 {predictedCount}/{matches.length}</span>
+            {unpredicted > 0 && unpredicted <= 5 && (
+              <span className="wc-remaining">⚠️ {unpredicted} left</span>
+            )}
+          </div>
           <div className="wc-points-summary">
             <span className="wc-points wc-points--jay">🟦 Jay: {totPoints.jay}</span>
             <span className="wc-points wc-points--kim">🟪 Kim: {totPoints.kim}</span>
@@ -277,7 +320,7 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
           ) : null}
         </div>
         {nextKickoff ? (
-          <button type="button" className="wc-next-card" onClick={() => openModal(nextKickoff.matchKey)}>
+          <button type="button" className={`wc-next-card${needsPrediction ? ' wc-next-card--pulse' : ''}`} onClick={() => openModal(nextKickoff.matchKey)}>
             <div className="wc-next-teams">
               <FlagImg team={nextKickoff.homeTeam} size={28} />
               <span className="wc-next-team-name">{shortTeam(nextKickoff.homeTeam)}</span>
@@ -287,8 +330,14 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
             </div>
             <div className="wc-next-countdown">{countdown || '—'}</div>
             <div className="wc-next-predictions">
-              <span className="wc-next-pred wc-next-pred--jay">🟦 {nextKickoff.predictions?.jay?.homeScore ?? '?'}:{nextKickoff.predictions?.jay?.awayScore ?? '?'}</span>
-              <span className="wc-next-pred wc-next-pred--kim">🟪 {nextKickoff.predictions?.kim?.homeScore ?? '?'}:{nextKickoff.predictions?.kim?.awayScore ?? '?'}</span>
+              <span className="wc-next-pred wc-next-pred--jay">
+                🟦 {nextKickoff.predictions?.jay?.homeScore ?? '?'}:{nextKickoff.predictions?.jay?.awayScore ?? '?'}
+                {streaks.jay >= 2 && <span className="wc-streak">🔥{streaks.jay}</span>}
+              </span>
+              <span className="wc-next-pred wc-next-pred--kim">
+                🟪 {nextKickoff.predictions?.kim?.homeScore ?? '?'}:{nextKickoff.predictions?.kim?.awayScore ?? '?'}
+                {streaks.kim >= 2 && <span className="wc-streak">🔥{streaks.kim}</span>}
+              </span>
             </div>
           </button>
         ) : null}
@@ -300,6 +349,17 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
           ))}
         </div>
       </header>
+
+      {/* Stage Progress Bar */}
+      {filter === 'all' && (
+        <div className="wc-stage-bar">
+          {stageProgress.map((s) => (
+            <div key={s.stage} className="wc-stage-bar-segment" title={`${s.label}: ${s.scored}/${s.total}`}>
+              <div className="wc-stage-bar-fill" style={{ width: `${s.total > 0 ? (s.scored / s.total) * 100 : 0}%` }} />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Groups Section */}
       {(filter === 'all' || filter === 'group') && (
