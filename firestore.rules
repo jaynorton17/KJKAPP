@@ -94,6 +94,10 @@ service cloud.firestore {
       allow read, write: if signedIn();
     }
 
+    match /worldCupPredictions/{predictionId} {
+      allow read, write: if signedIn();
+    }
+
     match /lobbyChat/{messageId} {
       allow read, write: if signedIn();
     }

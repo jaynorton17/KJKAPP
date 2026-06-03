@@ -36,6 +36,7 @@ import {
   uploadBytes,
 } from 'firebase/storage';
 import AnalyticsPanel from './components/AnalyticsPanel.jsx';
+import WorldCupPanel from './components/WorldCupPanel.jsx';
 import MainScoreboard16x9 from './components/MainScoreboard16x9.jsx';
 import questionMakerAgentRules from '../docs/question-maker-agent.md?raw';
 import allGamesCompatibilityTileImage from './assets/all-games-compatibility.png';
@@ -8461,6 +8462,7 @@ function LobbyScreen({
     { id: 'activity', label: 'Activity', tone: 'activity', icon: 'activity' },
     { id: 'analytics', label: 'Analytics', tone: 'analytics', icon: 'graph' },
     { id: 'forfeitStore', label: 'Forfeit Store', tone: 'store', icon: 'gift' },
+    { id: 'worldCup', label: 'World Cup 2026', tone: 'sports', icon: 'soccer' },
   ];
   const typeOptions = ROUND_TYPES.map((type) => ({ value: type.id, label: type.shortLabel }));
   const categoryOptions = questionCategories?.length ? questionCategories : DEFAULT_CATEGORIES.map((category) => category.name);
@@ -9204,6 +9206,13 @@ function LobbyScreen({
             <path d="M4 17.5h16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
             <path d="m6.5 14.5 3.4-3.4 2.8 2.8 5-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             <path d="M16.8 7.9H18.9V10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        );
+      case 'soccer':
+        return (
+          <svg {...sharedProps}>
+            <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M12 4a8 8 0 0 1 8 8M12 4a8 8 0 0 0-8 8M12 4v16M4 12h16M7.5 7.5l9 9M16.5 7.5l-9 9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
         );
       case 'star':
@@ -14273,6 +14282,18 @@ function LobbyScreen({
             isBusy={isBusy}
           />
         </section>
+        ) : null}
+
+        {activeTab === 'worldCup' ? (
+          <section className="lobby-tab-panel wc-tab-panel" aria-label="World Cup 2026">
+            <WorldCupPanel
+              user={user}
+              firestore={firestore}
+              isAdmin={isAdmin}
+              currentSeat={currentPlayerSeat}
+              pairKey={buildPairKey()}
+            />
+          </section>
         ) : null}
       </section>
 
