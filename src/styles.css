@@ -18321,6 +18321,9 @@ select:focus-visible {
 
 /* Predict Next Match Pill Button */
 .wc-predict-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 4px 14px;
   border: 1px solid rgba(61, 220, 132, 0.4);
   border-radius: 999px;
@@ -18338,6 +18341,12 @@ select:focus-visible {
 .wc-predict-btn:hover {
   background: rgba(61, 220, 132, 0.22);
   border-color: rgba(61, 220, 132, 0.6);
+}
+
+.wc-predict-flags {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 /* Next Match Centered Card */

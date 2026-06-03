@@ -268,7 +268,11 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
           </div>
           {nextMatch ? (
             <button type="button" className="wc-predict-btn" onClick={() => openModal(nextMatch.matchKey)}>
-              ⚡ Predict Next Match
+              <span className="wc-predict-flags">
+                <FlagImg team={nextMatch.homeTeam} size={14} />
+                <FlagImg team={nextMatch.awayTeam} size={14} />
+              </span>
+              <span>⚡ Predict Next Match</span>
             </button>
           ) : null}
         </div>
