@@ -145,8 +145,6 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
     [matches, currentSeat],
   );
 
-  const needsPrediction = nextKickoff?.matchKey === nextMatch?.matchKey;
-
   const stageProgress = useMemo(() => {
     return STAGE_ORDER.map((stage) => {
       const stageMatches = matches.filter((m) => m.stage === stage);
@@ -216,6 +214,8 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
       .sort((a, b) => new Date(a.matchDate) - new Date(b.matchDate));
     return upcoming[0] || null;
   }, [matches]);
+
+  const needsPrediction = nextKickoff?.matchKey === nextMatch?.matchKey;
 
   const [countdown, setCountdown] = useState('');
 
