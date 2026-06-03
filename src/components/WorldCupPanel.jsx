@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  arrayUnion,
   collection,
   doc,
   onSnapshot,
@@ -180,6 +181,18 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
     return result;
   }, [matches]);
 
+  const pointTrend = useMemo(() => {
+    const scored = matches
+      .filter((m) => m.actual?.homeScore != null)
+      .sort((a, b) => new Date(a.matchDate) - new Date(b.matchDate));
+    let jayTotal = 0, kimTotal = 0;
+    return scored.map((m) => {
+      jayTotal += Number(m.points?.jay || 0);
+      kimTotal += Number(m.points?.kim || 0);
+      return { date: m.matchDate, jay: jayTotal, kim: kimTotal };
+    });
+  }, [matches]);
+
   const selectedMatch = useMemo(
     () => matches.find((m) => m.matchKey === modalMatchKey) || null,
     [matches, modalMatchKey],
@@ -264,6 +277,14 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
       updatedAt: serverTimestamp(),
     }).catch((err) => console.warn('Team update failed', err));
   }, [firestore, isAdmin, pairKey]);
+
+  const submitComment = useCallback(async (matchKey, text) => {
+    if (!firestore || !currentSeat || !pairKey || !text.trim()) return;
+    const ref = doc(firestore, 'worldCupPredictions', `${matchKey}_${pairKey}`);
+    await updateDoc(ref, {
+      comments: arrayUnion({ author: currentSeat, text: text.trim(), createdAt: serverTimestamp() }),
+    }).catch((err) => console.warn('Comment save failed', err));
+  }, [firestore, currentSeat, pairKey]);
 
   const openModal = useCallback((matchKey) => {
     const m = matches.find((x) => x.matchKey === matchKey);
@@ -399,6 +420,46 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
         </div>
       )}
 
+      {/* Point Trend Chart */}
+      {pointTrend.length >= 2 && (
+        <div className="wc-trend">
+          <svg viewBox="0 0 280 50" className="wc-trend-svg" preserveAspectRatio="none">
+            {pointTrend.map((p, i) => {
+              const x = (i / (pointTrend.length - 1)) * 280;
+              const max = Math.max(...pointTrend.map((d) => Math.max(d.jay, d.kim)), 1);
+              const yJay = 50 - (p.jay / max) * 44 - 3;
+              const yKim = 50 - (p.kim / max) * 44 - 3;
+              return (
+                <g key={i}>
+                  <circle cx={x} cy={yJay} r="2" fill="#5bc0ff" />
+                  <circle cx={x} cy={yKim} r="2" fill="#ff7eb3" />
+                </g>
+              );
+            })}
+            <polyline
+              fill="none" stroke="#5bc0ff" strokeWidth="2" strokeLinejoin="round"
+              points={pointTrend.map((p, i) => {
+                const x = (i / (pointTrend.length - 1)) * 280;
+                const max = Math.max(...pointTrend.map((d) => Math.max(d.jay, d.kim)), 1);
+                return `${x},${50 - (p.jay / max) * 44 - 3}`;
+              }).join(' ')}
+            />
+            <polyline
+              fill="none" stroke="#ff7eb3" strokeWidth="2" strokeLinejoin="round"
+              points={pointTrend.map((p, i) => {
+                const x = (i / (pointTrend.length - 1)) * 280;
+                const max = Math.max(...pointTrend.map((d) => Math.max(d.jay, d.kim)), 1);
+                return `${x},${50 - (p.kim / max) * 44 - 3}`;
+              }).join(' ')}
+            />
+          </svg>
+          <div className="wc-trend-labels">
+            <span>🟦 Jay ({pointTrend.at(-1).jay})</span>
+            <span>🟪 Kim ({pointTrend.at(-1).kim})</span>
+          </div>
+        </div>
+      )}
+
       {/* Groups Section */}
       {(filter === 'all' || filter === 'group') && (
         <div className="wc-groups-grid">
@@ -526,6 +587,7 @@ export default function WorldCupPanel({ user, firestore, isAdmin, currentSeat, p
               onSubmitPrediction={submitPrediction}
               onSubmitActual={submitActual}
               onUpdateTeams={updateTeams}
+              onSubmitComment={submitComment}
               onClose={closeModal}
             />
           </div>
@@ -553,7 +615,7 @@ function shortTeam(name) {
   return name;
 }
 
-function MatchDetailModal({ match, currentSeat, isAdmin, onSubmitPrediction, onSubmitActual, onUpdateTeams, onClose }) {
+function MatchDetailModal({ match, currentSeat, isAdmin, onSubmitPrediction, onSubmitActual, onUpdateTeams, onSubmitComment, onClose }) {
   const [homePred, setHomePred] = useState('');
   const [awayPred, setAwayPred] = useState('');
   const [actualHome, setActualHome] = useState('');
@@ -563,6 +625,8 @@ function MatchDetailModal({ match, currentSeat, isAdmin, onSubmitPrediction, onS
   const [editAwayTeam, setEditAwayTeam] = useState(match.awayTeam);
   const [showTeamEditor, setShowTeamEditor] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState(null);
+  const [commentText, setCommentText] = useState('');
+  const [commentSaving, setCommentSaving] = useState(false);
 
   const saveTimerRef = useRef(null);
   const statusTimerRef = useRef(null);
@@ -746,6 +810,42 @@ function MatchDetailModal({ match, currentSeat, isAdmin, onSubmitPrediction, onS
       {match.knockoutPlaceholder && !showTeamEditor && (
         <p className="wc-muted">Teams will be determined after group stage. Admin can edit team names.</p>
       )}
+
+      {/* Comments Section */}
+      <div className="wc-modal-section wc-comments">
+        <h4>💬 Trash Talk</h4>
+        {match.comments && match.comments.length > 0 && (
+          <div className="wc-comments-list">
+            {match.comments.map((c, i) => (
+              <div key={i} className={`wc-comment wc-comment--${c.author}`}>
+                <span className="wc-comment-author">{c.author === 'jay' ? '🟦 Jay' : '🟪 Kim'}</span>
+                <span className="wc-comment-text">{c.text}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {currentSeat && (
+          <div className="wc-comment-input-row">
+            <input
+              type="text" className="wc-comment-input" placeholder="Say something…"
+              value={commentText} onChange={(e) => setCommentText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSubmitComment(); }}
+            />
+            <button type="button" className="wc-save-btn" onClick={handleSubmitComment} disabled={commentSaving || !commentText.trim()}>
+              {commentSaving ? '…' : 'Send'}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
+
+  function handleSubmitComment() {
+    if (!commentText.trim() || commentSaving) return;
+    setCommentSaving(true);
+    onSubmitComment(match.matchKey, commentText).then(() => {
+      setCommentText('');
+      setCommentSaving(false);
+    }).catch(() => setCommentSaving(false));
+  }
 }
